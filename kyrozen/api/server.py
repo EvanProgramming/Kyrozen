@@ -199,9 +199,20 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             task.fail("User declined the high-risk action")
             agent.task_manager.update(task)
             return task.to_dict()
+
+        user_input = task.description
+        if task.project_id:
+            pm = _get_project_manager()
+            project = pm.get(task.project_id)
+            if project is not None:
+                builder = _get_context_builder()
+                builder.memory = _project_memory(task.project_id)
+                user_input = f"{builder.build(project)}\n{task.description}"
+            agent.memory = _project_memory(task.project_id)
+
         task.update_status("running")
         agent.task_manager.update(task)
-        task = agent.run(task.description, confirmed=True, project_id=task.project_id)
+        task = agent.run(user_input, confirmed=True, project_id=task.project_id)
         return task.to_dict()
 
     @app.get("/api/tasks")

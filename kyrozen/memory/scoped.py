@@ -104,7 +104,8 @@ class ProjectMemory:
         self.backend = backend
 
     def save(self, category: str, content: str, **metadata: Any) -> MemoryRecord:
-        return self.backend.save(category, content, project_id=self.project_id, **metadata)
+        metadata["project_id"] = self.project_id
+        return self.backend.save(category, content, **metadata)
 
     def query(
         self,
@@ -117,7 +118,8 @@ class ProjectMemory:
         return self.backend.query(category=category, query=query, limit=limit, **filters)
 
     def update(self, record_id: str, content: str, **metadata: Any) -> MemoryRecord | None:
-        return self.backend.update(record_id, content, project_id=self.project_id, **metadata)
+        metadata["project_id"] = self.project_id
+        return self.backend.update(record_id, content, **metadata)
 
     def delete(self, record_id: str) -> bool:
         return self.backend.delete(record_id)

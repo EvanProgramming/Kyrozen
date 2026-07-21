@@ -203,12 +203,14 @@
       display: none;
       background: #1a1a2e;
       border-top: 1px solid #00f0ff22;
-      padding: 12px 16px;
-      gap: 12px;
-      align-items: center;
+      padding: 14px 16px;
+      flex-direction: column;
+      gap: 10px;
     }
     #confirm-box.active { display: flex; }
-    #confirm-box span { flex: 1; font-size: 12px; }
+    #confirm-box .confirm-title { font-size: 13px; font-weight: 600; color: #ffaa00; }
+    #confirm-box .confirm-detail { font-size: 12px; color: #c9d1d9; white-space: pre-wrap; word-break: break-word; }
+    #confirm-box .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
 
     .hidden { display: none !important; }
 
@@ -297,9 +299,12 @@
         <div id="chat"></div>
 
         <div id="confirm-box">
-          <span>高风险操作需要确认：Agent 请求执行可能影响文件或系统的操作。</span>
-          <button id="confirm-btn" onclick="confirmTask(true)">确认执行</button>
-          <button class="secondary" onclick="confirmTask(false)">拒绝</button>
+          <div class="confirm-title">高风险操作需要确认</div>
+          <div class="confirm-detail" id="confirm-detail">Agent 请求执行可能影响文件或系统的操作。</div>
+          <div class="confirm-actions">
+            <button id="confirm-btn" onclick="confirmTask(true)">确认执行</button>
+            <button class="secondary" onclick="confirmTask(false)">拒绝</button>
+          </div>
         </div>
 
         <div id="input-area">
@@ -536,6 +541,22 @@
       location.hash = `#/projects/${currentProjectId}`;
     }
 
+    function renderConfirmDetail(step) {
+      const detailEl = document.getElementById('confirm-detail');
+      if (!step || !step.metadata || !step.metadata.tool) {
+        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
+        return;
+      }
+      const { tool, action, parameters } = step.metadata;
+      let paramsText = '';
+      if (parameters && Object.keys(parameters).length > 0) {
+        paramsText = '\n参数：\n' + Object.entries(parameters)
+          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join('\n');
+      }
+      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
+    }
+
     function formatTime(iso) {
       if (!iso) return '—';
       const d = new Date(iso);
@@ -592,6 +613,8 @@
         if (task.status === 'waiting_confirmation') {
           clearInterval(pollInterval);
           setStatus('waiting');
+          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
+          renderConfirmDetail(pending);
           document.getElementById('confirm-box').classList.add('active');
           document.getElementById('send-btn').disabled = false;
           return;

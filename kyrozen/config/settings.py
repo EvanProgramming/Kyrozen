@@ -135,8 +135,8 @@ def get_config(
     env_provider, env_api_key = _detect_provider_from_env()
     file_data = _load_config_file(config_path)
 
-    final_provider = provider or os.environ.get("KYROZEN_PROVIDER", "") or file_data.get("provider", "") or env_provider
-    final_api_key = api_key or os.environ.get("KYROZEN_API_KEY", "") or file_data.get("api_key", "") or env_api_key
+    final_provider = provider or os.environ.get("KYROZEN_PROVIDER", "") or env_provider or file_data.get("provider", "")
+    final_api_key = api_key or os.environ.get("KYROZEN_API_KEY", "") or env_api_key or file_data.get("api_key", "")
 
     base_url = os.environ.get("KYROZEN_BASE_URL", "") or file_data.get("base_url", "")
     permission_mode = os.environ.get("KYROZEN_PERMISSION_MODE", "") or file_data.get("permission_mode", "strict")

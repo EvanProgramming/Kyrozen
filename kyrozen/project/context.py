@@ -28,6 +28,7 @@ class ProjectContextBuilder:
         """Build a context string for the given project."""
         memory_backend = memory or self.memory
         lines: list[str] = ["[Project Context]"]
+        lines.append(f"Project ID: {project.id}")
         lines.append(f"Project: {project.name}")
         if project.goal:
             lines.append(f"Goal: {project.goal}")
@@ -73,7 +74,8 @@ class ProjectContextBuilder:
             lines.append("\nRelevant Project Memories: none")
 
         lines.append(f"\nValid project stages: {', '.join(sorted(PROJECT_STAGES))}")
-        lines.append("You may use the update_project tool to update current_stage, next_steps, or risks.")
+        lines.append("You may use the update_project tool to update current_stage, next_steps, or risks ONLY when the user explicitly asks you to.")
+        lines.append("DO NOT write files, execute commands, or update project state unless the user explicitly asks you to.")
         lines.append("\n[User Message]")
         return "\n".join(lines)
 

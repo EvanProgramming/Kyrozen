@@ -24,6 +24,11 @@ class TaskStep:
     error: str = ""
     started_at: str = ""
     completed_at: str = ""
+    metadata: dict[str, Any] = None
+
+    def __post_init__(self) -> None:
+        if self.metadata is None:
+            self.metadata = {}
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

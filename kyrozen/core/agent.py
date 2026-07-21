@@ -57,6 +57,8 @@ class BaseAgent:
             "- Do not invent tool names or actions.\n"
             "- For file paths, prefer relative paths from the current working directory.\n"
             "- When asked to analyze a project, start with list_dir or find_files.\n"
+            "- DO NOT write files, execute terminal commands, run git operations, or update project state unless the user explicitly asks you to.\n"
+            "- If the user asks 'what should I do next', '下一步怎么办', or similar, give a conversational answer. Only use update_project when the user explicitly asks to update the project stage/next_steps.\n"
         )
 
     def _extract_tool_calls(self, text: str) -> list[dict[str, Any]]:
@@ -158,6 +160,7 @@ class BaseAgent:
             parameters = call.get("parameters", {})
 
             step = task.add_step(f"Call {tool_name}.{action}")
+            step.metadata = {"tool": tool_name, "action": action, "parameters": parameters}
             step.started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
             decision = self.permission.check(tool_name, action, parameters)

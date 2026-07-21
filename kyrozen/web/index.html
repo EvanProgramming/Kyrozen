@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kyrozen Core — Web Testing Interface</title>
+  <title>Kyrozen — Project Workspace</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -22,13 +22,80 @@
       align-items: center;
       gap: 16px;
     }
-    header h1 { font-size: 18px; color: #00f0ff; }
+    header h1 { font-size: 18px; color: #00f0ff; cursor: pointer; }
     header .subtitle { font-size: 12px; color: #8b949e; }
     #health { margin-left: auto; font-size: 12px; color: #8b949e; }
     #health.ok { color: #00ff88; }
     #health.degraded { color: #ffaa00; }
 
     #main { flex: 1; display: flex; overflow: hidden; }
+    .view { flex: 1; overflow-y: auto; padding: 24px; display: none; }
+    .view.active { display: block; }
+
+    /* Project List */
+    .list-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .list-header h2 { font-size: 20px; }
+    .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+    .project-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 16px;
+      cursor: pointer;
+      transition: border-color .2s, transform .1s;
+    }
+    .project-card:hover { border-color: #00f0ff; transform: translateY(-2px); }
+    .project-card .name { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: #f0f6fc; }
+    .project-card .meta { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+    .project-card .stage { display: inline-block; font-size: 11px; padding: 3px 8px; border-radius: 12px; background: #1f6feb22; color: #58a6ff; margin-right: 6px; }
+    .project-card .status { display: inline-block; font-size: 11px; padding: 3px 8px; border-radius: 12px; background: #23863622; color: #3fb950; }
+    .project-card .status.archived { background: #8b949e22; color: #8b949e; }
+
+    /* Forms */
+    .form-card {
+      max-width: 560px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .form-card label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 6px; }
+    .form-card input, .form-card textarea, .form-card select {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #c9d1d9;
+      font-size: 14px;
+      margin-bottom: 14px;
+      font-family: inherit;
+    }
+    .form-card input:focus, .form-card textarea:focus, .form-card select:focus { outline: none; border-color: #00f0ff; }
+    .form-card textarea { min-height: 80px; resize: vertical; }
+
+    /* Project Detail */
+    .detail-header { margin-bottom: 20px; }
+    .detail-header h2 { font-size: 22px; margin-bottom: 6px; color: #f0f6fc; }
+    .detail-header p { color: #8b949e; font-size: 14px; }
+    .detail-actions { display: flex; gap: 10px; margin-bottom: 24px; }
+    .section { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .section h3 { font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    .section p { font-size: 14px; line-height: 1.6; }
+    .empty { color: #6e7681; font-size: 13px; }
+    .item-list { display: flex; flex-direction: column; gap: 10px; }
+    .item {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 13px;
+    }
+    .item .title { font-weight: 600; margin-bottom: 4px; }
+    .item .desc { color: #8b949e; font-size: 12px; }
+
+    /* Chat */
     #chat-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
     #chat { flex: 1; overflow-y: auto; padding: 20px; }
     .msg { margin-bottom: 16px; max-width: 90%; }
@@ -74,11 +141,12 @@
       color: #0d1117;
       border: none;
       border-radius: 8px;
-      padding: 12px 20px;
+      padding: 10px 18px;
       font-weight: 600;
       cursor: pointer;
       transition: opacity .2s;
       font-family: inherit;
+      font-size: 13px;
     }
     button:hover { opacity: .8; }
     button:disabled { opacity: .4; cursor: default; }
@@ -151,25 +219,95 @@
 </head>
 <body>
   <header>
-    <h1>Kyrozen Core</h1>
-    <span class="subtitle">Phase 1 — Web Testing Interface</span>
+    <h1 onclick="location.hash='#/projects'">Kyrozen</h1>
+    <span class="subtitle" id="page-subtitle">Project Workspace</span>
     <span id="health">Checking...</span>
   </header>
 
   <div id="main">
-    <div id="chat-panel">
-      <div id="chat"></div>
-
-      <div id="confirm-box">
-        <span>高风险操作需要确认：Agent 请求执行可能影响文件或系统的操作。</span>
-        <button id="confirm-btn" onclick="confirmTask(true)">确认执行</button>
-        <button class="secondary" onclick="confirmTask(false)">拒绝</button>
+    <!-- Project List View -->
+    <div id="view-list" class="view active">
+      <div class="list-header">
+        <h2>项目列表</h2>
+        <button onclick="showCreateForm()">+ 创建项目</button>
       </div>
 
-      <div id="input-area">
-        <textarea id="user-input" placeholder="输入任务，例如：分析当前项目目录并生成报告..." rows="1"
-          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
-        <button onclick="sendMessage()" id="send-btn">发送</button>
+      <div id="create-form" class="form-card hidden">
+        <label>项目名称</label>
+        <input type="text" id="new-project-name" placeholder="例如：智能跑步设备">
+        <label>项目目标</label>
+        <input type="text" id="new-project-goal" placeholder="例如：改善运动音乐体验">
+        <label>初始想法 / 描述</label>
+        <textarea id="new-project-desc" placeholder="描述你想要做什么..."></textarea>
+        <div style="display:flex;gap:10px;">
+          <button onclick="createProject()">创建</button>
+          <button class="secondary" onclick="hideCreateForm()">取消</button>
+        </div>
+      </div>
+
+      <div id="project-list" class="project-grid"></div>
+      <p id="no-projects" class="empty hidden">暂无项目，点击上方按钮创建一个。</p>
+    </div>
+
+    <!-- Project Detail View -->
+    <div id="view-detail" class="view">
+      <div class="detail-header">
+        <h2 id="detail-name">—</h2>
+        <p id="detail-meta">—</p>
+      </div>
+      <div class="detail-actions">
+        <button onclick="enterProjectChat()">进入项目聊天</button>
+        <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
+      </div>
+
+      <div class="section">
+        <h3>目标 Goal</h3>
+        <p id="detail-goal" class="empty">暂无</p>
+      </div>
+
+      <div class="section">
+        <h3>描述 Description</h3>
+        <p id="detail-description" class="empty">暂无</p>
+      </div>
+
+      <div class="section">
+        <h3>下一步 Next Steps</h3>
+        <p id="detail-next" class="empty">暂无</p>
+      </div>
+
+      <div class="section">
+        <h3>最近任务 Recent Tasks</h3>
+        <div id="detail-tasks" class="item-list"><span class="empty">暂无任务</span></div>
+      </div>
+
+      <div class="section">
+        <h3>最近决策 Recent Decisions</h3>
+        <div id="detail-decisions" class="item-list"><span class="empty">暂无决策</span></div>
+      </div>
+
+      <div class="section">
+        <h3>最近产物 Recent Artifacts</h3>
+        <div id="detail-artifacts" class="item-list"><span class="empty">暂无产物</span></div>
+      </div>
+    </div>
+
+    <!-- Project Chat View -->
+    <div id="view-chat" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="chat-panel">
+        <div id="chat"></div>
+
+        <div id="confirm-box">
+          <span>高风险操作需要确认：Agent 请求执行可能影响文件或系统的操作。</span>
+          <button id="confirm-btn" onclick="confirmTask(true)">确认执行</button>
+          <button class="secondary" onclick="confirmTask(false)">拒绝</button>
+        </div>
+
+        <div id="input-area">
+          <textarea id="user-input" placeholder="输入任务，例如：下一步怎么办？" rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+          <button onclick="sendMessage()" id="send-btn">发送</button>
+          <button class="secondary" onclick="leaveChat()">返回项目</button>
+        </div>
       </div>
     </div>
 
@@ -192,6 +330,7 @@
   </div>
 
   <script>
+    let currentProjectId = null;
     let currentTaskId = null;
     let pollInterval = null;
     let taskStartTime = null;
@@ -226,6 +365,46 @@
       document.getElementById('status-detail').textContent = detail;
     }
 
+    function showView(name) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.getElementById('view-' + name).classList.add('active');
+      const sidebar = document.getElementById('sidebar');
+      if (name === 'chat') {
+        sidebar.style.display = 'flex';
+      } else {
+        sidebar.style.display = 'none';
+      }
+    }
+
+    function parseHash() {
+      const hash = location.hash.replace('#', '') || '/projects';
+      const parts = hash.split('/').filter(Boolean);
+      if (parts[0] === 'projects') {
+        if (!parts[1]) return { view: 'list' };
+        if (parts[2] === 'chat') return { view: 'chat', projectId: parts[1] };
+        return { view: 'detail', projectId: parts[1] };
+      }
+      return { view: 'list' };
+    }
+
+    async function route() {
+      const routeInfo = parseHash();
+      if (routeInfo.view === 'list') {
+        currentProjectId = null;
+        showView('list');
+        await loadProjectList();
+      } else if (routeInfo.view === 'detail') {
+        currentProjectId = routeInfo.projectId;
+        showView('detail');
+        await loadProjectDetail(routeInfo.projectId);
+      } else if (routeInfo.view === 'chat') {
+        currentProjectId = routeInfo.projectId;
+        showView('chat');
+        document.getElementById('chat').innerHTML = '';
+        addMessage('system', `已进入项目聊天。项目 ID: ${routeInfo.projectId}`, 'system');
+      }
+    }
+
     async function checkHealth() {
       try {
         const res = await fetch('/api/health');
@@ -237,6 +416,131 @@
         document.getElementById('health').textContent = 'API 不可用';
         document.getElementById('health').className = 'degraded';
       }
+    }
+
+    function showCreateForm() {
+      document.getElementById('create-form').classList.remove('hidden');
+    }
+
+    function hideCreateForm() {
+      document.getElementById('create-form').classList.add('hidden');
+    }
+
+    async function createProject() {
+      const name = document.getElementById('new-project-name').value.trim();
+      const goal = document.getElementById('new-project-goal').value.trim();
+      const desc = document.getElementById('new-project-desc').value.trim();
+      if (!name) { alert('请输入项目名称'); return; }
+
+      try {
+        const res = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, goal, description: desc, initial_idea: desc })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        hideCreateForm();
+        document.getElementById('new-project-name').value = '';
+        document.getElementById('new-project-goal').value = '';
+        document.getElementById('new-project-desc').value = '';
+        location.hash = `#/projects/${data.id}`;
+      } catch (e) {
+        alert('创建项目失败：' + e.message);
+      }
+    }
+
+    async function loadProjectList() {
+      try {
+        const res = await fetch('/api/projects');
+        const data = await res.json();
+        const container = document.getElementById('project-list');
+        const empty = document.getElementById('no-projects');
+        container.innerHTML = '';
+        if (!data || data.length === 0) {
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+        for (const p of data) {
+          const card = document.createElement('div');
+          card.className = 'project-card';
+          card.onclick = () => { location.hash = `#/projects/${p.id}`; };
+          card.innerHTML = `
+            <div class="name">${escapeHtml(p.name)}</div>
+            <div class="meta">${escapeHtml(p.goal || '暂无目标')} · 更新于 ${formatTime(p.updated_at)}</div>
+            <span class="stage">${escapeHtml(p.current_stage)}</span>
+            <span class="status ${p.status}">${escapeHtml(p.status)}</span>
+          `;
+          container.appendChild(card);
+        }
+      } catch (e) {
+        document.getElementById('project-list').innerHTML = `<p class="empty">加载失败：${escapeHtml(e.message)}</p>`;
+      }
+    }
+
+    async function loadProjectDetail(projectId) {
+      try {
+        const res = await fetch(`/api/projects/${projectId}`);
+        if (!res.ok) throw new Error('Project not found');
+        const p = await res.json();
+        document.getElementById('detail-name').textContent = p.name;
+        document.getElementById('detail-meta').textContent = `Stage: ${p.current_stage} · Status: ${p.status} · Updated: ${formatTime(p.updated_at)}`;
+        document.getElementById('detail-goal').textContent = p.goal || '暂无';
+        document.getElementById('detail-goal').className = p.goal ? '' : 'empty';
+        document.getElementById('detail-description').textContent = p.description || '暂无';
+        document.getElementById('detail-description').className = p.description ? '' : 'empty';
+        document.getElementById('detail-next').textContent = p.next_steps || '暂无';
+        document.getElementById('detail-next').className = p.next_steps ? '' : 'empty';
+
+        renderItemList('detail-tasks', p.recent_tasks, t => ({
+          title: `${t.title} (${t.status})`,
+          desc: t.description || ''
+        }));
+        renderItemList('detail-decisions', p.recent_decisions, d => ({
+          title: d.decision,
+          desc: d.reason || ''
+        }));
+        renderItemList('detail-artifacts', p.recent_artifacts, a => ({
+          title: `${a.title} (v${a.version})`,
+          desc: a.type || ''
+        }));
+      } catch (e) {
+        document.getElementById('detail-name').textContent = '加载失败';
+      }
+    }
+
+    function renderItemList(elementId, items, mapper) {
+      const el = document.getElementById(elementId);
+      el.innerHTML = '';
+      if (!items || items.length === 0) {
+        el.innerHTML = '<span class="empty">暂无</span>';
+        return;
+      }
+      for (const item of items) {
+        const mapped = mapper(item);
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `<div class="title">${escapeHtml(mapped.title)}</div>${mapped.desc ? `<div class="desc">${escapeHtml(mapped.desc)}</div>` : ''}`;
+        el.appendChild(div);
+      }
+    }
+
+    function enterProjectChat() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}/chat`;
+    }
+
+    function leaveChat() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}`;
+    }
+
+    function formatTime(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (isNaN(d)) return iso;
+      return d.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
     async function sendMessage() {
@@ -260,7 +564,7 @@
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg })
+          body: JSON.stringify({ message: msg, project_id: currentProjectId })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -372,8 +676,10 @@
       }
     }
 
+    window.addEventListener('hashchange', route);
     checkHealth();
     setInterval(checkHealth, 10000);
+    route();
   </script>
 </body>
 </html>

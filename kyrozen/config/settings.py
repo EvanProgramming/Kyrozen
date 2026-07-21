@@ -55,6 +55,8 @@ class KyrozenConfig:
     memory_backend: str = "memory"  # "memory" or "chromadb"
     chroma_path: str = "./chroma_memory"
     task_store_path: str = "./kyrozen_tasks.json"
+    db_path: str = ""
+    projects_dir: str = ""
     config_path: str = field(default="~/.kyrozen_config.json", repr=False)
 
     def __post_init__(self) -> None:
@@ -65,6 +67,16 @@ class KyrozenConfig:
         if not self.base_url:
             self.base_url = PROVIDER_BASE_URLS.get(self.provider, "")
         self.workspace_root = os.path.abspath(os.path.expanduser(self.workspace_root))
+        if not self.db_path:
+            self.db_path = os.path.join(self.workspace_root, "kyrozen.db")
+        if not self.projects_dir:
+            self.projects_dir = os.path.join(self.workspace_root, "projects")
+
+    def project_dir(self, project_id: str) -> str:
+        return os.path.join(self.projects_dir, project_id)
+
+    def project_memory_path(self, project_id: str) -> str:
+        return os.path.join(self.project_dir(project_id), "memory.json")
 
     def validate(self) -> list[str]:
         """Return a list of validation issues."""
@@ -129,6 +141,7 @@ def get_config(
     base_url = os.environ.get("KYROZEN_BASE_URL", "") or file_data.get("base_url", "")
     permission_mode = os.environ.get("KYROZEN_PERMISSION_MODE", "") or file_data.get("permission_mode", "strict")
 
+    workspace_root = os.environ.get("KYROZEN_WORKSPACE", ".") or file_data.get("workspace_root", ".")
     return KyrozenConfig(
         provider=final_provider,
         api_key=final_api_key,
@@ -136,10 +149,12 @@ def get_config(
         model_simple=file_data.get("model_simple", ""),
         model_complex=file_data.get("model_complex", ""),
         permission_mode=permission_mode or "strict",
-        workspace_root=os.environ.get("KYROZEN_WORKSPACE", ".") or file_data.get("workspace_root", "."),
+        workspace_root=workspace_root,
         log_level=os.environ.get("KYROZEN_LOG_LEVEL", "INFO"),
         memory_backend=file_data.get("memory_backend", "memory"),
         chroma_path=file_data.get("chroma_path", "./chroma_memory"),
         task_store_path=file_data.get("task_store_path", "./kyrozen_tasks.json"),
+        db_path=os.environ.get("KYROZEN_DB_PATH", "") or file_data.get("db_path", ""),
+        projects_dir=os.environ.get("KYROZEN_PROJECTS_DIR", "") or file_data.get("projects_dir", ""),
         config_path=config_path,
     )

@@ -37,8 +37,8 @@ class MemoryInterface(ABC):
         ...
 
     @abstractmethod
-    def query(self, category: str | None = None, query: str | None = None, limit: int = 10) -> list[MemoryRecord]:
-        """Query memories by category and/or keyword."""
+    def query(self, category: str | None = None, query: str | None = None, limit: int = 10, **filters: Any) -> list[MemoryRecord]:
+        """Query memories by category, keyword, and optional metadata filters."""
         ...
 
     @abstractmethod
@@ -71,11 +71,13 @@ class InMemoryMemory(MemoryInterface):
             self._records[record.id] = record
         return record
 
-    def query(self, category: str | None = None, query: str | None = None, limit: int = 10) -> list[MemoryRecord]:
+    def query(self, category: str | None = None, query: str | None = None, limit: int = 10, **filters: Any) -> list[MemoryRecord]:
         with self._lock:
             records = list(self._records.values())
         if category:
             records = [r for r in records if r.category == category]
+        for key, value in filters.items():
+            records = [r for r in records if r.metadata.get(key) == value]
         if query:
             query_lower = query.lower()
             records = [r for r in records if query_lower in r.content.lower()]

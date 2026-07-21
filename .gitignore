@@ -1,0 +1,26 @@
+# Reference clone of OpenKyrozen (analysis only, do not commit)
+.openkyrozen_ref/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Storage & logs
+chroma_memory/
+*.log
+*.db
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Environment / secrets
+.env
+*.env

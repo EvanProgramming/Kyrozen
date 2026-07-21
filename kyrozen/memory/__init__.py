@@ -1,3 +1,4 @@
-from .interface import MemoryInterface, InMemoryMemory
+from .interface import InMemoryMemory, MemoryInterface
+from .scoped import JsonFileMemory, ProjectMemory
 
-__all__ = ["MemoryInterface", "InMemoryMemory"]
+__all__ = ["MemoryInterface", "InMemoryMemory", "JsonFileMemory", "ProjectMemory"]

@@ -213,11 +213,12 @@ class BaseAgent:
             })
         return results
 
-    def run(self, user_input: str, confirmed: bool = False) -> Task:
+    def run(self, user_input: str, confirmed: bool = False, project_id: str | None = None) -> Task:
         """Run one user request through the agent loop."""
         task = self.task_manager.create(
             title=user_input[:60],
             description=user_input,
+            project_id=project_id,
         )
         task.update_status("running")
         self.task_manager.update(task)
@@ -272,15 +273,15 @@ class BaseAgent:
                 final_answer = "I processed your request but did not produce a final answer."
 
             task.complete(result={"answer": final_answer})
-            self.memory.save("user", user_input, task_id=task.id)
-            self.memory.save("agent", final_answer, task_id=task.id)
-            self.logger.agent("Task completed", task_id=task.id, answer=final_answer)
+            self.memory.save("user", user_input, task_id=task.id, project_id=project_id)
+            self.memory.save("agent", final_answer, task_id=task.id, project_id=project_id)
+            self.logger.agent("Task completed", task_id=task.id, answer=final_answer, project_id=project_id)
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
             task.fail(error_msg)
-            self.logger.error(error_msg, task_id=task.id)
+            self.logger.error(error_msg, task_id=task.id, project_id=project_id)
 
         elapsed = time.time() - start_time
-        self.logger.perf(f"Task finished in {elapsed:.2f}s", task_id=task.id, elapsed_seconds=elapsed)
+        self.logger.perf(f"Task finished in {elapsed:.2f}s", task_id=task.id, elapsed_seconds=elapsed, project_id=project_id)
         self.task_manager.update(task)
         return task

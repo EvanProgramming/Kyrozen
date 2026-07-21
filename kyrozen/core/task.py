@@ -38,11 +38,13 @@ class Task:
         description: str = "",
         task_id: str | None = None,
         status: str = "pending",
+        project_id: str | None = None,
     ) -> None:
         self.id = task_id or f"task_{uuid.uuid4().hex[:8]}"
         self.title = title
         self.description = description
         self.status = status
+        self.project_id = project_id
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.updated_at = self.created_at
         self.steps: list[TaskStep] = []
@@ -75,6 +77,7 @@ class Task:
             "title": self.title,
             "description": self.description,
             "status": self.status,
+            "project_id": self.project_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "steps": [s.to_dict() for s in self.steps],
@@ -89,6 +92,7 @@ class Task:
             description=data.get("description", ""),
             task_id=data.get("id"),
             status=data.get("status", "pending"),
+            project_id=data.get("project_id"),
         )
         task.created_at = data.get("created_at", task.created_at)
         task.updated_at = data.get("updated_at", task.updated_at)
@@ -101,37 +105,67 @@ class Task:
 
 
 class TaskManager:
-    """Manage tasks in memory with optional JSON persistence."""
+    """Manage tasks with optional JSON file or SQLite persistence."""
 
-    def __init__(self, store_path: str = "./kyrozen_tasks.json") -> None:
+    def __init__(
+        self,
+        store_path: str = "./kyrozen_tasks.json",
+        db: Any | None = None,
+    ) -> None:
         self.store_path = store_path
+        self.db = db
         self._tasks: dict[str, Task] = {}
         self._lock = threading.Lock()
-        self._load()
+        if db is not None:
+            self._load_from_db()
+        else:
+            self._load()
 
-    def create(self, title: str, description: str = "") -> Task:
-        task = Task(title=title, description=description)
+    def create(
+        self,
+        title: str,
+        description: str = "",
+        project_id: str | None = None,
+    ) -> Task:
+        task = Task(title=title, description=description, project_id=project_id)
         with self._lock:
             self._tasks[task.id] = task
-            self._save()
+            self._save(task)
         return task
 
     def get(self, task_id: str) -> Task | None:
         with self._lock:
-            return self._tasks.get(task_id)
+            task = self._tasks.get(task_id)
+        if task is None and self.db is not None:
+            task = self.db.get_task(task_id)
+            if task:
+                with self._lock:
+                    self._tasks[task.id] = task
+        return task
 
     def update(self, task: Task) -> None:
         with self._lock:
             self._tasks[task.id] = task
-            self._save()
+            self._save(task)
 
-    def list_tasks(self) -> list[Task]:
+    def list_tasks(self, project_id: str | None = None) -> list[Task]:
+        if self.db is not None:
+            return self.db.list_tasks(project_id=project_id)
         with self._lock:
-            return list(self._tasks.values())
+            tasks = list(self._tasks.values())
+        if project_id:
+            tasks = [t for t in tasks if t.project_id == project_id]
+        return tasks
 
-    def _save(self) -> None:
+    def _save(self, task: Task) -> None:
+        if self.db is not None:
+            try:
+                self.db.save_task(task)
+            except Exception:
+                pass
+            return
         try:
-            data = {tid: task.to_dict() for tid, task in self._tasks.items()}
+            data = {tid: t.to_dict() for tid, t in self._tasks.items()}
             with open(self.store_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
@@ -145,5 +179,14 @@ class TaskManager:
                 data = json.load(f)
             for tid, task_data in data.items():
                 self._tasks[tid] = Task.from_dict(task_data)
+        except Exception:
+            pass
+
+    def _load_from_db(self) -> None:
+        if self.db is None:
+            return
+        try:
+            for task in self.db.list_tasks():
+                self._tasks[task.id] = task
         except Exception:
             pass

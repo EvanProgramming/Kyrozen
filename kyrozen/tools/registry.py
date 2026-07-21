@@ -5,9 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from .base import Tool, ToolResult, ToolSchema
+from typing import TYPE_CHECKING
+
 from .file_tools import FileReadTool, FileWriteTool, ListDirTool, FindFilesTool
 from .terminal_tools import TerminalTool
 from .git_tools import GitTool
+
+if TYPE_CHECKING:
+    from kyrozen.project.manager import ProjectManager
 
 
 class ToolRegistry:
@@ -35,8 +40,10 @@ class ToolRegistry:
         return tool.execute(action, parameters)
 
 
-def get_default_registry() -> ToolRegistry:
-    """Return a registry with Phase 1 tools pre-registered."""
+def get_default_registry(project_manager: "ProjectManager | None" = None) -> ToolRegistry:
+    """Return a registry with Phase 1 and Phase 2 tools pre-registered."""
+    from .project_tools import RecordDecisionTool, UpdateProjectTool
+
     registry = ToolRegistry()
     registry.register(FileReadTool())
     registry.register(FileWriteTool())
@@ -44,4 +51,6 @@ def get_default_registry() -> ToolRegistry:
     registry.register(FindFilesTool())
     registry.register(TerminalTool())
     registry.register(GitTool())
+    registry.register(UpdateProjectTool(project_manager))
+    registry.register(RecordDecisionTool(project_manager))
     return registry

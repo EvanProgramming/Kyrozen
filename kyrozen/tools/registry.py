@@ -41,7 +41,13 @@ class ToolRegistry:
 
 
 def get_default_registry(project_manager: "ProjectManager | None" = None) -> ToolRegistry:
-    """Return a registry with Phase 1 and Phase 2 tools pre-registered."""
+    """Return a registry with Phase 1, Phase 2, and Phase 3 tools pre-registered."""
+    from .discovery_tools import (
+        AssessConfidenceTool,
+        RecordEvidenceTool,
+        RecordProblemDecisionTool,
+        SaveProblemBriefTool,
+    )
     from .project_tools import RecordDecisionTool, UpdateProjectTool
 
     registry = ToolRegistry()
@@ -53,4 +59,8 @@ def get_default_registry(project_manager: "ProjectManager | None" = None) -> Too
     registry.register(GitTool())
     registry.register(UpdateProjectTool(project_manager))
     registry.register(RecordDecisionTool(project_manager))
+    registry.register(SaveProblemBriefTool(project_manager))
+    registry.register(RecordEvidenceTool(project_manager))
+    registry.register(AssessConfidenceTool(project_manager))
+    registry.register(RecordProblemDecisionTool(project_manager))
     return registry

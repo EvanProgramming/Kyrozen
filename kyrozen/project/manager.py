@@ -129,6 +129,16 @@ class ProjectManager:
             return artifact
         return None
 
+    def get_latest_artifact(self, project_id: str, artifact_type: str, title: str | None = None) -> Artifact | None:
+        """Return the latest version of an artifact of the given type."""
+        artifacts = self.db.list_artifacts(project_id)
+        matches = [a for a in artifacts if a.type == artifact_type]
+        if title:
+            matches = [a for a in matches if a.title == title]
+        if not matches:
+            return None
+        return sorted(matches, key=lambda a: a.version, reverse=True)[0]
+
     # ------------------------------------------------------------------
     # Tasks
     # ------------------------------------------------------------------

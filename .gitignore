@@ -11,8 +11,10 @@ venv/
 
 # Storage & logs
 chroma_memory/
+logs/
 *.log
 *.db
+kyrozen_tasks.json
 
 # macOS
 .DS_Store

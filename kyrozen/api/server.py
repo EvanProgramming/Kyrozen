@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from kyrozen.config import KyrozenConfig, get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
+from kyrozen.discovery import ProblemDiscoveryAgent
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
 from kyrozen.models import ModelInterface, get_model_provider
@@ -23,16 +24,24 @@ from kyrozen.tools import get_default_registry
 
 # Global state managed via lifespan
 _agent: BaseAgent | None = None
+_discovery_agent: ProblemDiscoveryAgent | None = None
 _config: KyrozenConfig | None = None
 _db: KyrozenDatabase | None = None
 _project_manager: ProjectManager | None = None
 _context_builder: ProjectContextBuilder | None = None
 
 
+def _get_discovery_agent() -> ProblemDiscoveryAgent:
+    if _discovery_agent is None:
+        raise RuntimeError("Discovery agent not initialized")
+    return _discovery_agent
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     project_id: str | None = Field(None, description="Project ID to associate with this chat")
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
+    mode: str = Field("default", description="Chat mode: default or discovery")
 
 
 class ConfirmRequest(BaseModel):
@@ -105,7 +114,7 @@ def _project_memory(project_id: str) -> ProjectMemory:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _config, _db, _project_manager, _context_builder
+        global _agent, _discovery_agent, _config, _db, _project_manager, _context_builder
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -132,6 +141,15 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             task_manager=task_manager,
             logger=logger,
         )
+        global _discovery_agent
+        _discovery_agent = ProblemDiscoveryAgent(
+            config=_config,
+            model=active_model,
+            tools=tools,
+            task_manager=task_manager,
+            logger=logger,
+            project_manager=_project_manager,
+        )
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
@@ -150,7 +168,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # ------------------------------------------------------------------
     @app.post("/api/chat")
     async def api_chat(request: ChatRequest):
-        agent = _get_agent()
+        is_discovery = request.mode == "discovery"
+        agent = _get_discovery_agent() if is_discovery else _get_agent()
         if agent.model is None:
             raise HTTPException(503, "Model provider not configured. Set DEEPSEEK_API_KEY or KYROZEN_API_KEY.")
 
@@ -163,7 +182,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             builder = _get_context_builder()
             # Swap the context builder's memory backend to the project's memory file
             builder.memory = _project_memory(request.project_id)
-            context = builder.build(project)
+            if is_discovery:
+                context = builder.build_discovery_context(project)
+            else:
+                context = builder.build(project)
             user_input = f"{context}\n{request.message}"
             # Ensure the agent uses the project's memory for this task
             agent.memory = _project_memory(request.project_id)
@@ -175,7 +197,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
         try:
             task = agent.run(user_input, confirmed=request.confirmed, project_id=request.project_id)
-            return {"task_id": task.id, "status": task.status, "project_id": request.project_id}
+            return {"task_id": task.id, "status": task.status, "project_id": request.project_id, "mode": request.mode}
         except Exception as e:
             raise HTTPException(500, f"Agent error: {e}")
 
@@ -368,6 +390,34 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if artifact is None:
             raise HTTPException(404, "Artifact not found")
         return artifact.to_dict()
+
+    # ------------------------------------------------------------------
+    # Problem Discovery
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/problem-discovery/state")
+    async def api_discovery_state(project_id: str):
+        pm = _get_project_manager()
+        if pm.get(project_id) is None:
+            raise HTTPException(404, "Project not found")
+        from kyrozen.discovery.brief import ProblemBrief
+        from kyrozen.discovery.question_engine import QuestionEngine
+
+        latest = pm.get_latest_artifact(project_id, "problem_brief", title="Problem Brief")
+        brief = ProblemBrief()
+        if latest is not None:
+            import json
+            try:
+                brief = ProblemBrief.from_dict(json.loads(latest.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+        engine = QuestionEngine()
+        summary = engine.state_summary(brief)
+        return {
+            "project_id": project_id,
+            "brief": brief.to_dict(),
+            "state_summary": summary,
+            "latest_artifact_id": latest.id if latest else None,
+        }
 
     return app
 

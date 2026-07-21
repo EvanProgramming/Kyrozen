@@ -12,6 +12,7 @@ venv/
 # Storage & logs
 chroma_memory/
 logs/
+projects/
 *.log
 *.db
 kyrozen_tasks.json

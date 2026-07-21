@@ -258,7 +258,8 @@
         <p id="detail-meta">—</p>
       </div>
       <div class="detail-actions">
-        <button onclick="enterProjectChat()">进入项目聊天</button>
+        <button onclick="enterDiscovery()">进入 Problem Discovery</button>
+        <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
         <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
       </div>
 
@@ -316,6 +317,37 @@
       </div>
     </div>
 
+    <!-- Problem Discovery View -->
+    <div id="view-discovery" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="discovery-panel" style="flex:1;display:flex;min-width:0;">
+        <div id="discovery-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="discovery-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
+          <div id="discovery-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
+            <div id="discovery-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="confirmDiscoveryTask(true)">确认执行</button>
+              <button class="secondary" onclick="confirmDiscoveryTask(false)">拒绝</button>
+            </div>
+          </div>
+          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
+            <textarea id="discovery-input" placeholder="描述你的困扰或想法..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDiscoveryMessage()}"></textarea>
+            <button onclick="sendDiscoveryMessage()" id="discovery-send-btn">发送</button>
+            <button class="secondary" onclick="leaveDiscovery()">返回项目</button>
+          </div>
+        </div>
+        <div id="discovery-sidebar" style="width:380px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
+          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Problem Brief</h2>
+          <div id="discovery-brief" style="padding:12px 16px;font-size:12px;line-height:1.6;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">下一步问题</h2>
+          <div id="discovery-next" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">未验证假设</h2>
+          <div id="discovery-assumptions" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="sidebar">
       <h2>任务状态</h2>
       <div id="task-info">
@@ -339,6 +371,10 @@
     let currentTaskId = null;
     let pollInterval = null;
     let taskStartTime = null;
+
+    let discoveryTaskId = null;
+    let discoveryPollInterval = null;
+    let discoveryTaskStartTime = null;
 
     function escapeHtml(text) {
       return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -387,6 +423,7 @@
       if (parts[0] === 'projects') {
         if (!parts[1]) return { view: 'list' };
         if (parts[2] === 'chat') return { view: 'chat', projectId: parts[1] };
+        if (parts[2] === 'discovery') return { view: 'discovery', projectId: parts[1] };
         return { view: 'detail', projectId: parts[1] };
       }
       return { view: 'list' };
@@ -407,6 +444,12 @@
         showView('chat');
         document.getElementById('chat').innerHTML = '';
         addMessage('system', `已进入项目聊天。项目 ID: ${routeInfo.projectId}`, 'system');
+      } else if (routeInfo.view === 'discovery') {
+        currentProjectId = routeInfo.projectId;
+        showView('discovery');
+        document.getElementById('discovery-messages').innerHTML = '';
+        addDiscoveryMessage('system', `已进入 Problem Discovery。项目 ID: ${routeInfo.projectId}\n\n请描述你的困扰、想法或遇到的问题，我会帮你逐步理清真实问题。`, 'system');
+        await loadDiscoveryState();
       }
     }
 
@@ -696,6 +739,209 @@
         addMessage('system', '确认失败：' + e.message, 'error');
         setStatus('failed', e.message);
         document.getElementById('send-btn').disabled = false;
+      }
+    }
+
+    // ---------------- Problem Discovery ----------------
+
+    function enterDiscovery() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}/discovery`;
+    }
+
+    function leaveDiscovery() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}`;
+    }
+
+    function addDiscoveryMessage(role, content, type = role) {
+      const chat = document.getElementById('discovery-messages');
+      const div = document.createElement('div');
+      div.className = 'msg ' + type;
+      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
+      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    async function loadDiscoveryState() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/problem-discovery/state`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderDiscoveryBrief(data.brief, data.state_summary);
+      } catch (e) {
+        console.error('loadDiscoveryState error', e);
+      }
+    }
+
+    function renderDiscoveryBrief(brief, summary) {
+      const briefEl = document.getElementById('discovery-brief');
+      const fields = [
+        ['title', '标题'],
+        ['target_user', '目标用户'],
+        ['scenario', '场景'],
+        ['surface_problem', '表面问题'],
+        ['deep_need', '深层需求'],
+        ['current_solution', '当前方案'],
+        ['current_solution_problem', '当前方案不足'],
+        ['frequency', '频率'],
+        ['impact', '影响'],
+        ['opportunity_direction', '机会方向'],
+        ['confidence', '可信度'],
+        ['confidence_reason', '可信度说明'],
+        ['decision', '问题层判断'],
+        ['decision_reason', '判断理由'],
+      ];
+      let html = '';
+      for (const [key, label] of fields) {
+        const value = brief[key] || '(未设置)';
+        html += `<div style="margin-bottom:8px;"><span style="color:#8b949e;">${label}:</span> ${escapeHtml(String(value))}</div>`;
+      }
+      briefEl.innerHTML = html;
+
+      const nextEl = document.getElementById('discovery-next');
+      if (summary && summary.next_question) {
+        nextEl.innerHTML = `<div style="color:#00f0ff;margin-bottom:4px;">${escapeHtml(summary.next_question.dimension)}</div><div>${escapeHtml(summary.next_question.question)}</div>`;
+      } else {
+        nextEl.innerHTML = '<span style="color:#6e7681;">信息已基本收集，可生成 Problem Brief。</span>';
+      }
+
+      const assumptionsEl = document.getElementById('discovery-assumptions');
+      const assumptions = brief.unknown_assumptions || [];
+      if (assumptions.length === 0) {
+        assumptionsEl.innerHTML = '<span style="color:#6e7681;">暂无</span>';
+      } else {
+        assumptionsEl.innerHTML = assumptions.map(a =>
+          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+          `<div>${escapeHtml(a.claim)}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">来源: ${escapeHtml(a.source)} · 已验证: ${a.verified ? '是' : '否'}</div>` +
+          `</div>`
+        ).join('');
+      }
+    }
+
+    function renderDiscoveryConfirmDetail(step) {
+      const detailEl = document.getElementById('discovery-confirm-detail');
+      if (!step || !step.metadata || !step.metadata.tool) {
+        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
+        return;
+      }
+      const { tool, action, parameters } = step.metadata;
+      let paramsText = '';
+      if (parameters && Object.keys(parameters).length > 0) {
+        paramsText = '\n参数：\n' + Object.entries(parameters)
+          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join('\n');
+      }
+      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
+    }
+
+    async function sendDiscoveryMessage() {
+      const input = document.getElementById('discovery-input');
+      const btn = document.getElementById('discovery-send-btn');
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      input.value = '';
+      btn.disabled = true;
+      setStatus('thinking');
+      document.getElementById('discovery-confirm-box').classList.remove('active');
+      addDiscoveryMessage('user', msg);
+      addDiscoveryMessage('system', '已创建 discovery 任务，等待 Kyrozen 处理...', 'system');
+
+      discoveryTaskId = null;
+      clearInterval(discoveryPollInterval);
+      discoveryTaskStartTime = Date.now();
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'discovery' })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+        discoveryTaskId = data.task_id;
+        pollDiscoveryTask();
+        discoveryPollInterval = setInterval(pollDiscoveryTask, 1000);
+      } catch (e) {
+        addDiscoveryMessage('system', '错误：' + e.message, 'error');
+        setStatus('failed', e.message);
+        btn.disabled = false;
+      }
+    }
+
+    async function pollDiscoveryTask() {
+      if (!discoveryTaskId) return;
+      try {
+        const res = await fetch(`/api/tasks/${discoveryTaskId}`);
+        if (!res.ok) return;
+        const task = await res.json();
+
+        if (task.status === 'waiting_confirmation') {
+          clearInterval(discoveryPollInterval);
+          setStatus('waiting');
+          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
+          renderDiscoveryConfirmDetail(pending);
+          document.getElementById('discovery-confirm-box').classList.add('active');
+          document.getElementById('discovery-send-btn').disabled = false;
+          return;
+        }
+
+        if (task.status === 'completed' || task.status === 'failed') {
+          clearInterval(discoveryPollInterval);
+          if (task.status === 'completed') {
+            setStatus('completed');
+            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
+            addDiscoveryMessage('assistant', answer);
+          } else {
+            setStatus('failed', task.errors.join('; '));
+            addDiscoveryMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
+          }
+          document.getElementById('discovery-send-btn').disabled = false;
+          await loadDiscoveryState();
+        } else {
+          const runningStep = task.steps.find(s => s.status === 'running');
+          if (runningStep) {
+            setStatus('calling', runningStep.description);
+          } else {
+            setStatus('thinking');
+          }
+        }
+      } catch (e) {
+        console.error('poll discovery error', e);
+      }
+    }
+
+    async function confirmDiscoveryTask(confirm) {
+      if (!discoveryTaskId) return;
+      document.getElementById('discovery-confirm-box').classList.remove('active');
+      setStatus('thinking');
+      document.getElementById('discovery-send-btn').disabled = true;
+      try {
+        const res = await fetch(`/api/tasks/${discoveryTaskId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: confirm })
+        });
+        if (!res.ok) throw new Error('确认请求失败');
+        const task = await res.json();
+        if (task.status === 'waiting_confirmation') {
+          setStatus('waiting');
+          document.getElementById('discovery-confirm-box').classList.add('active');
+          return;
+        }
+        discoveryPollInterval = setInterval(pollDiscoveryTask, 1000);
+        pollDiscoveryTask();
+      } catch (e) {
+        addDiscoveryMessage('system', '确认失败：' + e.message, 'error');
+        setStatus('failed', e.message);
+        document.getElementById('discovery-send-btn').disabled = false;
       }
     }
 

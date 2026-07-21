@@ -26,3 +26,5 @@ kyrozen_tasks.json
 # Environment / secrets
 .env
 *.env
+*.kyrozen_config.json
+.kyrozen_config.json

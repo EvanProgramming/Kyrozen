@@ -47,7 +47,14 @@ def get_default_registry(
     github_token: str | None = None,
     semantic_scholar_api_key: str | None = None,
 ) -> ToolRegistry:
-    """Return a registry with Phase 1-4 tools pre-registered."""
+    """Return a registry with Phase 1-6 tools pre-registered."""
+    from .development_tools import (
+        RecordDevelopmentDecisionTool,
+        SaveDeploymentGuideTool,
+        SaveFeatureImplementationTool,
+        SaveTechnicalPlanTool,
+        SaveTestReportTool,
+    )
     from .discovery_tools import (
         AssessConfidenceTool,
         RecordEvidenceTool,
@@ -93,4 +100,9 @@ def get_default_registry(
     registry.register(SavePRDTool(project_manager))
     registry.register(SaveSolutionComparisonTool(project_manager))
     registry.register(RecordProductDecisionTool(project_manager))
+    registry.register(SaveTechnicalPlanTool(project_manager))
+    registry.register(SaveFeatureImplementationTool(project_manager))
+    registry.register(SaveTestReportTool(project_manager))
+    registry.register(SaveDeploymentGuideTool(project_manager))
+    registry.register(RecordDevelopmentDecisionTool(project_manager))
     return registry

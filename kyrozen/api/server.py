@@ -23,6 +23,7 @@ from kyrozen.models import ModelInterface, get_model_provider
 from kyrozen.planning.agent import ProductPlanningAgent
 from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager
 from kyrozen.research.agent import MarketResearchAgent
+from kyrozen.testing.agent import TestingAgent
 from kyrozen.tools import get_default_registry
 
 
@@ -33,6 +34,7 @@ _research_agent: MarketResearchAgent | None = None
 _planning_agent: ProductPlanningAgent | None = None
 _development_agent: SoftwareDevelopmentAgent | None = None
 _hardware_agent: HardwareDevelopmentAgent | None = None
+_testing_agent: TestingAgent | None = None
 _config: KyrozenConfig | None = None
 _db: KyrozenDatabase | None = None
 _project_manager: ProjectManager | None = None
@@ -69,11 +71,17 @@ def _get_hardware_agent() -> HardwareDevelopmentAgent:
     return _hardware_agent
 
 
+def _get_testing_agent() -> TestingAgent:
+    if _testing_agent is None:
+        raise RuntimeError("Testing agent not initialized")
+    return _testing_agent
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     project_id: str | None = Field(None, description="Project ID to associate with this chat")
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
-    mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, development, or hardware")
+    mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, development, hardware, or testing")
 
 
 class ConfirmRequest(BaseModel):
@@ -146,7 +154,7 @@ def _project_memory(project_id: str) -> ProjectMemory:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _config, _db, _project_manager, _context_builder
+        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _testing_agent, _config, _db, _project_manager, _context_builder
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -224,6 +232,15 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             logger=logger,
             project_manager=_project_manager,
         )
+        global _testing_agent
+        _testing_agent = TestingAgent(
+            config=_config,
+            model=active_model,
+            tools=tools,
+            task_manager=task_manager,
+            logger=logger,
+            project_manager=_project_manager,
+        )
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
@@ -252,6 +269,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             agent = _get_development_agent()
         elif request.mode == "hardware":
             agent = _get_hardware_agent()
+        elif request.mode == "testing":
+            agent = _get_testing_agent()
         else:
             agent = _get_agent()
         if agent.model is None:
@@ -276,6 +295,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 context = builder.build_development_context(project)
             elif request.mode == "hardware":
                 context = builder.build_hardware_context(project)
+            elif request.mode == "testing":
+                context = builder.build_testing_context(project)
             else:
                 context = builder.build(project)
             user_input = f"{context}\n{request.message}"
@@ -801,6 +822,81 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "latest_bom_artifact_id": latest_bom.id if latest_bom else None,
             "latest_wiring_artifact_id": latest_wiring.id if latest_wiring else None,
             "latest_firmware_artifact_id": latest_firmware.id if latest_firmware else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Testing & Validation
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/testing/state")
+    async def api_testing_state(project_id: str):
+        pm = _get_project_manager()
+        if pm.get(project_id) is None:
+            raise HTTPException(404, "Project not found")
+        from kyrozen.testing.models import TestPlan, ValidationReport
+
+        latest_test_plan = pm.get_latest_artifact(project_id, "test_plan", title="Test Plan")
+        test_plan = TestPlan()
+        if latest_test_plan is not None:
+            import json
+            try:
+                test_plan = TestPlan.from_dict(json.loads(latest_test_plan.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        test_results = []
+        user_feedback = []
+        for artifact in pm.list_artifacts(project_id):
+            if artifact.type == "test_result":
+                try:
+                    from kyrozen.testing.models import TestResult
+                    test_results.append(TestResult.from_dict(json.loads(artifact.content)))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif artifact.type == "user_feedback":
+                try:
+                    from kyrozen.testing.models import UserFeedback
+                    user_feedback.append(UserFeedback.from_dict(json.loads(artifact.content)))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        latest_validation = pm.get_latest_artifact(
+            project_id, "validation_report", title="Validation Report"
+        )
+        validation_report = ValidationReport()
+        if latest_validation is not None:
+            import json
+            try:
+                validation_report = ValidationReport.from_dict(json.loads(latest_validation.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_iteration = pm.get_latest_artifact(
+            project_id, "iteration_plan", title="Iteration Plan"
+        )
+        iteration_plan = {"items": [], "overall_recommendation": ""}
+        if latest_iteration is not None:
+            import json
+            try:
+                iteration_plan = json.loads(latest_iteration.content)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        decisions = [
+            d for d in pm.list_decisions(project_id)
+            if d.decision.startswith("Testing decision:") or d.decision.startswith("Validation decision:")
+        ]
+
+        return {
+            "project_id": project_id,
+            "test_plan": test_plan.to_dict(),
+            "test_results": [r.to_dict() for r in test_results],
+            "user_feedback": [fb.to_dict() for fb in user_feedback],
+            "validation_report": validation_report.to_dict(),
+            "iteration_plan": iteration_plan,
+            "decisions": [d.to_dict() for d in decisions[-5:]],
+            "latest_test_plan_artifact_id": latest_test_plan.id if latest_test_plan else None,
+            "latest_validation_artifact_id": latest_validation.id if latest_validation else None,
+            "latest_iteration_artifact_id": latest_iteration.id if latest_iteration else None,
         }
 
     return app

@@ -263,6 +263,7 @@
         <button onclick="enterPlanning()">进入 Product Planning</button>
         <button onclick="enterDevelopment()">进入 Software Development</button>
         <button onclick="enterHardware()">进入 Hardware Development</button>
+        <button onclick="enterTesting()">进入 Testing & Validation</button>
         <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
         <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
       </div>
@@ -492,6 +493,41 @@
       </div>
     </div>
 
+    <!-- Testing & Validation View -->
+    <div id="view-testing" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="testing-panel" style="flex:1;display:flex;min-width:0;">
+        <div id="testing-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="testing-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
+          <div id="testing-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
+            <div id="testing-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="confirmTestingTask(true)">确认执行</button>
+              <button class="secondary" onclick="confirmTestingTask(false)">拒绝</button>
+            </div>
+          </div>
+          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
+            <textarea id="testing-input" placeholder="输入测试指令，例如：开始测试计划..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTestingMessage()}"></textarea>
+            <button onclick="sendTestingMessage()" id="testing-send-btn">发送</button>
+            <button class="secondary" onclick="leaveTesting()">返回项目</button>
+          </div>
+        </div>
+        <div id="testing-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
+          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Test Plan</h2>
+          <div id="testing-plan" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Test Results</h2>
+          <div id="testing-results" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">User Feedback</h2>
+          <div id="testing-feedback" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Validation Report</h2>
+          <div id="testing-validation" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Iteration Plan</h2>
+          <div id="testing-iteration" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="sidebar">
       <h2>任务状态</h2>
       <div id="task-info">
@@ -572,6 +608,7 @@
         if (parts[2] === 'planning') return { view: 'planning', projectId: parts[1] };
         if (parts[2] === 'development') return { view: 'development', projectId: parts[1] };
         if (parts[2] === 'hardware') return { view: 'hardware', projectId: parts[1] };
+        if (parts[2] === 'testing') return { view: 'testing', projectId: parts[1] };
         return { view: 'detail', projectId: parts[1] };
       }
       return { view: 'list' };
@@ -622,6 +659,12 @@
         document.getElementById('hardware-messages').innerHTML = '';
         addHardwareMessage('system', `已进入 Hardware Development。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 制定硬件方案、BOM、接线、固件和调试流程。`, 'system');
         await loadHardwareState();
+      } else if (routeInfo.view === 'testing') {
+        currentProjectId = routeInfo.projectId;
+        showView('testing');
+        document.getElementById('testing-messages').innerHTML = '';
+        addTestingMessage('system', `已进入 Testing & Validation。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 验证产品是否真正解决了最初的问题，并生成迭代建议。`, 'system');
+        await loadTestingState();
       }
     }
 
@@ -1740,6 +1783,238 @@
         addDevelopmentMessage('system', '确认失败：' + e.message, 'error');
         setStatus('failed', e.message);
         document.getElementById('development-send-btn').disabled = false;
+      }
+    }
+
+    // ---------------- Testing & Validation ----------------
+
+    let testingTaskId = null;
+    let testingPollInterval = null;
+
+    function enterTesting() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}/testing`;
+    }
+
+    function leaveTesting() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}`;
+    }
+
+    function addTestingMessage(role, content, type = role) {
+      const chat = document.getElementById('testing-messages');
+      const div = document.createElement('div');
+      div.className = 'msg ' + type;
+      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
+      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    async function loadTestingState() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/testing/state`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderTestingState(data);
+      } catch (e) {
+        console.error('loadTestingState error', e);
+      }
+    }
+
+    function renderTestingState(data) {
+      const plan = data.test_plan || {};
+      const planEl = document.getElementById('testing-plan');
+      const requirements = plan.requirements || [];
+      const cases = plan.test_cases || [];
+      planEl.innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Name:</span> ${escapeHtml(plan.name || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Objective:</span> ${escapeHtml(plan.objective || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Status:</span> ${escapeHtml(plan.status || 'draft')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Success Criteria:</span> ${escapeHtml(plan.success_criteria || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Environment:</span> ${escapeHtml(plan.environment || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Requirements (${requirements.length}):</span></div>
+        ${requirements.length === 0 ? '<div style="color:#6e7681;">none</div>' : requirements.map(r => `<div style="margin-bottom:4px;color:#c9d1d9;">• ${escapeHtml(r)}</div>`).join('')}
+        <div style="margin-top:8px;margin-bottom:6px;"><span style="color:#8b949e;">Test Cases (${cases.length}):</span></div>
+        ${cases.length === 0 ? '<div style="color:#6e7681;">none</div>' : cases.map(tc =>
+          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+          `<div style="font-weight:600;color:#00f0ff;">${escapeHtml(tc.id || 'TC-?')} · ${escapeHtml(tc.name || 'Unnamed')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">Type: ${escapeHtml(tc.type || '?')} · Priority: ${escapeHtml(tc.priority || '?')} · Status: ${escapeHtml(tc.status || '?')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">Req: ${escapeHtml(tc.related_requirement || 'none')}</div>` +
+          `</div>`
+        ).join('')}
+      `;
+
+      const results = data.test_results || [];
+      const resultsEl = document.getElementById('testing-results');
+      const summary = {};
+      for (const r of results) {
+        summary[r.result] = (summary[r.result] || 0) + 1;
+      }
+      resultsEl.innerHTML = `
+        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Total:</span> ${results.length} · ${Object.entries(summary).map(([k, v]) => `${escapeHtml(k)}: ${v}`).join(' · ') || 'none'}</div>
+        ${results.length === 0 ? '<span style="color:#6e7681;">暂无结果</span>' : results.slice(-5).map(r =>
+          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+          `<div style="font-weight:600;">${escapeHtml(r.test_case_id || '?')} → <span style="color:${r.result === 'passed' ? '#00ff88' : r.result === 'failed' ? '#ff4466' : '#ffaa00'};">${escapeHtml(r.result || '?')}</span></div>` +
+          `<div style="color:#8b949e;font-size:11px;">Actual: ${escapeHtml(r.actual || 'none')}</div>` +
+          (r.errors ? `<div style="color:#ff4466;font-size:11px;">Error: ${escapeHtml(r.errors)}</div>` : '') +
+          `</div>`
+        ).join('')}
+      `;
+
+      const feedback = data.user_feedback || [];
+      const feedbackEl = document.getElementById('testing-feedback');
+      feedbackEl.innerHTML = feedback.length === 0 ? '<span style="color:#6e7681;">暂无反馈</span>' : feedback.slice(-5).map(fb =>
+        `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+        `<div style="font-weight:600;color:#00f0ff;">${escapeHtml(fb.source_type || '?')} · <span style="color:${fb.sentiment === 'positive' ? '#00ff88' : fb.sentiment === 'negative' ? '#ff4466' : '#ffaa00'};">${escapeHtml(fb.sentiment || '?')}</span></div>` +
+        `<div style="color:#c9d1d9;">${escapeHtml(fb.content || '')}</div>` +
+        (fb.problems && fb.problems.length ? `<div style="color:#ffaa00;font-size:11px;">Problems: ${fb.problems.map(p => escapeHtml(p)).join(', ')}</div>` : '') +
+        `</div>`
+      ).join('');
+
+      const report = data.validation_report || {};
+      document.getElementById('testing-validation').innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Conclusion:</span> <span style="color:${report.conclusion === 'pass' ? '#00ff88' : report.conclusion === 'fail' ? '#ff4466' : report.conclusion === 'partial' ? '#ffaa00' : '#8b949e'};font-weight:600;">${escapeHtml(report.conclusion || 'none')}</span></div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Original Problem:</span> ${escapeHtml(report.original_problem || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Tested Solution:</span> ${escapeHtml(report.tested_solution || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Success Metrics:</span> ${escapeHtml(report.success_metrics || 'none')}</div>
+        <div><span style="color:#8b949e;">Feedback Count:</span> ${(report.user_feedback || []).length}</div>
+      `;
+
+      const iteration = data.iteration_plan || {};
+      const items = iteration.items || [];
+      document.getElementById('testing-iteration').innerHTML = `
+        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Recommendation:</span> ${escapeHtml(iteration.overall_recommendation || 'none')}</div>
+        ${items.length === 0 ? '<span style="color:#6e7681;">暂无迭代建议</span>' : items.map(item =>
+          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+          `<div style="font-weight:600;color:#00f0ff;">${escapeHtml(item.category || '?')} · ${escapeHtml(item.target || 'Unnamed')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">${escapeHtml(item.reason || '')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">Priority: ${escapeHtml(item.priority || 'medium')}</div>` +
+          `</div>`
+        ).join('')}
+      `;
+    }
+
+    function renderTestingConfirmDetail(step) {
+      const detailEl = document.getElementById('testing-confirm-detail');
+      if (!step || !step.metadata || !step.metadata.tool) {
+        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
+        return;
+      }
+      const { tool, action, parameters } = step.metadata;
+      let paramsText = '';
+      if (parameters && Object.keys(parameters).length > 0) {
+        paramsText = '\n参数：\n' + Object.entries(parameters)
+          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join('\n');
+      }
+      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
+    }
+
+    async function sendTestingMessage() {
+      const input = document.getElementById('testing-input');
+      const btn = document.getElementById('testing-send-btn');
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      input.value = '';
+      btn.disabled = true;
+      setStatus('thinking');
+      document.getElementById('testing-confirm-box').classList.remove('active');
+      addTestingMessage('user', msg);
+      addTestingMessage('system', '已创建 testing & validation 任务，等待 Kyrozen 处理...', 'system');
+
+      testingTaskId = null;
+      clearInterval(testingPollInterval);
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'testing' })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+        testingTaskId = data.task_id;
+        pollTestingTask();
+        testingPollInterval = setInterval(pollTestingTask, 1000);
+      } catch (e) {
+        addTestingMessage('system', '错误：' + e.message, 'error');
+        setStatus('failed', e.message);
+        btn.disabled = false;
+      }
+    }
+
+    async function pollTestingTask() {
+      if (!testingTaskId) return;
+      try {
+        const res = await fetch(`/api/tasks/${testingTaskId}`);
+        if (!res.ok) return;
+        const task = await res.json();
+
+        if (task.status === 'waiting_confirmation') {
+          clearInterval(testingPollInterval);
+          setStatus('waiting');
+          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
+          renderTestingConfirmDetail(pending);
+          document.getElementById('testing-confirm-box').classList.add('active');
+          document.getElementById('testing-send-btn').disabled = false;
+          return;
+        }
+
+        if (task.status === 'completed' || task.status === 'failed') {
+          clearInterval(testingPollInterval);
+          if (task.status === 'completed') {
+            setStatus('completed');
+            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
+            addTestingMessage('assistant', answer);
+          } else {
+            setStatus('failed', task.errors.join('; '));
+            addTestingMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
+          }
+          document.getElementById('testing-send-btn').disabled = false;
+          await loadTestingState();
+        } else {
+          const runningStep = task.steps.find(s => s.status === 'running');
+          if (runningStep) {
+            setStatus('calling', runningStep.description);
+          } else {
+            setStatus('thinking');
+          }
+        }
+      } catch (e) {
+        console.error('poll testing error', e);
+      }
+    }
+
+    async function confirmTestingTask(confirm) {
+      if (!testingTaskId) return;
+      document.getElementById('testing-confirm-box').classList.remove('active');
+      setStatus('thinking');
+      document.getElementById('testing-send-btn').disabled = true;
+      try {
+        const res = await fetch(`/api/tasks/${testingTaskId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: confirm })
+        });
+        if (!res.ok) throw new Error('确认请求失败');
+        const task = await res.json();
+        if (task.status === 'waiting_confirmation') {
+          setStatus('waiting');
+          document.getElementById('testing-confirm-box').classList.add('active');
+          return;
+        }
+        testingPollInterval = setInterval(pollTestingTask, 1000);
+        pollTestingTask();
+      } catch (e) {
+        addTestingMessage('system', '确认失败：' + e.message, 'error');
+        setStatus('failed', e.message);
+        document.getElementById('testing-send-btn').disabled = false;
       }
     }
 

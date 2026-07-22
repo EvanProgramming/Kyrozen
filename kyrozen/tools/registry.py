@@ -88,6 +88,16 @@ def get_default_registry(
         SaveResearchSourceTool,
         WebSearchTool,
     )
+    from .testing_tools import (
+        RecordUserFeedbackTool,
+        RunHardwareTestTool,
+        RunSoftwareTestTool,
+        SaveIterationPlanTool,
+        SaveTestCaseTool,
+        SaveTestPlanTool,
+        SaveTestResultTool,
+        SaveValidationReportTool,
+    )
 
     registry = ToolRegistry()
     registry.register(FileReadTool())
@@ -127,4 +137,12 @@ def get_default_registry(
     registry.register(SaveAssemblyStepTool(project_manager))
     registry.register(SaveDebugRecordTool(project_manager))
     registry.register(HardwareBridgeTool(project_manager))
+    registry.register(SaveTestPlanTool(project_manager))
+    registry.register(SaveTestCaseTool(project_manager))
+    registry.register(SaveTestResultTool(project_manager))
+    registry.register(RecordUserFeedbackTool(project_manager))
+    registry.register(SaveValidationReportTool(project_manager))
+    registry.register(SaveIterationPlanTool(project_manager))
+    registry.register(RunSoftwareTestTool(project_manager))
+    registry.register(RunHardwareTestTool(project_manager))
     return registry

@@ -12,6 +12,7 @@ from kyrozen.hardware.models import BOM, FirmwareProject, HardwareArchitecture, 
 from kyrozen.memory.interface import MemoryInterface
 from kyrozen.planning.models import PRD, ProductBrief
 from kyrozen.research.models import MarketResearchReport
+from kyrozen.learning.models import FailureKnowledge, LearningRecord, SuccessKnowledge, Suggestion
 from kyrozen.testing.models import TestPlan, ValidationReport
 
 from .manager import ProjectManager
@@ -784,6 +785,113 @@ class ProjectContextBuilder:
             lines.append("\n[Recent Testing Notes]")
             for mem in memories:
                 lines.append(f"- {mem.content}")
+
+        lines.append("\n[User Message]")
+        return "\n".join(lines)
+
+    def build_learning_context(
+        self,
+        project: Project,
+        memory: MemoryInterface | None = None,
+        max_learning_records: int = 10,
+        max_suggestions: int = 10,
+    ) -> str:
+        """Build context for Learning & Proactive Improvement mode."""
+        memory_backend = memory or self.memory
+        lines = ["[Learning & Proactive Improvement Context]"]
+        lines.append(f"Project ID: {project.id}")
+        lines.append(f"Project: {project.name}")
+        if project.description:
+            lines.append(f"Initial Idea: {project.description}")
+        lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(
+            "Your role: Extract reusable knowledge from project history and proactively "
+            "suggest improvements. Do NOT modify code, BOM, PRD, or hardware without "
+            "explicit user confirmation. Default learning scope is private.\n"
+        )
+
+        # Load project artifacts relevant to learning
+        artifact_types = [
+            "problem_brief",
+            "market_research_report",
+            "product_brief",
+            "prd",
+            "test_plan",
+            "test_result",
+            "user_feedback",
+            "validation_report",
+            "iteration_plan",
+            "hardware_debug_record",
+        ]
+        lines.append("[Available Project Artifacts]")
+        counts: dict[str, int] = {}
+        for artifact in self.project_manager.list_artifacts(project.id):
+            counts[artifact.type] = counts.get(artifact.type, 0) + 1
+        for atype in artifact_types:
+            count = counts.get(atype, 0)
+            if count > 0:
+                lines.append(f"  - {atype}: {count}")
+        if not any(counts.get(t, 0) > 0 for t in artifact_types):
+            lines.append("  (none)")
+
+        # Recent decisions
+        decisions = self.project_manager.list_decisions(project.id)[-5:]
+        if decisions:
+            lines.append("\n[Recent Decisions]")
+            for d in decisions:
+                lines.append(f"  - {d.decision}: {d.reason}")
+
+        # Learning records scoped to this project or user-level
+        learning_records = memory_backend.query(
+            category="learning",
+            limit=max_learning_records,
+        )
+        project_records = [r for r in learning_records if r.metadata.get("source_project_id") == project.id]
+        user_records = [r for r in learning_records if r.metadata.get("scope") == "user"]
+
+        if project_records:
+            lines.append("\n[Learning Records from This Project]")
+            for record in project_records:
+                try:
+                    data = json.loads(record.content)
+                    lines.append(
+                        f"  - [{record.metadata.get('memory_type', '?')}] "
+                        f"{data.get('memory') or data.get('problem') or data.get('goal', '')} "
+                        f"(confidence: {record.metadata.get('confidence', '?')}, "
+                        f"verified: {record.metadata.get('verification_status', '?')})"
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    lines.append(f"  - {record.content[:120]}")
+
+        if user_records:
+            lines.append("\n[User-Level Learning Records Available for Reuse]")
+            for record in user_records[:5]:
+                try:
+                    data = json.loads(record.content)
+                    lines.append(
+                        f"  - [{record.metadata.get('memory_type', '?')}] "
+                        f"{data.get('memory') or data.get('problem') or data.get('goal', '')}"
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    lines.append(f"  - {record.content[:120]}")
+
+        # Existing suggestions for this project
+        suggestions = memory_backend.query(
+            category="suggestion",
+            limit=max_suggestions,
+            source_project_id=project.id,
+        )
+        if suggestions:
+            lines.append("\n[Existing Suggestions]")
+            for sug in suggestions:
+                try:
+                    data = json.loads(sug.content)
+                    lines.append(
+                        f"  - [{data.get('status', '?')}] {data.get('suggestion', '')} "
+                        f"(priority: {data.get('priority', '?')}, category: {data.get('category', '?')})"
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    lines.append(f"  - {sug.content[:120]}")
 
         lines.append("\n[User Message]")
         return "\n".join(lines)

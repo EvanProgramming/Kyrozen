@@ -24,6 +24,7 @@ from kyrozen.planning.agent import ProductPlanningAgent
 from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager
 from kyrozen.research.agent import MarketResearchAgent
 from kyrozen.testing.agent import TestingAgent
+from kyrozen.learning.agent import LearningAgent
 from kyrozen.tools import get_default_registry
 
 
@@ -35,10 +36,12 @@ _planning_agent: ProductPlanningAgent | None = None
 _development_agent: SoftwareDevelopmentAgent | None = None
 _hardware_agent: HardwareDevelopmentAgent | None = None
 _testing_agent: TestingAgent | None = None
+_learning_agent: LearningAgent | None = None
 _config: KyrozenConfig | None = None
 _db: KyrozenDatabase | None = None
 _project_manager: ProjectManager | None = None
 _context_builder: ProjectContextBuilder | None = None
+_learning_memory: JsonFileMemory | None = None
 
 
 def _get_discovery_agent() -> ProblemDiscoveryAgent:
@@ -77,11 +80,17 @@ def _get_testing_agent() -> TestingAgent:
     return _testing_agent
 
 
+def _get_learning_agent() -> LearningAgent:
+    if _learning_agent is None:
+        raise RuntimeError("Learning agent not initialized")
+    return _learning_agent
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     project_id: str | None = Field(None, description="Project ID to associate with this chat")
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
-    mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, development, hardware, or testing")
+    mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, development, hardware, testing, or learning")
 
 
 class ConfirmRequest(BaseModel):
@@ -154,7 +163,7 @@ def _project_memory(project_id: str) -> ProjectMemory:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _testing_agent, _config, _db, _project_manager, _context_builder
+        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _testing_agent, _learning_agent, _config, _db, _project_manager, _context_builder, _learning_memory
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -170,9 +179,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         _db = KyrozenDatabase(_config.db_path)
         _project_manager = ProjectManager(_db)
         _context_builder = ProjectContextBuilder(_project_manager, InMemoryMemory())
+        os.makedirs(_config.workspace_root, exist_ok=True)
+        _learning_memory = JsonFileMemory(os.path.join(_config.workspace_root, "learning_memory.json"))
 
         tools = get_default_registry(
             _project_manager,
+            memory=_learning_memory,
             tavily_api_key=_config.tavily_api_key,
             serper_api_key=_config.serper_api_key,
             github_token=_config.github_token,
@@ -241,6 +253,16 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             logger=logger,
             project_manager=_project_manager,
         )
+        global _learning_agent
+        _learning_agent = LearningAgent(
+            config=_config,
+            model=active_model,
+            tools=tools,
+            task_manager=task_manager,
+            logger=logger,
+            project_manager=_project_manager,
+            memory=_learning_memory,
+        )
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
@@ -271,6 +293,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             agent = _get_hardware_agent()
         elif request.mode == "testing":
             agent = _get_testing_agent()
+        elif request.mode == "learning":
+            agent = _get_learning_agent()
         else:
             agent = _get_agent()
         if agent.model is None:
@@ -297,11 +321,16 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 context = builder.build_hardware_context(project)
             elif request.mode == "testing":
                 context = builder.build_testing_context(project)
+            elif request.mode == "learning":
+                context = builder.build_learning_context(project)
             else:
                 context = builder.build(project)
             user_input = f"{context}\n{request.message}"
             # Ensure the agent uses the project's memory for this task
-            agent.memory = _project_memory(request.project_id)
+            if request.mode == "learning":
+                agent.memory = _learning_memory
+            else:
+                agent.memory = _project_memory(request.project_id)
         else:
             # Use a global in-memory fallback if no project
             from kyrozen.memory import InMemoryMemory
@@ -897,6 +926,65 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "latest_test_plan_artifact_id": latest_test_plan.id if latest_test_plan else None,
             "latest_validation_artifact_id": latest_validation.id if latest_validation else None,
             "latest_iteration_artifact_id": latest_iteration.id if latest_iteration else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Learning & Proactive Improvement
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/learning/state")
+    async def api_learning_state(project_id: str):
+        pm = _get_project_manager()
+        if pm.get(project_id) is None:
+            raise HTTPException(404, "Project not found")
+
+        memory = _learning_memory
+        learning_records = []
+        failure_knowledge = []
+        success_knowledge = []
+        if memory is not None:
+            for record in memory.query(category="learning", limit=100):
+                try:
+                    data = json.loads(record.content)
+                    memory_type = record.metadata.get("memory_type", "")
+                    if memory_type == "validated_failure":
+                        from kyrozen.learning.models import FailureKnowledge
+                        failure_knowledge.append(FailureKnowledge.from_dict(data).to_dict())
+                    elif memory_type == "validated_success":
+                        from kyrozen.learning.models import SuccessKnowledge
+                        success_knowledge.append(SuccessKnowledge.from_dict(data).to_dict())
+                    else:
+                        from kyrozen.learning.models import LearningRecord
+                        learning_records.append(LearningRecord.from_dict(data).to_dict())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        return {
+            "project_id": project_id,
+            "learning_records": learning_records,
+            "failure_knowledge": failure_knowledge,
+            "success_knowledge": success_knowledge,
+        }
+
+    @app.get("/api/projects/{project_id}/improvement/state")
+    async def api_improvement_state(project_id: str):
+        pm = _get_project_manager()
+        if pm.get(project_id) is None:
+            raise HTTPException(404, "Project not found")
+
+        memory = _learning_memory
+        suggestions = []
+        if memory is not None:
+            for record in memory.query(category="suggestion", limit=100, source_project_id=project_id):
+                try:
+                    data = json.loads(record.content)
+                    from kyrozen.learning.models import Suggestion
+                    suggestions.append(Suggestion.from_dict(data).to_dict())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        return {
+            "project_id": project_id,
+            "suggestions": suggestions,
         }
 
     return app

@@ -19,12 +19,14 @@ from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
 from kyrozen.models import ModelInterface, get_model_provider
 from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager
+from kyrozen.research.agent import MarketResearchAgent
 from kyrozen.tools import get_default_registry
 
 
 # Global state managed via lifespan
 _agent: BaseAgent | None = None
 _discovery_agent: ProblemDiscoveryAgent | None = None
+_research_agent: MarketResearchAgent | None = None
 _config: KyrozenConfig | None = None
 _db: KyrozenDatabase | None = None
 _project_manager: ProjectManager | None = None
@@ -37,11 +39,17 @@ def _get_discovery_agent() -> ProblemDiscoveryAgent:
     return _discovery_agent
 
 
+def _get_research_agent() -> MarketResearchAgent:
+    if _research_agent is None:
+        raise RuntimeError("Research agent not initialized")
+    return _research_agent
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     project_id: str | None = Field(None, description="Project ID to associate with this chat")
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
-    mode: str = Field("default", description="Chat mode: default or discovery")
+    mode: str = Field("default", description="Chat mode: default, discovery, or market_research")
 
 
 class ConfirmRequest(BaseModel):
@@ -114,7 +122,7 @@ def _project_memory(project_id: str) -> ProjectMemory:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _discovery_agent, _config, _db, _project_manager, _context_builder
+        global _agent, _discovery_agent, _research_agent, _config, _db, _project_manager, _context_builder
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -131,7 +139,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         _project_manager = ProjectManager(_db)
         _context_builder = ProjectContextBuilder(_project_manager, InMemoryMemory())
 
-        tools = get_default_registry(_project_manager)
+        tools = get_default_registry(
+            _project_manager,
+            tavily_api_key=_config.tavily_api_key,
+            serper_api_key=_config.serper_api_key,
+            github_token=_config.github_token,
+            semantic_scholar_api_key=_config.semantic_scholar_api_key,
+        )
         task_manager = TaskManager(db=_db)
         global _agent
         _agent = BaseAgent(
@@ -143,6 +157,15 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         )
         global _discovery_agent
         _discovery_agent = ProblemDiscoveryAgent(
+            config=_config,
+            model=active_model,
+            tools=tools,
+            task_manager=task_manager,
+            logger=logger,
+            project_manager=_project_manager,
+        )
+        global _research_agent
+        _research_agent = MarketResearchAgent(
             config=_config,
             model=active_model,
             tools=tools,
@@ -168,8 +191,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # ------------------------------------------------------------------
     @app.post("/api/chat")
     async def api_chat(request: ChatRequest):
-        is_discovery = request.mode == "discovery"
-        agent = _get_discovery_agent() if is_discovery else _get_agent()
+        if request.mode == "discovery":
+            agent = _get_discovery_agent()
+        elif request.mode == "market_research":
+            agent = _get_research_agent()
+        else:
+            agent = _get_agent()
         if agent.model is None:
             raise HTTPException(503, "Model provider not configured. Set DEEPSEEK_API_KEY or KYROZEN_API_KEY.")
 
@@ -182,8 +209,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             builder = _get_context_builder()
             # Swap the context builder's memory backend to the project's memory file
             builder.memory = _project_memory(request.project_id)
-            if is_discovery:
+            if request.mode == "discovery":
                 context = builder.build_discovery_context(project)
+            elif request.mode == "market_research":
+                context = builder.build_research_context(project)
             else:
                 context = builder.build(project)
             user_input = f"{context}\n{request.message}"
@@ -417,6 +446,40 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "brief": brief.to_dict(),
             "state_summary": summary,
             "latest_artifact_id": latest.id if latest else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Market Research
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/market-research/state")
+    async def api_market_research_state(project_id: str):
+        pm = _get_project_manager()
+        if pm.get(project_id) is None:
+            raise HTTPException(404, "Project not found")
+        from kyrozen.research.models import MarketResearchReport
+
+        latest_report = pm.get_latest_artifact(
+            project_id, "market_research_report", title="Market Research Report"
+        )
+        report = MarketResearchReport()
+        if latest_report is not None:
+            import json
+            try:
+                report = MarketResearchReport.from_dict(json.loads(latest_report.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        sources = pm.list_artifacts(project_id)
+        research_sources = [a for a in sources if a.type == "research_source"]
+        decisions = [d for d in pm.list_decisions(project_id) if d.decision.startswith("Opportunity decision:")]
+
+        return {
+            "project_id": project_id,
+            "report": report.to_dict(),
+            "source_count": len(research_sources),
+            "sources": [a.to_dict() for a in research_sources[-10:]],
+            "decisions": [d.to_dict() for d in decisions[-5:]],
+            "latest_report_artifact_id": latest_report.id if latest_report else None,
         }
 
     return app

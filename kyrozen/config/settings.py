@@ -58,6 +58,11 @@ class KyrozenConfig:
     db_path: str = ""
     projects_dir: str = ""
     config_path: str = field(default="~/.kyrozen_config.json", repr=False)
+    # Phase 4 research provider API keys
+    tavily_api_key: str = ""
+    serper_api_key: str = ""
+    github_token: str = ""
+    semantic_scholar_api_key: str = ""
 
     def __post_init__(self) -> None:
         if not self.model_simple:
@@ -157,4 +162,9 @@ def get_config(
         db_path=os.environ.get("KYROZEN_DB_PATH", "") or file_data.get("db_path", ""),
         projects_dir=os.environ.get("KYROZEN_PROJECTS_DIR", "") or file_data.get("projects_dir", ""),
         config_path=config_path,
+        tavily_api_key=os.environ.get("TAVILY_API_KEY", "") or file_data.get("tavily_api_key", ""),
+        serper_api_key=os.environ.get("SERPER_API_KEY", "") or file_data.get("serper_api_key", ""),
+        github_token=os.environ.get("GITHUB_TOKEN", "") or file_data.get("github_token", ""),
+        semantic_scholar_api_key=os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+        or file_data.get("semantic_scholar_api_key", ""),
     )

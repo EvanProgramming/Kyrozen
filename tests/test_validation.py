@@ -17,7 +17,7 @@ from kyrozen.project import KyrozenDatabase, ProjectManager
 from kyrozen.tools.file_tools import FileReadTool
 from kyrozen.tools.terminal_tools import TerminalTool
 
-from tests.conftest import MockModel
+from tests.conftest import MockModel, make_authenticated_app
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def validation_client(temp_dir: str):
         log_level="ERROR",
         task_store_path=os.path.join(temp_dir, "tasks.json"),
     )
-    app = create_app(config=config, model=MockModel(["OK"]))
+    app = make_authenticated_app(config, MockModel(["OK"]))
     with TestClient(app) as client:
         yield client
 
@@ -151,7 +151,7 @@ def test_sec_high_risk_confirmation(temp_dir: str):
         log_level="ERROR",
         task_store_path=os.path.join(temp_dir, "tasks.json"),
     )
-    app = create_app(config=config, model=MockModel([
+    app = make_authenticated_app(config, MockModel([
         '{"tool": "terminal", "action": "execute", "parameters": {"command": "echo hi"}}'
     ]))
     with TestClient(app) as client:

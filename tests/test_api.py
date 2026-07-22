@@ -10,9 +10,12 @@ from kyrozen.api.server import create_app
 from .conftest import MockModel
 
 
+from tests.conftest import make_authenticated_app
+
+
 @pytest.fixture
 def client(test_config):
-    app = create_app(config=test_config, model=MockModel())
+    app = make_authenticated_app(test_config, MockModel())
     with TestClient(app) as c:
         yield c
 
@@ -62,7 +65,7 @@ def test_execute_tool(client):
 
 def test_chat_direct_answer(client, test_config):
     test_config.permission_mode = "permissive"
-    app = create_app(config=test_config, model=MockModel(["Final answer from API."]))
+    app = make_authenticated_app(test_config, MockModel(["Final answer from API."]))
     with TestClient(app) as c:
         response = c.post("/api/chat", json={"message": "Hello"})
         assert response.status_code == 200
@@ -79,7 +82,7 @@ def test_chat_direct_answer(client, test_config):
 def test_chat_waiting_confirmation(client, test_config):
     test_config.permission_mode = "strict"
     tool_call = '{"tool": "file_write", "action": "write", "parameters": {"path": "x.txt", "content": "x"}}'
-    app = create_app(config=test_config, model=MockModel([tool_call, "File written."]))
+    app = make_authenticated_app(test_config, MockModel([tool_call, "File written."]))
     with TestClient(app) as c:
         response = c.post("/api/chat", json={"message": "Write file"})
         assert response.status_code == 200
@@ -96,7 +99,7 @@ def test_chat_waiting_confirmation(client, test_config):
 def test_confirm_decline(client, test_config):
     test_config.permission_mode = "strict"
     tool_call = '{"tool": "file_write", "action": "write", "parameters": {"path": "x.txt", "content": "x"}}'
-    app = create_app(config=test_config, model=MockModel([tool_call]))
+    app = make_authenticated_app(test_config, MockModel([tool_call]))
     with TestClient(app) as c:
         response = c.post("/api/chat", json={"message": "Write file"})
         task_id = response.json()["task_id"]

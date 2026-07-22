@@ -40,7 +40,7 @@ TestCase.__test__ = False
 TestResult.__test__ = False
 TestPlan.__test__ = False
 
-from tests.conftest import MockModel
+from tests.conftest import MockModel, make_authenticated_app
 
 
 @pytest.fixture
@@ -502,7 +502,7 @@ def api_client(temp_dir: str):
         log_level="ERROR",
         task_store_path=os.path.join(temp_dir, "tasks.json"),
     )
-    app = create_app(config=config, model=MockModel(["Done"]))
+    app = make_authenticated_app(config, MockModel(["Done"]))
     with TestClient(app) as client:
         yield client
 

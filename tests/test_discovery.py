@@ -15,7 +15,7 @@ from kyrozen.discovery.evidence import Evidence, assess_confidence
 from kyrozen.discovery.question_engine import QuestionEngine
 from kyrozen.project import KyrozenDatabase, ProjectManager
 
-from tests.conftest import MockModel
+from tests.conftest import MockModel, make_authenticated_app
 
 
 def test_problem_brief_merge():
@@ -86,7 +86,7 @@ def api_client(temp_dir: str):
         task_store_path=os.path.join(temp_dir, "tasks.json"),
     )
     # Model responds with plain text to avoid tool calls in basic tests
-    app = create_app(config=config, model=MockModel(["Tell me more about who faces this problem."]))
+    app = make_authenticated_app(config, MockModel(["Tell me more about who faces this problem."]))
     with TestClient(app) as client:
         yield client
 

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from kyrozen.discovery.brief import ProblemBrief
 from kyrozen.memory.interface import MemoryInterface
-from kyrozen.planning.models import ProductBrief
+from kyrozen.planning.models import PRD, ProductBrief
 from kyrozen.research.models import MarketResearchReport
 
 from .manager import ProjectManager
@@ -316,6 +317,131 @@ class ProjectContextBuilder:
         )
         if memories:
             lines.append("\n[Recent Planning Notes]")
+            for mem in memories:
+                lines.append(f"- {mem.content}")
+
+        lines.append("\n[User Message]")
+        return "\n".join(lines)
+
+    def _summarize_software_dir(self, project: Project, max_files: int = 20) -> str:
+        """Return a short summary of the existing software project directory."""
+        if self.project_manager is None:
+            return ""
+        software_dir = os.path.join(
+            os.path.dirname(self.project_manager.db.db_path),
+            "projects",
+            project.id,
+            "software",
+        )
+        if not os.path.isdir(software_dir):
+            return ""
+        try:
+            entries = []
+            for root, _dirs, files in os.walk(software_dir):
+                for f in files:
+                    rel = os.path.relpath(os.path.join(root, f), software_dir)
+                    if ".git/" not in rel and not rel.startswith(".git/"):
+                        entries.append(rel)
+                        if len(entries) >= max_files:
+                            break
+                if len(entries) >= max_files:
+                    break
+            if not entries:
+                return ""
+            return "\n".join([f"  - {e}" for e in entries])
+        except OSError:
+            return ""
+
+    def build_development_context(
+        self,
+        project: Project,
+        memory: MemoryInterface | None = None,
+        max_memories: int = 10,
+    ) -> str:
+        """Build context for Software Development mode."""
+        memory_backend = memory or self.memory
+        lines = ["[Software Development Context]"]
+        lines.append(f"Project ID: {project.id}")
+        lines.append(f"Project: {project.name}")
+        if project.description:
+            lines.append(f"Initial Idea: {project.description}")
+        lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(
+            "Your role: Turn the approved PRD into a runnable software prototype. "
+            "Do not change product requirements, do not add out-of-scope features, "
+            "and do not design hardware.\n"
+        )
+
+        # Load Product Brief
+        latest_brief = self.project_manager.get_latest_artifact(
+            project.id, "product_brief", title="Product Brief"
+        )
+        brief = ProductBrief()
+        if latest_brief is not None:
+            try:
+                brief = ProductBrief.from_dict(json.loads(latest_brief.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        lines.append("[Product Brief]")
+        lines.append(f"  product_goal: {brief.product_goal.product_goal or '(not set)'}")
+        lines.append(f"  target_user: {brief.target_user.primary_user or '(not set)'}")
+        lines.append(f"  value_proposition: {brief.product_goal.value_proposition or '(not set)'}")
+        lines.append(f"  mvp_features: {', '.join(brief.mvp_scope.mvp_features) or 'none'}")
+
+        # Load PRD
+        latest_prd = self.project_manager.get_latest_artifact(
+            project.id, "prd", title="Product Requirements Document"
+        )
+        prd = PRD()
+        if latest_prd is not None:
+            try:
+                prd = PRD.from_dict(json.loads(latest_prd.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        lines.append("\n[PRD]")
+        lines.append(f"  overview: {prd.overview or '(not set)'}")
+        lines.append("  functional_requirements:")
+        for req in prd.functional_requirements:
+            lines.append(f"    - {req}")
+        if not prd.functional_requirements:
+            lines.append("    none")
+        lines.append("  mvp_features:")
+        for feat in prd.mvp_scope.mvp_features:
+            lines.append(f"    - {feat}")
+        if not prd.mvp_scope.mvp_features:
+            lines.append("    none")
+        lines.append("  out_of_scope:")
+        for item in prd.out_of_scope:
+            lines.append(f"    - {item}")
+        if not prd.out_of_scope:
+            lines.append("    none")
+
+        # Load product decisions
+        decisions = [
+            d for d in self.project_manager.list_decisions(project.id)
+            if d.decision.startswith("Product decision: ")
+        ]
+        if decisions:
+            lines.append("\n[Approved Product Decisions]")
+            for d in decisions[-5:]:
+                lines.append(f"  - {d.decision}: {d.reason}")
+
+        # Existing code summary
+        code_summary = self._summarize_software_dir(project)
+        if code_summary:
+            lines.append("\n[Existing Software Project Files]")
+            lines.append(code_summary)
+
+        # Load recent development memories
+        memories = memory_backend.query(
+            category="development",
+            limit=max_memories,
+            project_id=project.id,
+        )
+        if memories:
+            lines.append("\n[Recent Development Notes]")
             for mem in memories:
                 lines.append(f"- {mem.content}")
 

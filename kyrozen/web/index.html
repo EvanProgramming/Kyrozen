@@ -261,6 +261,7 @@
         <button onclick="enterDiscovery()">进入 Problem Discovery</button>
         <button onclick="enterMarketResearch()">进入 Market Research</button>
         <button onclick="enterPlanning()">进入 Product Planning</button>
+        <button onclick="enterDevelopment()">进入 Software Development</button>
         <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
         <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
       </div>
@@ -412,6 +413,41 @@
           <div id="planning-solutions" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
           <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Recommendation</h2>
           <div id="planning-recommendation" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Software Development View -->
+    <div id="view-development" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="development-panel" style="flex:1;display:flex;min-width:0;">
+        <div id="development-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="development-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
+          <div id="development-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
+            <div id="development-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="confirmDevelopmentTask(true)">确认执行</button>
+              <button class="secondary" onclick="confirmDevelopmentTask(false)">拒绝</button>
+            </div>
+          </div>
+          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
+            <textarea id="development-input" placeholder="输入开发指令，例如：开始开发..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDevelopmentMessage()}"></textarea>
+            <button onclick="sendDevelopmentMessage()" id="development-send-btn">发送</button>
+            <button class="secondary" onclick="leaveDevelopment()">返回项目</button>
+          </div>
+        </div>
+        <div id="development-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
+          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Technical Plan</h2>
+          <div id="development-plan" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Feature Records</h2>
+          <div id="development-features" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Test Report</h2>
+          <div id="development-tests" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Deployment</h2>
+          <div id="development-deployment" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Git Log</h2>
+          <div id="development-git" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
         </div>
       </div>
     </div>
@@ -1439,6 +1475,217 @@
         addPlanningMessage('system', '确认失败：' + e.message, 'error');
         setStatus('failed', e.message);
         document.getElementById('planning-send-btn').disabled = false;
+      }
+    }
+
+    // ---------------- Software Development ----------------
+
+    let developmentTaskId = null;
+    let developmentPollInterval = null;
+
+    function enterDevelopment() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}/development`;
+    }
+
+    function leaveDevelopment() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}`;
+    }
+
+    function addDevelopmentMessage(role, content, type = role) {
+      const chat = document.getElementById('development-messages');
+      const div = document.createElement('div');
+      div.className = 'msg ' + type;
+      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
+      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    async function loadDevelopmentState() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/development/state`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderDevelopmentState(data);
+      } catch (e) {
+        console.error('loadDevelopmentState error', e);
+      }
+    }
+
+    function renderDevelopmentState(data) {
+      const plan = data.technical_plan || {};
+      document.getElementById('development-plan').innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Type:</span> ${escapeHtml(plan.application_type || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Architecture:</span> ${escapeHtml(plan.architecture || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Frontend:</span> ${escapeHtml(plan.frontend || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Backend:</span> ${escapeHtml(plan.backend || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Database:</span> ${escapeHtml(plan.database || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Deployment:</span> ${escapeHtml(plan.deployment || 'none')}</div>
+        <div><span style="color:#8b949e;">Dependencies:</span> ${escapeHtml((plan.dependencies || []).join(', ') || 'none')}</div>
+      `;
+
+      const features = data.feature_records || [];
+      const featuresEl = document.getElementById('development-features');
+      if (features.length === 0) {
+        featuresEl.innerHTML = '<span style="color:#6e7681;">暂无</span>';
+      } else {
+        featuresEl.innerHTML = features.map(r =>
+          `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+          `<div style="font-weight:600;margin-bottom:4px;color:#00f0ff;">${escapeHtml(r.prd_feature || 'Unnamed')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">Status: ${escapeHtml(r.status || 'pending')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">Files: ${(r.files || []).map(f => escapeHtml(f)).join(', ') || 'none'}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">Tests: ${(r.tests || []).map(t => escapeHtml(t)).join(', ') || 'none'}</div>` +
+          `</div>`
+        ).join('');
+      }
+
+      const report = data.test_report || {};
+      document.getElementById('development-tests').innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Total:</span> ${report.total || 0}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Passed:</span> <span style="color:#00ff88;">${report.passed || 0}</span></div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Failed:</span> <span style="color:#ff4466;">${report.failed || 0}</span></div>
+        <div><span style="color:#8b949e;">Skipped:</span> ${report.skipped || 0}</div>
+      `;
+
+      const guide = data.deployment_guide || {};
+      document.getElementById('development-deployment').innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Run:</span></div>
+        <pre style="background:#0d1117;padding:8px;border-radius:4px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(guide.run_instructions || 'none')}</pre>
+        <div style="margin-top:8px;margin-bottom:6px;"><span style="color:#8b949e;">Deploy:</span></div>
+        <pre style="background:#0d1117;padding:8px;border-radius:4px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(guide.deployment_instructions || 'none')}</pre>
+      `;
+
+      const gitLog = data.git_log || [];
+      const gitEl = document.getElementById('development-git');
+      if (gitLog.length === 0) {
+        gitEl.innerHTML = '<span style="color:#6e7681;">暂无提交</span>';
+      } else {
+        gitEl.innerHTML = gitLog.map(line => `<div style="margin-bottom:4px;font-family:monospace;">${escapeHtml(line)}</div>`).join('');
+      }
+    }
+
+    function renderDevelopmentConfirmDetail(step) {
+      const detailEl = document.getElementById('development-confirm-detail');
+      if (!step || !step.metadata || !step.metadata.tool) {
+        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
+        return;
+      }
+      const { tool, action, parameters } = step.metadata;
+      let paramsText = '';
+      if (parameters && Object.keys(parameters).length > 0) {
+        paramsText = '\n参数：\n' + Object.entries(parameters)
+          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join('\n');
+      }
+      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
+    }
+
+    async function sendDevelopmentMessage() {
+      const input = document.getElementById('development-input');
+      const btn = document.getElementById('development-send-btn');
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      input.value = '';
+      btn.disabled = true;
+      setStatus('thinking');
+      document.getElementById('development-confirm-box').classList.remove('active');
+      addDevelopmentMessage('user', msg);
+      addDevelopmentMessage('system', '已创建 software development 任务，等待 Kyrozen 处理...', 'system');
+
+      developmentTaskId = null;
+      clearInterval(developmentPollInterval);
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'development' })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+        developmentTaskId = data.task_id;
+        pollDevelopmentTask();
+        developmentPollInterval = setInterval(pollDevelopmentTask, 1000);
+      } catch (e) {
+        addDevelopmentMessage('system', '错误：' + e.message, 'error');
+        setStatus('failed', e.message);
+        btn.disabled = false;
+      }
+    }
+
+    async function pollDevelopmentTask() {
+      if (!developmentTaskId) return;
+      try {
+        const res = await fetch(`/api/tasks/${developmentTaskId}`);
+        if (!res.ok) return;
+        const task = await res.json();
+
+        if (task.status === 'waiting_confirmation') {
+          clearInterval(developmentPollInterval);
+          setStatus('waiting');
+          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
+          renderDevelopmentConfirmDetail(pending);
+          document.getElementById('development-confirm-box').classList.add('active');
+          document.getElementById('development-send-btn').disabled = false;
+          return;
+        }
+
+        if (task.status === 'completed' || task.status === 'failed') {
+          clearInterval(developmentPollInterval);
+          if (task.status === 'completed') {
+            setStatus('completed');
+            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
+            addDevelopmentMessage('assistant', answer);
+          } else {
+            setStatus('failed', task.errors.join('; '));
+            addDevelopmentMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
+          }
+          document.getElementById('development-send-btn').disabled = false;
+          await loadDevelopmentState();
+        } else {
+          const runningStep = task.steps.find(s => s.status === 'running');
+          if (runningStep) {
+            setStatus('calling', runningStep.description);
+          } else {
+            setStatus('thinking');
+          }
+        }
+      } catch (e) {
+        console.error('poll development error', e);
+      }
+    }
+
+    async function confirmDevelopmentTask(confirm) {
+      if (!developmentTaskId) return;
+      document.getElementById('development-confirm-box').classList.remove('active');
+      setStatus('thinking');
+      document.getElementById('development-send-btn').disabled = true;
+      try {
+        const res = await fetch(`/api/tasks/${developmentTaskId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: confirm })
+        });
+        if (!res.ok) throw new Error('确认请求失败');
+        const task = await res.json();
+        if (task.status === 'waiting_confirmation') {
+          setStatus('waiting');
+          document.getElementById('development-confirm-box').classList.add('active');
+          return;
+        }
+        developmentPollInterval = setInterval(pollDevelopmentTask, 1000);
+        pollDevelopmentTask();
+      } catch (e) {
+        addDevelopmentMessage('system', '确认失败：' + e.message, 'error');
+        setStatus('failed', e.message);
+        document.getElementById('development-send-btn').disabled = false;
       }
     }
 

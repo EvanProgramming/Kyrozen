@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from kyrozen.config import KyrozenConfig, get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
+from kyrozen.development.agent import SoftwareDevelopmentAgent
 from kyrozen.discovery import ProblemDiscoveryAgent
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
@@ -29,6 +30,7 @@ _agent: BaseAgent | None = None
 _discovery_agent: ProblemDiscoveryAgent | None = None
 _research_agent: MarketResearchAgent | None = None
 _planning_agent: ProductPlanningAgent | None = None
+_development_agent: SoftwareDevelopmentAgent | None = None
 _config: KyrozenConfig | None = None
 _db: KyrozenDatabase | None = None
 _project_manager: ProjectManager | None = None
@@ -53,11 +55,17 @@ def _get_planning_agent() -> ProductPlanningAgent:
     return _planning_agent
 
 
+def _get_development_agent() -> SoftwareDevelopmentAgent:
+    if _development_agent is None:
+        raise RuntimeError("Development agent not initialized")
+    return _development_agent
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     project_id: str | None = Field(None, description="Project ID to associate with this chat")
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
-    mode: str = Field("default", description="Chat mode: default, discovery, market_research, or planning")
+    mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, or development")
 
 
 class ConfirmRequest(BaseModel):
@@ -130,7 +138,7 @@ def _project_memory(project_id: str) -> ProjectMemory:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _discovery_agent, _research_agent, _planning_agent, _config, _db, _project_manager, _context_builder
+        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _config, _db, _project_manager, _context_builder
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -190,6 +198,15 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             logger=logger,
             project_manager=_project_manager,
         )
+        global _development_agent
+        _development_agent = SoftwareDevelopmentAgent(
+            config=_config,
+            model=active_model,
+            tools=tools,
+            task_manager=task_manager,
+            logger=logger,
+            project_manager=_project_manager,
+        )
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
@@ -214,6 +231,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             agent = _get_research_agent()
         elif request.mode == "planning":
             agent = _get_planning_agent()
+        elif request.mode == "development":
+            agent = _get_development_agent()
         else:
             agent = _get_agent()
         if agent.model is None:
@@ -234,6 +253,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 context = builder.build_research_context(project)
             elif request.mode == "planning":
                 context = builder.build_planning_context(project)
+            elif request.mode == "development":
+                context = builder.build_development_context(project)
             else:
                 context = builder.build(project)
             user_input = f"{context}\n{request.message}"
@@ -553,6 +574,98 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "latest_brief_artifact_id": latest_brief.id if latest_brief else None,
             "latest_prd_artifact_id": latest_prd.id if latest_prd else None,
             "latest_comparison_artifact_id": latest_comparison.id if latest_comparison else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Software Development
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/development/state")
+    async def api_development_state(project_id: str):
+        pm = _get_project_manager()
+        if pm.get(project_id) is None:
+            raise HTTPException(404, "Project not found")
+        from kyrozen.development.models import (
+            DeploymentGuide,
+            FeatureImplementation,
+            TechnicalPlan,
+            TestReport,
+        )
+
+        latest_plan = pm.get_latest_artifact(project_id, "technical_plan", title="Technical Plan")
+        plan = TechnicalPlan()
+        if latest_plan is not None:
+            import json
+            try:
+                plan = TechnicalPlan.from_dict(json.loads(latest_plan.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        feature_records = []
+        for artifact in pm.list_artifacts(project_id):
+            if artifact.type == "feature_implementation_record":
+                try:
+                    feature_records.append(
+                        FeatureImplementation.from_dict(json.loads(artifact.content))
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        latest_report = pm.get_latest_artifact(project_id, "test_report", title="Test Report")
+        report = TestReport()
+        if latest_report is not None:
+            import json
+            try:
+                report = TestReport.from_dict(json.loads(latest_report.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_guide = pm.get_latest_artifact(
+            project_id, "deployment_guide", title="Deployment Guide"
+        )
+        guide = DeploymentGuide()
+        if latest_guide is not None:
+            import json
+            try:
+                guide = DeploymentGuide.from_dict(json.loads(latest_guide.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        decisions = [
+            d for d in pm.list_decisions(project_id)
+            if d.decision.startswith("Development decision:")
+        ]
+
+        # Summarize git commits if software project exists
+        import subprocess
+        from pathlib import Path
+
+        git_log: list[str] = []
+        if _config is not None:
+            software_dir = Path(_config.project_dir(project_id)) / "software"
+            if (software_dir / ".git").exists():
+                try:
+                    result = subprocess.run(
+                        ["git", "-C", str(software_dir), "log", "--oneline", "-10"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if result.returncode == 0:
+                        git_log = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                except Exception:
+                    pass
+
+        return {
+            "project_id": project_id,
+            "technical_plan": plan.to_dict(),
+            "feature_records": [r.to_dict() for r in feature_records],
+            "test_report": report.to_dict(),
+            "deployment_guide": guide.to_dict(),
+            "decisions": [d.to_dict() for d in decisions[-5:]],
+            "git_log": git_log,
+            "latest_plan_artifact_id": latest_plan.id if latest_plan else None,
+            "latest_report_artifact_id": latest_report.id if latest_report else None,
+            "latest_guide_artifact_id": latest_guide.id if latest_guide else None,
         }
 
     return app

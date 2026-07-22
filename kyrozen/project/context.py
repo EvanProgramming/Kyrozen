@@ -12,6 +12,7 @@ from kyrozen.hardware.models import BOM, FirmwareProject, HardwareArchitecture, 
 from kyrozen.memory.interface import MemoryInterface
 from kyrozen.planning.models import PRD, ProductBrief
 from kyrozen.research.models import MarketResearchReport
+from kyrozen.testing.models import TestPlan, ValidationReport
 
 from .manager import ProjectManager
 from .project import PROJECT_STAGES, Project
@@ -638,6 +639,149 @@ class ProjectContextBuilder:
         )
         if memories:
             lines.append("\n[Recent Hardware Notes]")
+            for mem in memories:
+                lines.append(f"- {mem.content}")
+
+        lines.append("\n[User Message]")
+        return "\n".join(lines)
+
+    def build_testing_context(
+        self,
+        project: Project,
+        memory: MemoryInterface | None = None,
+        max_memories: int = 10,
+    ) -> str:
+        """Build context for Testing & Validation mode."""
+        memory_backend = memory or self.memory
+        lines = ["[Testing & Validation Context]"]
+        lines.append(f"Project ID: {project.id}")
+        lines.append(f"Project: {project.name}")
+        if project.description:
+            lines.append(f"Initial Idea: {project.description}")
+        lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(
+            "Your role: Verify whether the product actually solves the original problem. "
+            "Distinguish engineering test results from product validation. "
+            "Do not change requirements, code, or hardware without explicit user confirmation.\n"
+        )
+
+        # Load PRD
+        latest_prd = self.project_manager.get_latest_artifact(
+            project.id, "prd", title="Product Requirements Document"
+        )
+        prd = PRD()
+        if latest_prd is not None:
+            try:
+                prd = PRD.from_dict(json.loads(latest_prd.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        lines.append("[PRD]")
+        lines.append(f"  overview: {prd.overview or '(not set)'}")
+        lines.append("  functional_requirements:")
+        for i, req in enumerate(prd.functional_requirements):
+            lines.append(f"    R{i}: {req}")
+        if not prd.functional_requirements:
+            lines.append("    none")
+        lines.append("  non_functional_requirements:")
+        for i, req in enumerate(prd.non_functional_requirements):
+            lines.append(f"    N{i}: {req}")
+        if not prd.non_functional_requirements:
+            lines.append("    none")
+        lines.append("  mvp_features:")
+        for feat in prd.mvp_scope.mvp_features:
+            lines.append(f"    - {feat}")
+        if not prd.mvp_scope.mvp_features:
+            lines.append("    none")
+        lines.append("  out_of_scope:")
+        for item in prd.out_of_scope:
+            lines.append(f"    - {item}")
+        if not prd.out_of_scope:
+            lines.append("    none")
+
+        # Load Technical Plan
+        latest_tech_plan = self.project_manager.get_latest_artifact(
+            project.id, "technical_plan", title="Technical Plan"
+        )
+        if latest_tech_plan is not None:
+            try:
+                tech_plan = TechnicalPlan.from_dict(json.loads(latest_tech_plan.content))
+                lines.append("\n[Technical Plan]")
+                lines.append(f"  application_type: {tech_plan.application_type or '(not set)'}")
+                lines.append(f"  architecture: {tech_plan.architecture or '(not set)'}")
+                lines.append(f"  backend: {tech_plan.backend or '(not set)'}")
+                lines.append(f"  deployment: {tech_plan.deployment or '(not set)'}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Existing test plan
+        latest_test_plan = self.project_manager.get_latest_artifact(
+            project.id, "test_plan", title="Test Plan"
+        )
+        if latest_test_plan is not None:
+            try:
+                test_plan = TestPlan.from_dict(json.loads(latest_test_plan.content))
+                lines.append("\n[Current Test Plan]")
+                lines.append(f"  name: {test_plan.name or '(not set)'}")
+                lines.append(f"  objective: {test_plan.objective or '(not set)'}")
+                lines.append(f"  status: {test_plan.status}")
+                lines.append(f"  test_cases: {len(test_plan.test_cases)}")
+                for tc in test_plan.test_cases:
+                    lines.append(
+                        f"    - {tc.id} ({tc.type}, {tc.priority}, {tc.status}): {tc.name}"
+                    )
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Recent test results
+        result_artifacts = self.project_manager.list_artifacts(project.id)
+        result_artifacts = [
+            a for a in result_artifacts if a.type == "test_result"
+        ][-10:]
+        if result_artifacts:
+            lines.append("\n[Recent Test Results]")
+            for a in result_artifacts:
+                try:
+                    r = json.loads(a.content)
+                    lines.append(
+                        f"    - {r.get('test_case_id', '?')} -> {r.get('result', '?')}"
+                    )
+                except json.JSONDecodeError:
+                    pass
+
+        # Existing validation report
+        latest_validation = self.project_manager.get_latest_artifact(
+            project.id, "validation_report", title="Validation Report"
+        )
+        if latest_validation is not None:
+            try:
+                report = ValidationReport.from_dict(json.loads(latest_validation.content))
+                lines.append("\n[Current Validation Report]")
+                lines.append(f"  conclusion: {report.conclusion or '(not set)'}")
+                lines.append(f"  success_metrics: {report.success_metrics or '(not set)'}")
+                lines.append(f"  user_feedback_count: {len(report.user_feedback)}")
+                lines.append(f"  next_iteration_items: {len(report.next_iteration)}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Existing software and hardware files
+        code_summary = self._summarize_software_dir(project)
+        if code_summary:
+            lines.append("\n[Existing Software Project Files]")
+            lines.append(code_summary)
+
+        hardware_summary = self._summarize_hardware_dir(project)
+        if hardware_summary:
+            lines.append("\n[Existing Hardware Project Files]")
+            lines.append(hardware_summary)
+
+        memories = memory_backend.query(
+            category="testing",
+            limit=max_memories,
+            project_id=project.id,
+        )
+        if memories:
+            lines.append("\n[Recent Testing Notes]")
             for mem in memories:
                 lines.append(f"- {mem.content}")
 

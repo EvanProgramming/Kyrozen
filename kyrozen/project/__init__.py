@@ -2,8 +2,10 @@
 
 from .context import ProjectContextBuilder
 from .db import KyrozenDatabase
+from .factory import create_database
 from .manager import ProjectManager
 from .project import Artifact, Decision, Project
+from .supabase_db import SupabaseDatabase
 
 __all__ = [
     "Artifact",
@@ -12,4 +14,6 @@ __all__ = [
     "ProjectContextBuilder",
     "ProjectManager",
     "KyrozenDatabase",
+    "SupabaseDatabase",
+    "create_database",
 ]

@@ -1,0 +1,17 @@
+import { apiClient } from './client';
+import type { ChatRequest, ChatResponse, Task } from '../types/api';
+
+export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
+  const response = await apiClient.post<ChatResponse>('/chat', request);
+  return response.data;
+}
+
+export async function getTask(taskId: string): Promise<Task> {
+  const response = await apiClient.get<Task>(`/tasks/${taskId}`);
+  return response.data;
+}
+
+export async function confirmTask(taskId: string, confirmed: boolean): Promise<Task> {
+  const response = await apiClient.post<Task>(`/tasks/${taskId}/confirm`, { confirmed });
+  return response.data;
+}

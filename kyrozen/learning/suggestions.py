@@ -7,8 +7,9 @@ from typing import Any
 
 from .models import Suggestion
 
+from .repository import LearningRepository
+
 if True:  # typing-only guard for circular imports
-    from kyrozen.memory.interface import MemoryInterface
     from kyrozen.project.manager import ProjectManager
 
 
@@ -18,7 +19,7 @@ class SuggestionGenerator:
     def __init__(
         self,
         project_manager: ProjectManager | None = None,
-        memory: MemoryInterface | None = None,
+        memory: LearningRepository | None = None,
     ) -> None:
         self.project_manager = project_manager
         self.memory = memory
@@ -238,21 +239,17 @@ class SuggestionGenerator:
 
         suggestions: list[Suggestion] = []
         for memory_type in ("validated_success", "validated_failure"):
-            records = self.memory.query(
-                category="learning",
-                query=query_text,
+            records = self.memory.query_cross_project_memory(
+                query_text=query_text,
                 memory_type=memory_type,
                 scope="user",
                 limit=5,
             )
-            for record in records:
-                try:
-                    data = json.loads(record.content)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                source_project_id = record.metadata.get("source_project_id")
+            for data in records:
+                source_project_id = data.get("source_project_id")
                 if source_project_id == project_id:
                     continue
+                record_id = data.get("id", "")
 
                 if memory_type == "validated_success":
                     solution = data.get("solution", "")
@@ -269,7 +266,7 @@ class SuggestionGenerator:
                             priority="medium",
                             status="new",
                             category="new_opportunity",
-                            related_learning_ids=[record.id],
+                            related_learning_ids=[record_id],
                         )
                     )
                 else:
@@ -288,7 +285,7 @@ class SuggestionGenerator:
                             priority="high",
                             status="new",
                             category="new_opportunity",
-                            related_learning_ids=[record.id],
+                            related_learning_ids=[record_id],
                         )
                     )
 

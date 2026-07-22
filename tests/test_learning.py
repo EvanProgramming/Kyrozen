@@ -9,7 +9,6 @@ Covers three required cases:
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -20,8 +19,8 @@ from kyrozen.learning.models import (
     LearningRecord,
     SuccessKnowledge,
 )
+from kyrozen.learning.repository import LearningRepository
 from kyrozen.learning.suggestions import SuggestionGenerator
-from kyrozen.memory import InMemoryMemory, JsonFileMemory
 from kyrozen.project import ProjectManager
 from kyrozen.tools.learning_tools import (
     DeleteLearningRecordTool,
@@ -29,11 +28,6 @@ from kyrozen.tools.learning_tools import (
     SaveLearningRecordTool,
     SaveSuccessKnowledgeTool,
 )
-
-
-@pytest.fixture
-def learning_memory(temp_dir: str) -> JsonFileMemory:
-    return JsonFileMemory(os.path.join(temp_dir, "learning_memory.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +73,7 @@ def test_extract_failure_from_test_result():
 
 
 def test_save_failure_and_recommend_across_projects(
-    project_manager: ProjectManager, learning_memory: JsonFileMemory
+    project_manager: ProjectManager, learning_repository: LearningRepository
 ):
     project_a = project_manager.create(
         name="ESP32 Device A",
@@ -103,12 +97,12 @@ def test_save_failure_and_recommend_across_projects(
         verification_status="experiment_verified",
     )
 
-    tool = SaveFailureKnowledgeTool(project_manager, learning_memory)
+    tool = SaveFailureKnowledgeTool(project_manager, learning_repository)
     result = tool.execute("save", {"failure": failure.to_dict()})
     assert result.success is True
     assert result.data is not None
 
-    generator = SuggestionGenerator(project_manager, learning_memory)
+    generator = SuggestionGenerator(project_manager, learning_repository)
     suggestions = generator.analyze(project_b.id)
 
     cross_project = [s for s in suggestions if s.category == "new_opportunity"]
@@ -121,7 +115,7 @@ def test_save_failure_and_recommend_across_projects(
 # ---------------------------------------------------------------------------
 
 def test_success_reuse_across_projects(
-    project_manager: ProjectManager, learning_memory: JsonFileMemory
+    project_manager: ProjectManager, learning_repository: LearningRepository
 ):
     project_a = project_manager.create(
         name="Project A",
@@ -144,7 +138,7 @@ def test_success_reuse_across_projects(
         verification_status="repeatedly_verified",
     )
 
-    tool = SaveSuccessKnowledgeTool(project_manager, learning_memory)
+    tool = SaveSuccessKnowledgeTool(project_manager, learning_repository)
     result = tool.execute("save", {"success": success.to_dict()})
     assert result.success is True
 
@@ -158,11 +152,11 @@ def test_success_reuse_across_projects(
         scope="user",
         tags=["architecture", "fastapi", "python"],
     )
-    record_tool = SaveLearningRecordTool(project_manager, learning_memory)
+    record_tool = SaveLearningRecordTool(project_manager, learning_repository)
     record_result = record_tool.execute("save", {"record": record.to_dict()})
     assert record_result.success is True
 
-    generator = SuggestionGenerator(project_manager, learning_memory)
+    generator = SuggestionGenerator(project_manager, learning_repository)
     suggestions = generator.analyze(project_b.id)
 
     cross_project = [s for s in suggestions if s.category == "new_opportunity"]
@@ -178,7 +172,7 @@ def test_success_reuse_across_projects(
 # ---------------------------------------------------------------------------
 
 def test_delete_wrong_learning_record(
-    project_manager: ProjectManager, learning_memory: JsonFileMemory
+    project_manager: ProjectManager, learning_repository: LearningRepository
 ):
     project = project_manager.create(
         name="Wrong Memory Project",
@@ -196,25 +190,25 @@ def test_delete_wrong_learning_record(
         scope="private",
     )
 
-    tool = SaveLearningRecordTool(project_manager, learning_memory)
+    tool = SaveLearningRecordTool(project_manager, learning_repository)
     save_result = tool.execute("save", {"record": record.to_dict()})
     assert save_result.success is True
-    memory_id = save_result.data["memory_id"]
+    record_id = save_result.data["record_id"]
 
     # Verify the record exists.
-    records_before = learning_memory.query(category="learning")
-    assert any(r.id == memory_id for r in records_before)
+    records_before = learning_repository.list_records()
+    assert any(r.id == record_id for r in records_before)
 
-    delete_tool = DeleteLearningRecordTool(project_manager, learning_memory)
-    delete_result = delete_tool.execute("delete", {"memory_id": memory_id})
+    delete_tool = DeleteLearningRecordTool(project_manager, learning_repository)
+    delete_result = delete_tool.execute("delete", {"record_id": record_id})
     assert delete_result.success is True
 
     # Verify the record no longer exists.
-    records_after = learning_memory.query(category="learning")
-    assert not any(r.id == memory_id for r in records_after)
+    records_after = learning_repository.list_records()
+    assert not any(r.id == record_id for r in records_after)
 
     # Re-deleting the same record should fail.
-    second_delete = delete_tool.execute("delete", {"memory_id": memory_id})
+    second_delete = delete_tool.execute("delete", {"record_id": record_id})
     assert second_delete.success is False
 
 
@@ -241,7 +235,7 @@ def test_learning_record_validates_enum_fields():
 
 
 def test_private_learning_record_not_reused_across_projects(
-    project_manager: ProjectManager, learning_memory: JsonFileMemory
+    project_manager: ProjectManager, learning_repository: LearningRepository
 ):
     project_a = project_manager.create(
         name="Private A", description="私有记忆项目 A", goal="目标 A"
@@ -259,10 +253,10 @@ def test_private_learning_record_not_reused_across_projects(
         verification_status="user_provided",
         scope="private",
     )
-    tool = SaveLearningRecordTool(project_manager, learning_memory)
+    tool = SaveLearningRecordTool(project_manager, learning_repository)
     tool.execute("save", {"record": record.to_dict()})
 
-    generator = SuggestionGenerator(project_manager, learning_memory)
+    generator = SuggestionGenerator(project_manager, learning_repository)
     suggestions = generator.analyze(project_b.id)
 
     cross_project = [s for s in suggestions if s.category == "new_opportunity"]

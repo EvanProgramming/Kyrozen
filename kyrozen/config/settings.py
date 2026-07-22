@@ -13,7 +13,31 @@ from pathlib import Path
 from typing import Any
 
 
+def _load_dotenv() -> None:
+    """Load environment variables from project root .env file if available."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    # Search upward from the current working directory for a .env file.
+    cwd = Path(os.getcwd()).resolve()
+    for path in [cwd, *cwd.parents]:
+        env_file = path / ".env"
+        if env_file.exists():
+            load_dotenv(env_file, override=False)
+            break
+
+
+_load_dotenv()
+
+
 DEFAULT_PROVIDER = "deepseek"
+
+
+def _parse_bool(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return value.strip().lower() in ("true", "1", "yes", "on")
 
 PROVIDER_ENV_VARS: dict[str, str] = {
     "deepseek": "DEEPSEEK_API_KEY",
@@ -63,6 +87,14 @@ class KyrozenConfig:
     serper_api_key: str = ""
     github_token: str = ""
     semantic_scholar_api_key: str = ""
+    # Phase 10 productization
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
+    supabase_jwt_secret: str = ""
+    db_backend: str = "sqlite"  # "sqlite" or "supabase"
+    beta_invite_only: bool = False
+    cors_origins: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.model_simple:
@@ -76,6 +108,9 @@ class KyrozenConfig:
             self.db_path = os.path.join(self.workspace_root, "kyrozen.db")
         if not self.projects_dir:
             self.projects_dir = os.path.join(self.workspace_root, "projects")
+        if not self.cors_origins:
+            raw = os.environ.get("KYROZEN_CORS_ORIGINS", "")
+            self.cors_origins = [o.strip() for o in raw.split(",") if o.strip()]
 
     def project_dir(self, project_id: str) -> str:
         return os.path.join(self.projects_dir, project_id)
@@ -167,4 +202,15 @@ def get_config(
         github_token=os.environ.get("GITHUB_TOKEN", "") or file_data.get("github_token", ""),
         semantic_scholar_api_key=os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
         or file_data.get("semantic_scholar_api_key", ""),
+        supabase_url=os.environ.get("SUPABASE_URL", "") or file_data.get("supabase_url", ""),
+        supabase_anon_key=os.environ.get("SUPABASE_ANON_KEY", "") or file_data.get("supabase_anon_key", ""),
+        supabase_service_role_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        or file_data.get("supabase_service_role_key", ""),
+        supabase_jwt_secret=os.environ.get("SUPABASE_JWT_SECRET", "") or file_data.get("supabase_jwt_secret", ""),
+        db_backend=os.environ.get("KYROZEN_DB_BACKEND", "") or file_data.get("db_backend", "sqlite"),
+        beta_invite_only=_parse_bool(
+            os.environ.get("KYROZEN_BETA_INVITE_ONLY", "")
+            or file_data.get("beta_invite_only", "false")
+        ),
+        cors_origins=[o.strip() for o in (os.environ.get("KYROZEN_CORS_ORIGINS", "") or file_data.get("cors_origins", "")).split(",") if o.strip()],
     )

@@ -43,6 +43,7 @@ class ToolRegistry:
 def get_default_registry(
     project_manager: "ProjectManager | None" = None,
     memory: Any = None,
+    learning_repository: Any = None,
     tavily_api_key: str | None = None,
     serper_api_key: str | None = None,
     github_token: str | None = None,
@@ -156,12 +157,12 @@ def get_default_registry(
     registry.register(SaveIterationPlanTool(project_manager))
     registry.register(RunSoftwareTestTool(project_manager))
     registry.register(RunHardwareTestTool(project_manager))
-    registry.register(SaveLearningRecordTool(project_manager, memory))
-    registry.register(SaveFailureKnowledgeTool(project_manager, memory))
-    registry.register(SaveSuccessKnowledgeTool(project_manager, memory))
-    registry.register(DeleteLearningRecordTool(project_manager, memory))
-    registry.register(SaveSuggestionTool(project_manager, memory))
-    registry.register(UpdateSuggestionStatusTool(project_manager, memory))
-    registry.register(ExtractLearningFromEventTool(project_manager, memory))
-    registry.register(RunProjectAnalysisTool(project_manager, memory))
+    registry.register(SaveLearningRecordTool(project_manager, learning_repository))
+    registry.register(SaveFailureKnowledgeTool(project_manager, learning_repository))
+    registry.register(SaveSuccessKnowledgeTool(project_manager, learning_repository))
+    registry.register(DeleteLearningRecordTool(project_manager, learning_repository))
+    registry.register(SaveSuggestionTool(project_manager, learning_repository))
+    registry.register(UpdateSuggestionStatusTool(project_manager, learning_repository))
+    registry.register(ExtractLearningFromEventTool(project_manager, learning_repository))
+    registry.register(RunProjectAnalysisTool(project_manager, learning_repository))
     return registry

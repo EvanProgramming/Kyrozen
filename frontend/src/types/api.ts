@@ -60,3 +60,40 @@ export interface AuthResponse {
 export interface ApiError {
   detail: string;
 }
+
+export interface ChatRequest {
+  message: string;
+  project_id?: string;
+  mode?: string;
+  confirmed?: boolean;
+}
+
+export interface ChatResponse {
+  task_id: string;
+  status: string;
+  project_id?: string;
+  mode: string;
+}
+
+export interface TaskStep {
+  description: string;
+  status: string;
+  result?: unknown;
+  error?: string;
+  metadata?: {
+    tool?: string;
+    action?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  project_id?: string;
+  result?: { answer?: string } | string;
+  errors: string[];
+  steps: TaskStep[];
+}

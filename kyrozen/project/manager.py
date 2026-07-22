@@ -23,6 +23,7 @@ class ProjectManager:
         description: str = "",
         goal: str = "",
         initial_idea: str = "",
+        user_id: str = "",
     ) -> Project:
         """Create a new project."""
         description = description or initial_idea
@@ -31,6 +32,7 @@ class ProjectManager:
             description=description,
             goal=goal,
             next_steps="Clarify project goals and scope",
+            user_id=user_id,
         )
         self.db.save_project(project)
         return project
@@ -38,8 +40,8 @@ class ProjectManager:
     def get(self, project_id: str) -> Project | None:
         return self.db.get_project(project_id)
 
-    def list(self) -> list[Project]:
-        return self.db.list_projects()
+    def list(self, user_id: str | None = None) -> list[Project]:
+        return self.db.list_projects(user_id=user_id)
 
     def update(self, project_id: str, **kwargs: Any) -> Project | None:
         project = self.db.get_project(project_id)

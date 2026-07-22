@@ -7,6 +7,7 @@ from typing import Any
 
 from kyrozen.discovery.brief import ProblemBrief
 from kyrozen.memory.interface import MemoryInterface
+from kyrozen.planning.models import ProductBrief
 from kyrozen.research.models import MarketResearchReport
 
 from .manager import ProjectManager
@@ -219,6 +220,102 @@ class ProjectContextBuilder:
         )
         if memories:
             lines.append("\n[Recent Research Notes]")
+            for mem in memories:
+                lines.append(f"- {mem.content}")
+
+        lines.append("\n[User Message]")
+        return "\n".join(lines)
+
+    def build_planning_context(
+        self,
+        project: Project,
+        memory: MemoryInterface | None = None,
+        max_memories: int = 10,
+    ) -> str:
+        """Build context for Product Planning mode."""
+        memory_backend = memory or self.memory
+        lines = ["[Product Planning Context]"]
+        lines.append(f"Project ID: {project.id}")
+        lines.append(f"Project: {project.name}")
+        if project.description:
+            lines.append(f"Initial Idea: {project.description}")
+        lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(
+            "Your role: Define what product to build, for whom, and why. "
+            "Do not design technical architecture, choose technology, or write code.\n"
+        )
+
+        # Load Problem Brief
+        latest_brief = self.project_manager.get_latest_artifact(
+            project.id, "problem_brief", title="Problem Brief"
+        )
+        brief = ProblemBrief()
+        if latest_brief is not None:
+            try:
+                brief = ProblemBrief.from_dict(json.loads(latest_brief.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        lines.append("[Problem Brief]")
+        brief_dict = brief.to_dict()
+        for key, value in brief_dict.items():
+            if key == "unknown_assumptions":
+                if value:
+                    lines.append(f"  {key}:")
+                    for item in value:
+                        lines.append(
+                            f"    - {item['claim']} (source: {item['source']}, verified: {item['verified']})"
+                        )
+                else:
+                    lines.append(f"  {key}: none")
+            else:
+                display_value = value if value else "(not set)"
+                lines.append(f"  {key}: {display_value}")
+
+        # Load Market Research Report
+        latest_report = self.project_manager.get_latest_artifact(
+            project.id, "market_research_report", title="Market Research Report"
+        )
+        if latest_report is not None:
+            try:
+                report = MarketResearchReport.from_dict(json.loads(latest_report.content))
+                lines.append("\n[Market Research Report]")
+                lines.append(f"  recommendation: {report.recommendation}")
+                lines.append(f"  market_status: {report.market_status}")
+                lines.append(f"  competitors: {len(report.competitors)}")
+                lines.append(f"  technology_routes: {', '.join(report.technology_routes) or 'none'}")
+                lines.append(f"  market_gap: {report.market_gap.possible_difference or 'none'}")
+                lines.append(f"  risks: {', '.join(report.risks) or 'none'}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+        else:
+            lines.append("\n[Market Research Report]")
+            lines.append("  (no market research report available)")
+
+        # Load existing Product Brief if any
+        latest_product_brief = self.project_manager.get_latest_artifact(
+            project.id, "product_brief", title="Product Brief"
+        )
+        if latest_product_brief is not None:
+            try:
+                product_brief = ProductBrief.from_dict(json.loads(latest_product_brief.content))
+                lines.append("\n[Current Product Brief]")
+                goal = product_brief.product_goal
+                lines.append(f"  product_goal: {goal.product_goal or '(not set)'}")
+                lines.append(f"  target_user: {product_brief.target_user.primary_user or '(not set)'}")
+                lines.append(f"  value_proposition: {goal.value_proposition or '(not set)'}")
+                lines.append(f"  mvp_features: {', '.join(product_brief.mvp_scope.mvp_features) or 'none'}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Load recent planning memories
+        memories = memory_backend.query(
+            category="planning",
+            limit=max_memories,
+            project_id=project.id,
+        )
+        if memories:
+            lines.append("\n[Recent Planning Notes]")
             for mem in memories:
                 lines.append(f"- {mem.content}")
 

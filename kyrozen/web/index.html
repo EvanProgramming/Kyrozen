@@ -260,6 +260,7 @@
       <div class="detail-actions">
         <button onclick="enterDiscovery()">进入 Problem Discovery</button>
         <button onclick="enterMarketResearch()">进入 Market Research</button>
+        <button onclick="enterPlanning()">进入 Product Planning</button>
         <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
         <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
       </div>
@@ -380,6 +381,41 @@
       </div>
     </div>
 
+    <!-- Product Planning View -->
+    <div id="view-planning" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="planning-panel" style="flex:1;display:flex;min-width:0;">
+        <div id="planning-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="planning-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
+          <div id="planning-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
+            <div id="planning-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="confirmPlanningTask(true)">确认执行</button>
+              <button class="secondary" onclick="confirmPlanningTask(false)">拒绝</button>
+            </div>
+          </div>
+          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
+            <textarea id="planning-input" placeholder="输入产品规划指令，例如：开始产品规划..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendPlanningMessage()}"></textarea>
+            <button onclick="sendPlanningMessage()" id="planning-send-btn">发送</button>
+            <button class="secondary" onclick="leavePlanning()">返回项目</button>
+          </div>
+        </div>
+        <div id="planning-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
+          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Product Goal</h2>
+          <div id="planning-goal" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Target User</h2>
+          <div id="planning-user" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">MVP Scope</h2>
+          <div id="planning-mvp" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Solutions</h2>
+          <div id="planning-solutions" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Recommendation</h2>
+          <div id="planning-recommendation" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="sidebar">
       <h2>任务状态</h2>
       <div id="task-info">
@@ -457,6 +493,7 @@
         if (parts[2] === 'chat') return { view: 'chat', projectId: parts[1] };
         if (parts[2] === 'discovery') return { view: 'discovery', projectId: parts[1] };
         if (parts[2] === 'market-research') return { view: 'market-research', projectId: parts[1] };
+        if (parts[2] === 'planning') return { view: 'planning', projectId: parts[1] };
         return { view: 'detail', projectId: parts[1] };
       }
       return { view: 'list' };
@@ -489,6 +526,12 @@
         document.getElementById('market-research-messages').innerHTML = '';
         addMarketResearchMessage('system', `已进入 Market Research。项目 ID: ${routeInfo.projectId}\n\n我会基于 Problem Brief 进行市场调研，判断这个问题是否值得解决。`, 'system');
         await loadMarketResearchState();
+      } else if (routeInfo.view === 'planning') {
+        currentProjectId = routeInfo.projectId;
+        showView('planning');
+        document.getElementById('planning-messages').innerHTML = '';
+        addPlanningMessage('system', `已进入 Product Planning。项目 ID: ${routeInfo.projectId}\n\n我会基于 Problem Brief 和 Market Research Report 制定产品方向、MVP 范围和方案比较。`, 'system');
+        await loadPlanningState();
       }
     }
 
@@ -1187,6 +1230,215 @@
         addMarketResearchMessage('system', '确认失败：' + e.message, 'error');
         setStatus('failed', e.message);
         document.getElementById('market-research-send-btn').disabled = false;
+      }
+    }
+
+    // ---------------- Product Planning ----------------
+
+    let planningTaskId = null;
+    let planningPollInterval = null;
+
+    function enterPlanning() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}/planning`;
+    }
+
+    function leavePlanning() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}`;
+    }
+
+    function addPlanningMessage(role, content, type = role) {
+      const chat = document.getElementById('planning-messages');
+      const div = document.createElement('div');
+      div.className = 'msg ' + type;
+      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
+      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    async function loadPlanningState() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/planning/state`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderPlanningState(data);
+      } catch (e) {
+        console.error('loadPlanningState error', e);
+      }
+    }
+
+    function renderPlanningState(data) {
+      const brief = data.brief || {};
+      const goal = brief.product_goal || {};
+      const targetUser = brief.target_user || {};
+      const mvp = brief.mvp_scope || {};
+      const comparison = data.solution_comparison || {};
+
+      document.getElementById('planning-goal').innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Goal:</span> ${escapeHtml(goal.product_goal || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Problem:</span> ${escapeHtml(goal.core_problem || 'none')}</div>
+        <div><span style="color:#8b949e;">Value:</span> ${escapeHtml(goal.value_proposition || 'none')}</div>
+      `;
+
+      document.getElementById('planning-user').innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Primary:</span> ${escapeHtml(targetUser.primary_user || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Secondary:</span> ${escapeHtml(targetUser.secondary_user || 'none')}</div>
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Use Case:</span> ${escapeHtml(targetUser.use_case || 'none')}</div>
+        <div><span style="color:#8b949e;">Context:</span> ${escapeHtml(targetUser.user_context || 'none')}</div>
+      `;
+
+      const mvpFeatures = mvp.mvp_features || [];
+      const excludedFeatures = mvp.excluded_features || [];
+      document.getElementById('planning-mvp').innerHTML = `
+        <div style="margin-bottom:8px;"><span style="color:#8b949e;">MVP Features:</span></div>
+        ${mvpFeatures.length === 0 ? '<div style="color:#6e7681;">none</div>' : mvpFeatures.map(f => `<div style="margin-bottom:4px;color:#00ff88;">• ${escapeHtml(f)}</div>`).join('')}
+        <div style="margin-top:8px;margin-bottom:8px;"><span style="color:#8b949e;">Excluded:</span></div>
+        ${excludedFeatures.length === 0 ? '<div style="color:#6e7681;">none</div>' : excludedFeatures.map(f => `<div style="margin-bottom:4px;color:#ffaa00;">• ${escapeHtml(f)}</div>`).join('')}
+        <div style="margin-top:8px;"><span style="color:#8b949e;">Success Metric:</span> ${escapeHtml(mvp.success_metric || 'none')}</div>
+      `;
+
+      const solutions = comparison.solutions || [];
+      const solutionsEl = document.getElementById('planning-solutions');
+      if (solutions.length === 0) {
+        solutionsEl.innerHTML = '<span style="color:#6e7681;">暂无方案</span>';
+      } else {
+        solutionsEl.innerHTML = solutions.map(s =>
+          `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+          `<div style="font-weight:600;margin-bottom:4px;">${escapeHtml(s.name || 'Unnamed')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;">${escapeHtml(s.solution || '')}</div>` +
+          `<div style="color:#8b949e;font-size:11px;margin-top:4px;">Cost: ${escapeHtml(s.cost || '?')} · Difficulty: ${escapeHtml(s.difficulty || '?')} · Time: ${escapeHtml(s.development_time || '?')}</div>` +
+          `</div>`
+        ).join('');
+      }
+
+      document.getElementById('planning-recommendation').innerHTML = `
+        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Recommendation:</span> <span style="color:#00f0ff;font-weight:600;">${escapeHtml(comparison.recommendation || 'none')}</span></div>
+        <div><span style="color:#8b949e;">Reason:</span> ${escapeHtml(comparison.recommendation_reason || 'none')}</div>
+      `;
+    }
+
+    function renderPlanningConfirmDetail(step) {
+      const detailEl = document.getElementById('planning-confirm-detail');
+      if (!step || !step.metadata || !step.metadata.tool) {
+        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
+        return;
+      }
+      const { tool, action, parameters } = step.metadata;
+      let paramsText = '';
+      if (parameters && Object.keys(parameters).length > 0) {
+        paramsText = '\n参数：\n' + Object.entries(parameters)
+          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join('\n');
+      }
+      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
+    }
+
+    async function sendPlanningMessage() {
+      const input = document.getElementById('planning-input');
+      const btn = document.getElementById('planning-send-btn');
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      input.value = '';
+      btn.disabled = true;
+      setStatus('thinking');
+      document.getElementById('planning-confirm-box').classList.remove('active');
+      addPlanningMessage('user', msg);
+      addPlanningMessage('system', '已创建 product planning 任务，等待 Kyrozen 处理...', 'system');
+
+      planningTaskId = null;
+      clearInterval(planningPollInterval);
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'planning' })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+        planningTaskId = data.task_id;
+        pollPlanningTask();
+        planningPollInterval = setInterval(pollPlanningTask, 1000);
+      } catch (e) {
+        addPlanningMessage('system', '错误：' + e.message, 'error');
+        setStatus('failed', e.message);
+        btn.disabled = false;
+      }
+    }
+
+    async function pollPlanningTask() {
+      if (!planningTaskId) return;
+      try {
+        const res = await fetch(`/api/tasks/${planningTaskId}`);
+        if (!res.ok) return;
+        const task = await res.json();
+
+        if (task.status === 'waiting_confirmation') {
+          clearInterval(planningPollInterval);
+          setStatus('waiting');
+          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
+          renderPlanningConfirmDetail(pending);
+          document.getElementById('planning-confirm-box').classList.add('active');
+          document.getElementById('planning-send-btn').disabled = false;
+          return;
+        }
+
+        if (task.status === 'completed' || task.status === 'failed') {
+          clearInterval(planningPollInterval);
+          if (task.status === 'completed') {
+            setStatus('completed');
+            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
+            addPlanningMessage('assistant', answer);
+          } else {
+            setStatus('failed', task.errors.join('; '));
+            addPlanningMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
+          }
+          document.getElementById('planning-send-btn').disabled = false;
+          await loadPlanningState();
+        } else {
+          const runningStep = task.steps.find(s => s.status === 'running');
+          if (runningStep) {
+            setStatus('calling', runningStep.description);
+          } else {
+            setStatus('thinking');
+          }
+        }
+      } catch (e) {
+        console.error('poll planning error', e);
+      }
+    }
+
+    async function confirmPlanningTask(confirm) {
+      if (!planningTaskId) return;
+      document.getElementById('planning-confirm-box').classList.remove('active');
+      setStatus('thinking');
+      document.getElementById('planning-send-btn').disabled = true;
+      try {
+        const res = await fetch(`/api/tasks/${planningTaskId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: confirm })
+        });
+        if (!res.ok) throw new Error('确认请求失败');
+        const task = await res.json();
+        if (task.status === 'waiting_confirmation') {
+          setStatus('waiting');
+          document.getElementById('planning-confirm-box').classList.add('active');
+          return;
+        }
+        planningPollInterval = setInterval(pollPlanningTask, 1000);
+        pollPlanningTask();
+      } catch (e) {
+        addPlanningMessage('system', '确认失败：' + e.message, 'error');
+        setStatus('failed', e.message);
+        document.getElementById('planning-send-btn').disabled = false;
       }
     }
 

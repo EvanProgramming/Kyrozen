@@ -54,6 +54,12 @@ def get_default_registry(
         RecordProblemDecisionTool,
         SaveProblemBriefTool,
     )
+    from .planning_tools import (
+        RecordProductDecisionTool,
+        SavePRDTool,
+        SaveProductBriefTool,
+        SaveSolutionComparisonTool,
+    )
     from .project_tools import RecordDecisionTool, UpdateProjectTool
     from .research.tools import (
         GitHubSearchTool,
@@ -83,4 +89,8 @@ def get_default_registry(
     registry.register(SaveResearchSourceTool(project_manager))
     registry.register(SaveMarketResearchReportTool(project_manager))
     registry.register(RecordOpportunityDecisionTool(project_manager))
+    registry.register(SaveProductBriefTool(project_manager))
+    registry.register(SavePRDTool(project_manager))
+    registry.register(SaveSolutionComparisonTool(project_manager))
+    registry.register(RecordProductDecisionTool(project_manager))
     return registry

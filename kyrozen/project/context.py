@@ -7,6 +7,7 @@ from typing import Any
 
 from kyrozen.discovery.brief import ProblemBrief
 from kyrozen.memory.interface import MemoryInterface
+from kyrozen.research.models import MarketResearchReport
 
 from .manager import ProjectManager
 from .project import PROJECT_STAGES, Project
@@ -148,6 +149,78 @@ class ProjectContextBuilder:
                     lines.append(f"A: {answer}")
                 else:
                     lines.append(f"- {answer}")
+
+        lines.append("\n[User Message]")
+        return "\n".join(lines)
+
+    def build_research_context(
+        self,
+        project: Project,
+        memory: MemoryInterface | None = None,
+        max_memories: int = 10,
+    ) -> str:
+        """Build context for Market Research mode."""
+        memory_backend = memory or self.memory
+        lines = ["[Market Research Context]"]
+        lines.append(f"Project ID: {project.id}")
+        lines.append(f"Project: {project.name}")
+        if project.description:
+            lines.append(f"Initial Idea: {project.description}")
+        lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(
+            "Your role: Evaluate whether the problem is worth solving. "
+            "Do not design products, recommend technology, or do market research beyond the given scope.\n"
+        )
+
+        latest_brief = self.project_manager.get_latest_artifact(
+            project.id, "problem_brief", title="Problem Brief"
+        )
+        brief = ProblemBrief()
+        if latest_brief is not None:
+            try:
+                brief = ProblemBrief.from_dict(json.loads(latest_brief.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        lines.append("[Problem Brief]")
+        brief_dict = brief.to_dict()
+        for key, value in brief_dict.items():
+            if key == "unknown_assumptions":
+                if value:
+                    lines.append(f"  {key}:")
+                    for item in value:
+                        lines.append(
+                            f"    - {item['claim']} (source: {item['source']}, verified: {item['verified']})"
+                        )
+                else:
+                    lines.append(f"  {key}: none")
+            else:
+                display_value = value if value else "(not set)"
+                lines.append(f"  {key}: {display_value}")
+
+        latest_report = self.project_manager.get_latest_artifact(
+            project.id, "market_research_report", title="Market Research Report"
+        )
+        if latest_report is not None:
+            try:
+                report = MarketResearchReport.from_dict(json.loads(latest_report.content))
+                lines.append("\n[Current Market Research Report]")
+                lines.append(f"  recommendation: {report.recommendation}")
+                lines.append(f"  market_status: {report.market_status}")
+                lines.append(f"  competitors: {len(report.competitors)}")
+                lines.append(f"  sources: {len(report.sources)}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        memories = memory_backend.query(
+            category="research",
+            limit=max_memories,
+            project_id=project.id,
+        )
+        if memories:
+            lines.append("\n[Recent Research Notes]")
+            for mem in memories:
+                lines.append(f"- {mem.content}")
 
         lines.append("\n[User Message]")
         return "\n".join(lines)

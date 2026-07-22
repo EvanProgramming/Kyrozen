@@ -259,6 +259,7 @@
       </div>
       <div class="detail-actions">
         <button onclick="enterDiscovery()">进入 Problem Discovery</button>
+        <button onclick="enterMarketResearch()">进入 Market Research</button>
         <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
         <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
       </div>
@@ -348,6 +349,37 @@
       </div>
     </div>
 
+    <!-- Market Research View -->
+    <div id="view-market-research" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="market-research-panel" style="flex:1;display:flex;min-width:0;">
+        <div id="market-research-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="market-research-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
+          <div id="market-research-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
+            <div id="market-research-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="confirmMarketResearchTask(true)">确认执行</button>
+              <button class="secondary" onclick="confirmMarketResearchTask(false)">拒绝</button>
+            </div>
+          </div>
+          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
+            <textarea id="market-research-input" placeholder="输入研究方向或确认开始调研..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMarketResearchMessage()}"></textarea>
+            <button onclick="sendMarketResearchMessage()" id="market-research-send-btn">发送</button>
+            <button class="secondary" onclick="leaveMarketResearch()">返回项目</button>
+          </div>
+        </div>
+        <div id="market-research-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
+          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Research Progress</h2>
+          <div id="market-research-progress" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Recommendation</h2>
+          <div id="market-research-recommendation" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Sources</h2>
+          <div id="market-research-sources" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="sidebar">
       <h2>任务状态</h2>
       <div id="task-info">
@@ -424,6 +456,7 @@
         if (!parts[1]) return { view: 'list' };
         if (parts[2] === 'chat') return { view: 'chat', projectId: parts[1] };
         if (parts[2] === 'discovery') return { view: 'discovery', projectId: parts[1] };
+        if (parts[2] === 'market-research') return { view: 'market-research', projectId: parts[1] };
         return { view: 'detail', projectId: parts[1] };
       }
       return { view: 'list' };
@@ -450,6 +483,12 @@
         document.getElementById('discovery-messages').innerHTML = '';
         addDiscoveryMessage('system', `已进入 Problem Discovery。项目 ID: ${routeInfo.projectId}\n\n请描述你的困扰、想法或遇到的问题，我会帮你逐步理清真实问题。`, 'system');
         await loadDiscoveryState();
+      } else if (routeInfo.view === 'market-research') {
+        currentProjectId = routeInfo.projectId;
+        showView('market-research');
+        document.getElementById('market-research-messages').innerHTML = '';
+        addMarketResearchMessage('system', `已进入 Market Research。项目 ID: ${routeInfo.projectId}\n\n我会基于 Problem Brief 进行市场调研，判断这个问题是否值得解决。`, 'system');
+        await loadMarketResearchState();
       }
     }
 
@@ -942,6 +981,212 @@
         addDiscoveryMessage('system', '确认失败：' + e.message, 'error');
         setStatus('failed', e.message);
         document.getElementById('discovery-send-btn').disabled = false;
+      }
+    }
+
+    // ---------------- Market Research ----------------
+
+    let marketResearchTaskId = null;
+    let marketResearchPollInterval = null;
+
+    function enterMarketResearch() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}/market-research`;
+    }
+
+    function leaveMarketResearch() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}`;
+    }
+
+    function addMarketResearchMessage(role, content, type = role) {
+      const chat = document.getElementById('market-research-messages');
+      const div = document.createElement('div');
+      div.className = 'msg ' + type;
+      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
+      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    const RESEARCH_STAGES = [
+      'understanding_problem',
+      'planning_research',
+      'searching_sources',
+      'analyzing_competitors',
+      'reviewing_feedback',
+      'generating_report',
+      'completed'
+    ];
+
+    function renderMarketResearchProgress(stage) {
+      const progressEl = document.getElementById('market-research-progress');
+      const index = RESEARCH_STAGES.indexOf(stage || 'understanding_problem');
+      let html = '';
+      for (let i = 0; i < RESEARCH_STAGES.length; i++) {
+        const name = RESEARCH_STAGES[i];
+        const label = name.replace(/_/g, ' ');
+        const color = i < index ? '#8b949e' : i === index ? '#00f0ff' : '#30363d';
+        html += `<div style="margin-bottom:6px;color:${color};">${i === index ? '▸ ' : ''}${label}</div>`;
+      }
+      progressEl.innerHTML = html || '<span style="color:#6e7681;">等待开始...</span>';
+    }
+
+    function renderMarketResearchState(data) {
+      const report = data.report || {};
+      document.getElementById('market-research-recommendation').innerHTML = `
+        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Recommendation:</span> <span style="color:#00f0ff;font-weight:600;">${escapeHtml(report.recommendation || 'none')}</span></div>
+        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Market Status:</span> ${escapeHtml(report.market_status || 'N/A')}</div>
+        <div><span style="color:#8b949e;">Competitors:</span> ${(report.competitors || []).length} · <span style="color:#8b949e;">Sources:</span> ${(report.sources || []).length}</div>
+      `;
+      const sources = data.sources || [];
+      const sourcesEl = document.getElementById('market-research-sources');
+      if (sources.length === 0) {
+        sourcesEl.innerHTML = '<span style="color:#6e7681;">暂无来源</span>';
+      } else {
+        sourcesEl.innerHTML = sources.map(s => {
+          const content = JSON.parse(s.content || '{}');
+          return `<div style="margin-bottom:8px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+            `<div style="font-weight:600;">${escapeHtml(content.title || s.title || 'Untitled')}</div>` +
+            `<div style="color:#8b949e;font-size:11px;">${escapeHtml(content.source_type || s.type || '')} · ${escapeHtml(content.confidence || '')} · ${escapeHtml(content.fact_type || '')}</div>` +
+            (content.url ? `<a href="${escapeHtml(content.url)}" target="_blank" style="color:#58a6ff;font-size:11px;word-break:break-all;">${escapeHtml(content.url)}</a>` : '') +
+            `</div>`;
+        }).join('');
+      }
+      renderMarketResearchProgress(report.recommendation ? 'completed' : 'understanding_problem');
+    }
+
+    async function loadMarketResearchState() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/market-research/state`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderMarketResearchState(data);
+      } catch (e) {
+        console.error('loadMarketResearchState error', e);
+      }
+    }
+
+    function renderMarketResearchConfirmDetail(step) {
+      const detailEl = document.getElementById('market-research-confirm-detail');
+      if (!step || !step.metadata || !step.metadata.tool) {
+        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
+        return;
+      }
+      const { tool, action, parameters } = step.metadata;
+      let paramsText = '';
+      if (parameters && Object.keys(parameters).length > 0) {
+        paramsText = '\n参数：\n' + Object.entries(parameters)
+          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join('\n');
+      }
+      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
+    }
+
+    async function sendMarketResearchMessage() {
+      const input = document.getElementById('market-research-input');
+      const btn = document.getElementById('market-research-send-btn');
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      input.value = '';
+      btn.disabled = true;
+      setStatus('thinking');
+      document.getElementById('market-research-confirm-box').classList.remove('active');
+      addMarketResearchMessage('user', msg);
+      addMarketResearchMessage('system', '已创建 market research 任务，等待 Kyrozen 处理...', 'system');
+
+      marketResearchTaskId = null;
+      clearInterval(marketResearchPollInterval);
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'market_research' })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+        marketResearchTaskId = data.task_id;
+        pollMarketResearchTask();
+        marketResearchPollInterval = setInterval(pollMarketResearchTask, 1000);
+      } catch (e) {
+        addMarketResearchMessage('system', '错误：' + e.message, 'error');
+        setStatus('failed', e.message);
+        btn.disabled = false;
+      }
+    }
+
+    async function pollMarketResearchTask() {
+      if (!marketResearchTaskId) return;
+      try {
+        const res = await fetch(`/api/tasks/${marketResearchTaskId}`);
+        if (!res.ok) return;
+        const task = await res.json();
+
+        if (task.status === 'waiting_confirmation') {
+          clearInterval(marketResearchPollInterval);
+          setStatus('waiting');
+          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
+          renderMarketResearchConfirmDetail(pending);
+          document.getElementById('market-research-confirm-box').classList.add('active');
+          document.getElementById('market-research-send-btn').disabled = false;
+          return;
+        }
+
+        if (task.status === 'completed' || task.status === 'failed') {
+          clearInterval(marketResearchPollInterval);
+          if (task.status === 'completed') {
+            setStatus('completed');
+            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
+            addMarketResearchMessage('assistant', answer);
+          } else {
+            setStatus('failed', task.errors.join('; '));
+            addMarketResearchMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
+          }
+          document.getElementById('market-research-send-btn').disabled = false;
+          await loadMarketResearchState();
+        } else {
+          const runningStep = task.steps.find(s => s.status === 'running');
+          if (runningStep) {
+            setStatus('calling', runningStep.description);
+          } else {
+            setStatus('thinking');
+          }
+        }
+      } catch (e) {
+        console.error('poll market research error', e);
+      }
+    }
+
+    async function confirmMarketResearchTask(confirm) {
+      if (!marketResearchTaskId) return;
+      document.getElementById('market-research-confirm-box').classList.remove('active');
+      setStatus('thinking');
+      document.getElementById('market-research-send-btn').disabled = true;
+      try {
+        const res = await fetch(`/api/tasks/${marketResearchTaskId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: confirm })
+        });
+        if (!res.ok) throw new Error('确认请求失败');
+        const task = await res.json();
+        if (task.status === 'waiting_confirmation') {
+          setStatus('waiting');
+          document.getElementById('market-research-confirm-box').classList.add('active');
+          return;
+        }
+        marketResearchPollInterval = setInterval(pollMarketResearchTask, 1000);
+        pollMarketResearchTask();
+      } catch (e) {
+        addMarketResearchMessage('system', '确认失败：' + e.message, 'error');
+        setStatus('failed', e.message);
+        document.getElementById('market-research-send-btn').disabled = false;
       }
     }
 

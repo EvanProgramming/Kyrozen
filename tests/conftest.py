@@ -10,6 +10,7 @@ import pytest
 
 from kyrozen.config import KyrozenConfig
 from kyrozen.models.base import ModelInterface, ModelResponse
+from kyrozen.project import KyrozenDatabase, ProjectManager
 
 
 class MockModel(ModelInterface):
@@ -52,3 +53,10 @@ def test_config(temp_dir: str) -> KyrozenConfig:
         memory_backend="memory",
         chroma_path=os.path.join(temp_dir, "chroma"),
     )
+
+
+@pytest.fixture
+def project_manager(test_config: KyrozenConfig) -> Iterator[ProjectManager]:
+    db = KyrozenDatabase(test_config.db_path)
+    pm = ProjectManager(db)
+    yield pm

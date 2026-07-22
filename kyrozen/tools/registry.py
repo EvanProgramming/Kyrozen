@@ -40,8 +40,14 @@ class ToolRegistry:
         return tool.execute(action, parameters)
 
 
-def get_default_registry(project_manager: "ProjectManager | None" = None) -> ToolRegistry:
-    """Return a registry with Phase 1, Phase 2, and Phase 3 tools pre-registered."""
+def get_default_registry(
+    project_manager: "ProjectManager | None" = None,
+    tavily_api_key: str | None = None,
+    serper_api_key: str | None = None,
+    github_token: str | None = None,
+    semantic_scholar_api_key: str | None = None,
+) -> ToolRegistry:
+    """Return a registry with Phase 1-4 tools pre-registered."""
     from .discovery_tools import (
         AssessConfidenceTool,
         RecordEvidenceTool,
@@ -49,6 +55,14 @@ def get_default_registry(project_manager: "ProjectManager | None" = None) -> Too
         SaveProblemBriefTool,
     )
     from .project_tools import RecordDecisionTool, UpdateProjectTool
+    from .research.tools import (
+        GitHubSearchTool,
+        PaperSearchTool,
+        RecordOpportunityDecisionTool,
+        SaveMarketResearchReportTool,
+        SaveResearchSourceTool,
+        WebSearchTool,
+    )
 
     registry = ToolRegistry()
     registry.register(FileReadTool())
@@ -63,4 +77,10 @@ def get_default_registry(project_manager: "ProjectManager | None" = None) -> Too
     registry.register(RecordEvidenceTool(project_manager))
     registry.register(AssessConfidenceTool(project_manager))
     registry.register(RecordProblemDecisionTool(project_manager))
+    registry.register(WebSearchTool(tavily_api_key=tavily_api_key, serper_api_key=serper_api_key))
+    registry.register(GitHubSearchTool(token=github_token))
+    registry.register(PaperSearchTool(api_key=semantic_scholar_api_key))
+    registry.register(SaveResearchSourceTool(project_manager))
+    registry.register(SaveMarketResearchReportTool(project_manager))
+    registry.register(RecordOpportunityDecisionTool(project_manager))
     return registry

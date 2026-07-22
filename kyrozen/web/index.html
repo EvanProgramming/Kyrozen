@@ -264,6 +264,7 @@
         <button onclick="enterDevelopment()">进入 Software Development</button>
         <button onclick="enterHardware()">进入 Hardware Development</button>
         <button onclick="enterTesting()">进入 Testing & Validation</button>
+        <button onclick="enterLearning()">进入 Learning Center</button>
         <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
         <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
       </div>
@@ -528,6 +529,39 @@
       </div>
     </div>
 
+    <!-- Learning & Proactive Improvement View -->
+    <div id="view-learning" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="learning-panel" style="flex:1;display:flex;min-width:0;">
+        <div id="learning-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="learning-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
+          <div id="learning-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
+            <div id="learning-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="confirmLearningTask(true)">确认执行</button>
+              <button class="secondary" onclick="confirmLearningTask(false)">拒绝</button>
+            </div>
+          </div>
+          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
+            <textarea id="learning-input" placeholder="输入学习指令，例如：分析这个项目并提取经验..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendLearningMessage()}"></textarea>
+            <button onclick="sendLearningMessage()" id="learning-send-btn">发送</button>
+            <button class="secondary" onclick="leaveLearning()">返回项目</button>
+          </div>
+        </div>
+        <div id="learning-sidebar" style="width:460px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
+          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Learning Records</h2>
+          <div id="learning-records" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Failure Knowledge</h2>
+          <div id="learning-failures" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Success Knowledge</h2>
+          <div id="learning-successes" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Improvement Suggestions</h2>
+          <div id="learning-suggestions" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="sidebar">
       <h2>任务状态</h2>
       <div id="task-info">
@@ -609,6 +643,7 @@
         if (parts[2] === 'development') return { view: 'development', projectId: parts[1] };
         if (parts[2] === 'hardware') return { view: 'hardware', projectId: parts[1] };
         if (parts[2] === 'testing') return { view: 'testing', projectId: parts[1] };
+        if (parts[2] === 'learning') return { view: 'learning', projectId: parts[1] };
         return { view: 'detail', projectId: parts[1] };
       }
       return { view: 'list' };
@@ -665,6 +700,13 @@
         document.getElementById('testing-messages').innerHTML = '';
         addTestingMessage('system', `已进入 Testing & Validation。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 验证产品是否真正解决了最初的问题，并生成迭代建议。`, 'system');
         await loadTestingState();
+      } else if (routeInfo.view === 'learning') {
+        currentProjectId = routeInfo.projectId;
+        showView('learning');
+        document.getElementById('learning-messages').innerHTML = '';
+        addLearningMessage('system', `已进入 Learning & Proactive Improvement。项目 ID: ${routeInfo.projectId}\n\n我会从项目历史中提取可复用经验，并主动发现改进机会。我不会自动修改项目内容。`, 'system');
+        await loadLearningState();
+        await loadImprovementState();
       }
     }
 
@@ -2015,6 +2057,277 @@
         addTestingMessage('system', '确认失败：' + e.message, 'error');
         setStatus('failed', e.message);
         document.getElementById('testing-send-btn').disabled = false;
+      }
+    }
+
+    // ---------------- Learning & Proactive Improvement ----------------
+
+    let learningTaskId = null;
+    let learningPollInterval = null;
+
+    function enterLearning() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}/learning`;
+    }
+
+    function leaveLearning() {
+      if (!currentProjectId) return;
+      location.hash = `#/projects/${currentProjectId}`;
+    }
+
+    function addLearningMessage(role, content, type = role) {
+      const chat = document.getElementById('learning-messages');
+      const div = document.createElement('div');
+      div.className = 'msg ' + type;
+      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
+      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    function renderLearningBadge(value, colorMap) {
+      const color = colorMap[value] || '#8b949e';
+      return `<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:10px;background:${color}22;color:${color};border:1px solid ${color}44;">${escapeHtml(value || 'unknown')}</span>`;
+    }
+
+    function renderLearningRecord(record) {
+      const typeColors = {
+        user_preference: '#58a6ff',
+        user_capability: '#a371f7',
+        project_fact: '#00f0ff',
+        product_decision: '#ffaa00',
+        validated_success: '#00ff88',
+        validated_failure: '#ff4466',
+        external_knowledge: '#8b949e'
+      };
+      const confidenceColors = { low: '#ffaa00', medium: '#58a6ff', high: '#00ff88' };
+      const verificationColors = {
+        unverified: '#8b949e',
+        user_provided: '#58a6ff',
+        externally_verified: '#00f0ff',
+        experiment_verified: '#ffaa00',
+        repeatedly_verified: '#00ff88'
+      };
+      const scopeColors = { private: '#ff4466', user: '#ffaa00', public: '#00ff88' };
+      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+        `<div style="font-weight:600;margin-bottom:4px;">${escapeHtml(record.memory || '')}</div>` +
+        `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">` +
+        renderLearningBadge(record.memory_type, typeColors) +
+        renderLearningBadge(record.confidence, confidenceColors) +
+        renderLearningBadge(record.verification_status, verificationColors) +
+        renderLearningBadge(record.scope, scopeColors) +
+        `</div>` +
+        `<div style="color:#8b949e;font-size:11px;">来源: ${escapeHtml(record.source || 'unknown')} · ${formatTime(record.created_at)}</div>` +
+        `</div>`;
+    }
+
+    function renderFailureKnowledge(failure) {
+      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #ff446644;border-radius:4px;">` +
+        `<div style="font-weight:600;color:#ff4466;margin-bottom:4px;">${escapeHtml(failure.problem || '')}</div>` +
+        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">原因:</span> ${escapeHtml(failure.cause || '')}</div>` +
+        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">解决:</span> ${escapeHtml(failure.solution || '')}</div>` +
+        `<div style="color:#8b949e;font-size:11px;">适用范围: ${escapeHtml(failure.affected_scope || '')} · 验证: ${escapeHtml(failure.verification || '')}</div>` +
+        `</div>`;
+    }
+
+    function renderSuccessKnowledge(success) {
+      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #00ff8844;border-radius:4px;">` +
+        `<div style="font-weight:600;color:#00ff88;margin-bottom:4px;">${escapeHtml(success.goal || '')}</div>` +
+        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">方案:</span> ${escapeHtml(success.solution || '')}</div>` +
+        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">条件:</span> ${escapeHtml(success.conditions || '')}</div>` +
+        `<div style="color:#8b949e;font-size:11px;">结果: ${escapeHtml(success.result || '')}</div>` +
+        `</div>`;
+    }
+
+    function renderSuggestion(suggestion) {
+      const priorityColors = { low: '#8b949e', medium: '#58a6ff', high: '#ff4466' };
+      const statusColors = {
+        new: '#00f0ff',
+        accepted: '#00ff88',
+        rejected: '#ff4466',
+        later: '#ffaa00',
+        ignored: '#8b949e'
+      };
+      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
+        `<div style="font-weight:600;margin-bottom:4px;">${escapeHtml(suggestion.suggestion || '')}</div>` +
+        `<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">${escapeHtml(suggestion.reason || '')}</div>` +
+        `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">` +
+        renderLearningBadge(suggestion.priority, priorityColors) +
+        renderLearningBadge(suggestion.status, statusColors) +
+        `<span style="color:#8b949e;font-size:11px;">${escapeHtml(suggestion.category || '')}</span>` +
+        `</div>` +
+        `<div style="color:#8b949e;font-size:11px;">影响: ${escapeHtml(suggestion.impact || '')}</div>` +
+        `</div>`;
+    }
+
+    async function loadLearningState() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/learning/state`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderLearningState(data);
+      } catch (e) {
+        console.error('loadLearningState error', e);
+      }
+    }
+
+    async function loadImprovementState() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/improvement/state`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderImprovementState(data);
+      } catch (e) {
+        console.error('loadImprovementState error', e);
+      }
+    }
+
+    function renderLearningState(data) {
+      const records = data.learning_records || [];
+      document.getElementById('learning-records').innerHTML = records.length === 0
+        ? '<span style="color:#6e7681;">暂无学习记录</span>'
+        : records.map(renderLearningRecord).join('');
+
+      const failures = data.failure_knowledge || [];
+      document.getElementById('learning-failures').innerHTML = failures.length === 0
+        ? '<span style="color:#6e7681;">暂无失败知识</span>'
+        : failures.map(renderFailureKnowledge).join('');
+
+      const successes = data.success_knowledge || [];
+      document.getElementById('learning-successes').innerHTML = successes.length === 0
+        ? '<span style="color:#6e7681;">暂无成功经验</span>'
+        : successes.map(renderSuccessKnowledge).join('');
+    }
+
+    function renderImprovementState(data) {
+      const suggestions = data.suggestions || [];
+      document.getElementById('learning-suggestions').innerHTML = suggestions.length === 0
+        ? '<span style="color:#6e7681;">暂无改进建议</span>'
+        : suggestions.map(renderSuggestion).join('');
+    }
+
+    function renderLearningConfirmDetail(step) {
+      const detailEl = document.getElementById('learning-confirm-detail');
+      if (!step || !step.metadata || !step.metadata.tool) {
+        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
+        return;
+      }
+      const { tool, action, parameters } = step.metadata;
+      let paramsText = '';
+      if (parameters && Object.keys(parameters).length > 0) {
+        paramsText = '\n参数：\n' + Object.entries(parameters)
+          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join('\n');
+      }
+      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
+    }
+
+    async function sendLearningMessage() {
+      const input = document.getElementById('learning-input');
+      const btn = document.getElementById('learning-send-btn');
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      input.value = '';
+      btn.disabled = true;
+      setStatus('thinking');
+      document.getElementById('learning-confirm-box').style.display = 'none';
+      addLearningMessage('user', msg);
+      addLearningMessage('system', '已创建 learning 任务，等待 Kyrozen 处理...', 'system');
+
+      learningTaskId = null;
+      clearInterval(learningPollInterval);
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'learning' })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+        learningTaskId = data.task_id;
+        pollLearningTask();
+        learningPollInterval = setInterval(pollLearningTask, 1000);
+      } catch (e) {
+        addLearningMessage('system', '错误：' + e.message, 'error');
+        setStatus('failed', e.message);
+        btn.disabled = false;
+      }
+    }
+
+    async function pollLearningTask() {
+      if (!learningTaskId) return;
+      try {
+        const res = await fetch(`/api/tasks/${learningTaskId}`);
+        if (!res.ok) return;
+        const task = await res.json();
+
+        if (task.status === 'waiting_confirmation') {
+          clearInterval(learningPollInterval);
+          setStatus('waiting');
+          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
+          renderLearningConfirmDetail(pending);
+          document.getElementById('learning-confirm-box').style.display = 'flex';
+          document.getElementById('learning-send-btn').disabled = false;
+          return;
+        }
+
+        if (task.status === 'completed' || task.status === 'failed') {
+          clearInterval(learningPollInterval);
+          if (task.status === 'completed') {
+            setStatus('completed');
+            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
+            addLearningMessage('assistant', answer);
+          } else {
+            setStatus('failed', task.errors.join('; '));
+            addLearningMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
+          }
+          document.getElementById('learning-send-btn').disabled = false;
+          await loadLearningState();
+          await loadImprovementState();
+        } else {
+          const runningStep = task.steps.find(s => s.status === 'running');
+          if (runningStep) {
+            setStatus('calling', runningStep.description);
+          } else {
+            setStatus('thinking');
+          }
+        }
+      } catch (e) {
+        console.error('poll learning error', e);
+      }
+    }
+
+    async function confirmLearningTask(confirm) {
+      if (!learningTaskId) return;
+      document.getElementById('learning-confirm-box').style.display = 'none';
+      setStatus('thinking');
+      document.getElementById('learning-send-btn').disabled = true;
+      try {
+        const res = await fetch(`/api/tasks/${learningTaskId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: confirm })
+        });
+        if (!res.ok) throw new Error('确认请求失败');
+        const task = await res.json();
+        if (task.status === 'waiting_confirmation') {
+          setStatus('waiting');
+          document.getElementById('learning-confirm-box').style.display = 'flex';
+          return;
+        }
+        learningPollInterval = setInterval(pollLearningTask, 1000);
+        pollLearningTask();
+      } catch (e) {
+        addLearningMessage('system', '确认失败：' + e.message, 'error');
+        setStatus('failed', e.message);
+        document.getElementById('learning-send-btn').disabled = false;
       }
     }
 

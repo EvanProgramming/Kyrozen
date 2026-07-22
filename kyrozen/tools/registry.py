@@ -42,12 +42,13 @@ class ToolRegistry:
 
 def get_default_registry(
     project_manager: "ProjectManager | None" = None,
+    memory: Any = None,
     tavily_api_key: str | None = None,
     serper_api_key: str | None = None,
     github_token: str | None = None,
     semantic_scholar_api_key: str | None = None,
 ) -> ToolRegistry:
-    """Return a registry with Phase 1-7 tools pre-registered."""
+    """Return a registry with Phase 1-9 tools pre-registered."""
     from .development_tools import (
         RecordDevelopmentDecisionTool,
         SaveDeploymentGuideTool,
@@ -98,6 +99,16 @@ def get_default_registry(
         SaveTestResultTool,
         SaveValidationReportTool,
     )
+    from .learning_tools import (
+        DeleteLearningRecordTool,
+        ExtractLearningFromEventTool,
+        RunProjectAnalysisTool,
+        SaveFailureKnowledgeTool,
+        SaveLearningRecordTool,
+        SaveSuccessKnowledgeTool,
+        SaveSuggestionTool,
+        UpdateSuggestionStatusTool,
+    )
 
     registry = ToolRegistry()
     registry.register(FileReadTool())
@@ -145,4 +156,12 @@ def get_default_registry(
     registry.register(SaveIterationPlanTool(project_manager))
     registry.register(RunSoftwareTestTool(project_manager))
     registry.register(RunHardwareTestTool(project_manager))
+    registry.register(SaveLearningRecordTool(project_manager, memory))
+    registry.register(SaveFailureKnowledgeTool(project_manager, memory))
+    registry.register(SaveSuccessKnowledgeTool(project_manager, memory))
+    registry.register(DeleteLearningRecordTool(project_manager, memory))
+    registry.register(SaveSuggestionTool(project_manager, memory))
+    registry.register(UpdateSuggestionStatusTool(project_manager, memory))
+    registry.register(ExtractLearningFromEventTool(project_manager, memory))
+    registry.register(RunProjectAnalysisTool(project_manager, memory))
     return registry

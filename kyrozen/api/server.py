@@ -16,6 +16,7 @@ from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
 from kyrozen.development.agent import SoftwareDevelopmentAgent
 from kyrozen.discovery import ProblemDiscoveryAgent
+from kyrozen.hardware.agent import HardwareDevelopmentAgent
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
 from kyrozen.models import ModelInterface, get_model_provider
@@ -31,6 +32,7 @@ _discovery_agent: ProblemDiscoveryAgent | None = None
 _research_agent: MarketResearchAgent | None = None
 _planning_agent: ProductPlanningAgent | None = None
 _development_agent: SoftwareDevelopmentAgent | None = None
+_hardware_agent: HardwareDevelopmentAgent | None = None
 _config: KyrozenConfig | None = None
 _db: KyrozenDatabase | None = None
 _project_manager: ProjectManager | None = None
@@ -61,11 +63,17 @@ def _get_development_agent() -> SoftwareDevelopmentAgent:
     return _development_agent
 
 
+def _get_hardware_agent() -> HardwareDevelopmentAgent:
+    if _hardware_agent is None:
+        raise RuntimeError("Hardware agent not initialized")
+    return _hardware_agent
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     project_id: str | None = Field(None, description="Project ID to associate with this chat")
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
-    mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, or development")
+    mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, development, or hardware")
 
 
 class ConfirmRequest(BaseModel):
@@ -138,7 +146,7 @@ def _project_memory(project_id: str) -> ProjectMemory:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _config, _db, _project_manager, _context_builder
+        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _config, _db, _project_manager, _context_builder
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -207,6 +215,15 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             logger=logger,
             project_manager=_project_manager,
         )
+        global _hardware_agent
+        _hardware_agent = HardwareDevelopmentAgent(
+            config=_config,
+            model=active_model,
+            tools=tools,
+            task_manager=task_manager,
+            logger=logger,
+            project_manager=_project_manager,
+        )
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
@@ -233,6 +250,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             agent = _get_planning_agent()
         elif request.mode == "development":
             agent = _get_development_agent()
+        elif request.mode == "hardware":
+            agent = _get_hardware_agent()
         else:
             agent = _get_agent()
         if agent.model is None:
@@ -255,6 +274,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 context = builder.build_planning_context(project)
             elif request.mode == "development":
                 context = builder.build_development_context(project)
+            elif request.mode == "hardware":
+                context = builder.build_hardware_context(project)
             else:
                 context = builder.build(project)
             user_input = f"{context}\n{request.message}"
@@ -666,6 +687,120 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "latest_plan_artifact_id": latest_plan.id if latest_plan else None,
             "latest_report_artifact_id": latest_report.id if latest_report else None,
             "latest_guide_artifact_id": latest_guide.id if latest_guide else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Hardware Development
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/hardware/state")
+    async def api_hardware_state(project_id: str):
+        pm = _get_project_manager()
+        if pm.get(project_id) is None:
+            raise HTTPException(404, "Project not found")
+        from kyrozen.hardware.models import (
+            BOM,
+            FirmwareProject,
+            HardwareArchitecture,
+            WiringDesign,
+        )
+
+        latest_arch = pm.get_latest_artifact(
+            project_id, "hardware_architecture", title="Hardware Architecture"
+        )
+        arch = HardwareArchitecture()
+        if latest_arch is not None:
+            import json
+            try:
+                arch = HardwareArchitecture.from_dict(json.loads(latest_arch.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_bom = pm.get_latest_artifact(project_id, "bom", title="Bill of Materials")
+        bom = BOM()
+        if latest_bom is not None:
+            import json
+            try:
+                bom = BOM.from_dict(json.loads(latest_bom.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_wiring = pm.get_latest_artifact(
+            project_id, "wiring_design", title="Wiring Design"
+        )
+        wiring = WiringDesign()
+        if latest_wiring is not None:
+            import json
+            try:
+                wiring = WiringDesign.from_dict(json.loads(latest_wiring.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_firmware = pm.get_latest_artifact(
+            project_id, "firmware_project", title="Firmware Project"
+        )
+        firmware = FirmwareProject()
+        if latest_firmware is not None:
+            import json
+            try:
+                firmware = FirmwareProject.from_dict(json.loads(latest_firmware.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        assembly_steps = []
+        debug_records = []
+        for artifact in pm.list_artifacts(project_id):
+            if artifact.type == "assembly_step":
+                try:
+                    from kyrozen.hardware.models import AssemblyStep
+                    assembly_steps.append(AssemblyStep.from_dict(json.loads(artifact.content)))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif artifact.type == "hardware_debug_record":
+                try:
+                    from kyrozen.hardware.models import HardwareDebugRecord
+                    debug_records.append(HardwareDebugRecord.from_dict(json.loads(artifact.content)))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        decisions = [
+            d for d in pm.list_decisions(project_id)
+            if d.decision.startswith("Hardware decision:")
+        ]
+
+        # Summarize git commits if hardware project exists
+        import subprocess
+        from pathlib import Path
+
+        git_log: list[str] = []
+        if _config is not None:
+            hardware_dir = Path(_config.project_dir(project_id)) / "hardware"
+            if (hardware_dir / ".git").exists():
+                try:
+                    result = subprocess.run(
+                        ["git", "-C", str(hardware_dir), "log", "--oneline", "-10"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if result.returncode == 0:
+                        git_log = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                except Exception:
+                    pass
+
+        return {
+            "project_id": project_id,
+            "architecture": arch.to_dict(),
+            "bom": bom.to_dict(),
+            "wiring": wiring.to_dict(),
+            "firmware": firmware.to_dict(),
+            "assembly_steps": [s.to_dict() for s in assembly_steps],
+            "debug_records": [r.to_dict() for r in debug_records],
+            "decisions": [d.to_dict() for d in decisions[-5:]],
+            "git_log": git_log,
+            "latest_arch_artifact_id": latest_arch.id if latest_arch else None,
+            "latest_bom_artifact_id": latest_bom.id if latest_bom else None,
+            "latest_wiring_artifact_id": latest_wiring.id if latest_wiring else None,
+            "latest_firmware_artifact_id": latest_firmware.id if latest_firmware else None,
         }
 
     return app

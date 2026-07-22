@@ -47,13 +47,25 @@ def get_default_registry(
     github_token: str | None = None,
     semantic_scholar_api_key: str | None = None,
 ) -> ToolRegistry:
-    """Return a registry with Phase 1-6 tools pre-registered."""
+    """Return a registry with Phase 1-7 tools pre-registered."""
     from .development_tools import (
         RecordDevelopmentDecisionTool,
         SaveDeploymentGuideTool,
         SaveFeatureImplementationTool,
         SaveTechnicalPlanTool,
         SaveTestReportTool,
+    )
+    from .hardware_tools import (
+        HardwareBridgeTool,
+        RecordHardwareDecisionTool,
+        SaveAssemblyStepTool,
+        SaveBOMTool,
+        SaveComponentTool,
+        SaveDebugRecordTool,
+        SaveFirmwareProjectTool,
+        SaveHardwareArchitectureTool,
+        SaveWiringDesignTool,
+        UpdatePurchaseStatusTool,
     )
     from .discovery_tools import (
         AssessConfidenceTool,
@@ -105,4 +117,14 @@ def get_default_registry(
     registry.register(SaveTestReportTool(project_manager))
     registry.register(SaveDeploymentGuideTool(project_manager))
     registry.register(RecordDevelopmentDecisionTool(project_manager))
+    registry.register(SaveHardwareArchitectureTool(project_manager))
+    registry.register(SaveComponentTool(project_manager))
+    registry.register(SaveBOMTool(project_manager))
+    registry.register(UpdatePurchaseStatusTool(project_manager))
+    registry.register(SaveWiringDesignTool(project_manager))
+    registry.register(SaveFirmwareProjectTool(project_manager))
+    registry.register(RecordHardwareDecisionTool(project_manager))
+    registry.register(SaveAssemblyStepTool(project_manager))
+    registry.register(SaveDebugRecordTool(project_manager))
+    registry.register(HardwareBridgeTool(project_manager))
     return registry

@@ -262,6 +262,7 @@
         <button onclick="enterMarketResearch()">进入 Market Research</button>
         <button onclick="enterPlanning()">进入 Product Planning</button>
         <button onclick="enterDevelopment()">进入 Software Development</button>
+        <button onclick="enterHardware()">进入 Hardware Development</button>
         <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
         <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
       </div>
@@ -452,6 +453,45 @@
       </div>
     </div>
 
+    <!-- Hardware Development View -->
+    <div id="view-hardware" class="view" style="display:flex;flex-direction:column;padding:0;">
+      <div id="hardware-panel" style="flex:1;display:flex;min-width:0;">
+        <div id="hardware-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="hardware-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
+          <div id="hardware-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
+            <div id="hardware-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="confirmHardwareTask(true)">确认执行</button>
+              <button class="secondary" onclick="confirmHardwareTask(false)">拒绝</button>
+            </div>
+          </div>
+          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
+            <textarea id="hardware-input" placeholder="输入硬件开发指令，例如：开始硬件开发..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendHardwareMessage()}"></textarea>
+            <button onclick="sendHardwareMessage()" id="hardware-send-btn">发送</button>
+            <button class="secondary" onclick="leaveHardware()">返回项目</button>
+          </div>
+        </div>
+        <div id="hardware-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
+          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Hardware Architecture</h2>
+          <div id="hardware-architecture" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">BOM</h2>
+          <div id="hardware-bom" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Wiring Design</h2>
+          <div id="hardware-wiring" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Firmware</h2>
+          <div id="hardware-firmware" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Assembly Steps</h2>
+          <div id="hardware-assembly" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Debug Records</h2>
+          <div id="hardware-debug" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Git Log</h2>
+          <div id="hardware-git" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="sidebar">
       <h2>任务状态</h2>
       <div id="task-info">
@@ -530,6 +570,8 @@
         if (parts[2] === 'discovery') return { view: 'discovery', projectId: parts[1] };
         if (parts[2] === 'market-research') return { view: 'market-research', projectId: parts[1] };
         if (parts[2] === 'planning') return { view: 'planning', projectId: parts[1] };
+        if (parts[2] === 'development') return { view: 'development', projectId: parts[1] };
+        if (parts[2] === 'hardware') return { view: 'hardware', projectId: parts[1] };
         return { view: 'detail', projectId: parts[1] };
       }
       return { view: 'list' };
@@ -568,6 +610,18 @@
         document.getElementById('planning-messages').innerHTML = '';
         addPlanningMessage('system', `已进入 Product Planning。项目 ID: ${routeInfo.projectId}\n\n我会基于 Problem Brief 和 Market Research Report 制定产品方向、MVP 范围和方案比较。`, 'system');
         await loadPlanningState();
+      } else if (routeInfo.view === 'development') {
+        currentProjectId = routeInfo.projectId;
+        showView('development');
+        document.getElementById('development-messages').innerHTML = '';
+        addDevelopmentMessage('system', `已进入 Software Development。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 把产品变成可运行的软件原型。`, 'system');
+        await loadDevelopmentState();
+      } else if (routeInfo.view === 'hardware') {
+        currentProjectId = routeInfo.projectId;
+        showView('hardware');
+        document.getElementById('hardware-messages').innerHTML = '';
+        addHardwareMessage('system', `已进入 Hardware Development。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 制定硬件方案、BOM、接线、固件和调试流程。`, 'system');
+        await loadHardwareState();
       }
     }
 

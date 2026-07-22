@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from kyrozen.api.server import create_app
 from kyrozen.config import KyrozenConfig
 
-from tests.conftest import MockModel
+from tests.conftest import MockModel, make_authenticated_app
 
 
 def _make_client(temp_dir: str, responses: list[str]) -> TestClient:
@@ -30,7 +30,7 @@ def _make_client(temp_dir: str, responses: list[str]) -> TestClient:
         log_level="ERROR",
         task_store_path=os.path.join(temp_dir, "tasks.json"),
     )
-    app = create_app(config=config, model=MockModel(responses))
+    app = make_authenticated_app(config, MockModel(responses))
     return TestClient(app)
 
 

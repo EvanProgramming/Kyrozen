@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --surface-elevated: #ffffff;
+    --text-primary: #1c1917;
+    --text-secondary: #57534e;
+    --text-muted: #78716c;
+    --border: #e7e5e4;
+    --border-strong: #d6d3d1;
+    --accent: #0ea5e9;
+    --accent-hover: #0284c7;
+    --accent-soft: #e0f2fe;
+    --shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+    --shadow-soft: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+  }
+
+  html {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--bg);
+    color: var(--text-primary);
+    line-height: 1.6;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: Georgia, Cambria, 'Times New Roman', serif;
+    font-weight: 500;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+  }
+
+  h1 { font-size: 2.5rem; line-height: 1.15; }
+  h2 { font-size: 1.75rem; line-height: 1.25; }
+  h3 { font-size: 1.25rem; line-height: 1.35; }
+
+  button {
+    font-family: inherit;
+  }
+
+  ::selection {
+    background-color: var(--accent-soft);
+    color: var(--accent-hover);
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center px-5 py-2.5 rounded-xl font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-400;
+  }
+
+  .btn-primary {
+    @apply btn bg-sky-500 text-white hover:bg-sky-600 shadow-soft;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white text-warm-700 border border-warm-200 hover:bg-warm-50;
+  }
+
+  .btn-ghost {
+    @apply btn text-warm-600 hover:bg-warm-100;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl border border-warm-200 shadow-card p-6;
+  }
+
+  .input {
+    @apply w-full px-4 py-3 bg-white border border-warm-200 rounded-xl text-warm-900 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-400 transition-all;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-warm-600 mb-1.5;
+  }
+}

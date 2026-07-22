@@ -31,8 +31,11 @@ class Project:
     status: str = "active"
     current_stage: str = "problem_discovery"
     next_steps: str = ""
+    blocked_reason: str = ""
+    progress: int = 0
     risks: list[str] = field(default_factory=list)
     id: str = field(default_factory=lambda: f"proj_{uuid.uuid4().hex[:8]}")
+    user_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -57,12 +60,15 @@ class Project:
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "user_id": self.user_id,
             "name": self.name,
             "description": self.description,
             "goal": self.goal,
             "status": self.status,
             "current_stage": self.current_stage,
             "next_steps": self.next_steps,
+            "blocked_reason": self.blocked_reason,
+            "progress": self.progress,
             "risks": self.risks,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -72,12 +78,15 @@ class Project:
     def from_dict(cls, data: dict[str, Any]) -> "Project":
         return cls(
             id=data.get("id") or f"proj_{uuid.uuid4().hex[:8]}",
+            user_id=data.get("user_id", ""),
             name=data.get("name", ""),
             description=data.get("description", ""),
             goal=data.get("goal", ""),
             status=data.get("status", "active"),
             current_stage=data.get("current_stage", "problem_discovery"),
             next_steps=data.get("next_steps", ""),
+            blocked_reason=data.get("blocked_reason", ""),
+            progress=data.get("progress", 0),
             risks=data.get("risks", []),
             created_at=data.get("created_at", datetime.now(timezone.utc).isoformat()),
             updated_at=data.get("updated_at", datetime.now(timezone.utc).isoformat()),

@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import asynccontextmanager
+import traceback
+import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from kyrozen.auth.context import current_user_ctx
+from kyrozen.auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_admin
 from kyrozen.config import KyrozenConfig, get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
@@ -21,10 +27,12 @@ from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
 from kyrozen.models import ModelInterface, get_model_provider
 from kyrozen.planning.agent import ProductPlanningAgent
-from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager
+from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager, SupabaseDatabase, create_database
+from kyrozen.project.project import PROJECT_STAGES
 from kyrozen.research.agent import MarketResearchAgent
 from kyrozen.testing.agent import TestingAgent
 from kyrozen.learning.agent import LearningAgent
+from kyrozen.learning.repository import LearningRepository
 from kyrozen.tools import get_default_registry
 
 
@@ -38,10 +46,10 @@ _hardware_agent: HardwareDevelopmentAgent | None = None
 _testing_agent: TestingAgent | None = None
 _learning_agent: LearningAgent | None = None
 _config: KyrozenConfig | None = None
-_db: KyrozenDatabase | None = None
+_db: KyrozenDatabase | SupabaseDatabase | None = None
 _project_manager: ProjectManager | None = None
 _context_builder: ProjectContextBuilder | None = None
-_learning_memory: JsonFileMemory | None = None
+_learning_repository: LearningRepository | None = None
 
 
 def _get_discovery_agent() -> ProblemDiscoveryAgent:
@@ -134,6 +142,27 @@ class CreateArtifactRequest(BaseModel):
     change_reason: str = ""
 
 
+class CreateFeedbackRequest(BaseModel):
+    type: str = Field(..., pattern="^(bug|feature_request|experience|ai_suggestion)$")
+    description: str = Field(..., min_length=1)
+    project_id: str | None = None
+    priority: str = Field("medium", pattern="^(low|medium|high|critical)$")
+
+
+class CreateEventRequest(BaseModel):
+    event_type: str = Field(..., min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = None
+
+
+class AnalyticsSummaryResponse(BaseModel):
+    total_events: int
+    events_by_type: dict[str, int]
+    unique_users: int
+    total_feedback: int
+    feedback_by_type: dict[str, int]
+
+
 def _get_agent() -> BaseAgent:
     if _agent is None:
         raise RuntimeError("Agent not initialized")
@@ -160,10 +189,69 @@ def _project_memory(project_id: str) -> ProjectMemory:
     return ProjectMemory(project_id, backend)
 
 
+def _get_owned_project(
+    project_id: str,
+    current_user: CurrentUser,
+) -> Any:
+    """Fetch a project and enforce user ownership."""
+    pm = _get_project_manager()
+    project = pm.get(project_id)
+    if project is None or project.user_id != current_user.user_id:
+        raise HTTPException(404, "Project not found")
+    return project
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _recommend_next_action(project: Any) -> dict[str, str] | None:
+    """Recommend the next action based on the project's current stage."""
+    mapping = {
+        "problem_discovery": {
+            "action": "和 AI 一起澄清问题",
+            "reason": "项目刚创建，需要先理解问题",
+            "target_mode": "discovery",
+        },
+        "market_research": {
+            "action": "进行市场调研",
+            "reason": "问题明确后需要了解市场",
+            "target_mode": "market_research",
+        },
+        "product_definition": {
+            "action": "规划产品定义",
+            "reason": "基于调研结果定义产品",
+            "target_mode": "planning",
+        },
+        "solution_design": {
+            "action": "选择技术方案",
+            "reason": "需要确定实现方案",
+            "target_mode": "planning",
+        },
+        "development": {
+            "action": "开始软件开发",
+            "reason": "进入实现阶段",
+            "target_mode": "development",
+        },
+        "testing": {
+            "action": "运行测试验证",
+            "reason": "验证产品是否满足要求",
+            "target_mode": "testing",
+        },
+        "iteration": {
+            "action": "根据反馈迭代",
+            "reason": "持续改进产品",
+            "target_mode": "learning",
+        },
+    }
+    return mapping.get(project.current_stage)
+
+
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _testing_agent, _learning_agent, _config, _db, _project_manager, _context_builder, _learning_memory
+        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _testing_agent, _learning_agent, _config, _db, _project_manager, _context_builder, _learning_repository
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -176,15 +264,16 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             logger.error(f"Failed to initialize model provider: {e}")
             active_model = None
 
-        _db = KyrozenDatabase(_config.db_path)
+        _db = create_database(_config)
         _project_manager = ProjectManager(_db)
         _context_builder = ProjectContextBuilder(_project_manager, InMemoryMemory())
         os.makedirs(_config.workspace_root, exist_ok=True)
-        _learning_memory = JsonFileMemory(os.path.join(_config.workspace_root, "learning_memory.json"))
+        _learning_repository = LearningRepository(_db)
 
         tools = get_default_registry(
             _project_manager,
-            memory=_learning_memory,
+            memory=InMemoryMemory(),
+            learning_repository=_learning_repository,
             tavily_api_key=_config.tavily_api_key,
             serper_api_key=_config.serper_api_key,
             github_token=_config.github_token,
@@ -261,13 +350,63 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             task_manager=task_manager,
             logger=logger,
             project_manager=_project_manager,
-            memory=_learning_memory,
+            memory=_learning_repository,
         )
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
 
     app = FastAPI(title="Kyrozen Core API", version="0.2.0", lifespan=lifespan)
+
+    resolved_config = config or get_config()
+    allow_origins = resolved_config.cors_origins if resolved_config.cors_origins else ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        logger = get_logger(_config.log_level if _config else "info")
+        logger.error(f"Unhandled exception at {request.method} {request.url.path}: {exc}")
+
+        payload = None
+        if (
+            request.method in ("POST", "PUT", "PATCH")
+            and request.url.path not in ("/api/chat", "/api/auth/me", "/api/auth/signin", "/api/auth/signup")
+        ):
+            try:
+                body = await request.body()
+                if body and len(body) <= 10 * 1024:
+                    try:
+                        payload = json.loads(body)
+                    except Exception:
+                        payload = {"raw": body.decode("utf-8", errors="replace")}
+            except Exception:
+                pass
+
+        if _db is not None:
+            try:
+                _db.save_error({
+                    "user_id": "",
+                    "project_id": "",
+                    "endpoint": request.url.path,
+                    "method": request.method,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "stack": traceback.format_exc(),
+                    "payload": payload,
+                })
+            except Exception:
+                logger.error("Failed to persist error log", exc_info=True)
+
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
@@ -277,10 +416,25 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         return HTMLResponse("<h1>Kyrozen Core</h1><p>Web UI not found.</p>")
 
     # ------------------------------------------------------------------
+    # Auth
+    # ------------------------------------------------------------------
+    @app.get("/api/auth/me")
+    async def api_auth_me(current_user: CurrentUser = Depends(get_current_user)):
+        return {
+            "user_id": current_user.user_id,
+            "email": current_user.email,
+            "name": current_user.name,
+            "role": current_user.role,
+        }
+
+    # ------------------------------------------------------------------
     # Chat
     # ------------------------------------------------------------------
     @app.post("/api/chat")
-    async def api_chat(request: ChatRequest):
+    async def api_chat(
+        request: ChatRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         if request.mode == "discovery":
             agent = _get_discovery_agent()
         elif request.mode == "market_research":
@@ -302,10 +456,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
         user_input = request.message
         if request.project_id:
-            pm = _get_project_manager()
-            project = pm.get(request.project_id)
-            if project is None:
-                raise HTTPException(404, f"Project '{request.project_id}' not found")
+            project = _get_owned_project(request.project_id, current_user)
             builder = _get_context_builder()
             # Swap the context builder's memory backend to the project's memory file
             builder.memory = _project_memory(request.project_id)
@@ -328,7 +479,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             user_input = f"{context}\n{request.message}"
             # Ensure the agent uses the project's memory for this task
             if request.mode == "learning":
-                agent.memory = _learning_memory
+                agent.memory = _learning_repository
             else:
                 agent.memory = _project_memory(request.project_id)
         else:
@@ -344,19 +495,30 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(500, f"Agent error: {e}")
 
     @app.get("/api/tasks/{task_id}")
-    async def api_get_task(task_id: str):
+    async def api_get_task(
+        task_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         agent = _get_agent()
         task = agent.task_manager.get(task_id)
         if task is None:
             raise HTTPException(404, "Task not found")
+        if task.project_id:
+            _get_owned_project(task.project_id, current_user)
         return task.to_dict()
 
     @app.post("/api/tasks/{task_id}/confirm")
-    async def api_confirm_task(task_id: str, request: ConfirmRequest):
+    async def api_confirm_task(
+        task_id: str,
+        request: ConfirmRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         agent = _get_agent()
         task = agent.task_manager.get(task_id)
         if task is None:
             raise HTTPException(404, "Task not found")
+        if task.project_id:
+            _get_owned_project(task.project_id, current_user)
         if task.status != "waiting_confirmation":
             raise HTTPException(400, f"Task is not waiting for confirmation (status={task.status})")
         if not request.confirmed:
@@ -366,12 +528,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
         user_input = task.description
         if task.project_id:
-            pm = _get_project_manager()
-            project = pm.get(task.project_id)
-            if project is not None:
-                builder = _get_context_builder()
-                builder.memory = _project_memory(task.project_id)
-                user_input = f"{builder.build(project)}\n{task.description}"
+            project = _get_owned_project(task.project_id, current_user)
+            builder = _get_context_builder()
+            builder.memory = _project_memory(task.project_id)
+            user_input = f"{builder.build(project)}\n{task.description}"
             agent.memory = _project_memory(task.project_id)
 
         task.update_status("running")
@@ -380,8 +540,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         return task.to_dict()
 
     @app.get("/api/tasks")
-    async def api_list_tasks(project_id: str | None = None):
+    async def api_list_tasks(
+        project_id: str | None = None,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         agent = _get_agent()
+        if project_id:
+            _get_owned_project(project_id, current_user)
         return [task.to_dict() for task in agent.task_manager.list_tasks(project_id=project_id)]
 
     @app.get("/api/tools")
@@ -390,7 +555,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         return {"tools": agent.tools.list_schemas()}
 
     @app.post("/api/tools/execute")
-    async def api_execute_tool(request: ToolExecuteRequest):
+    async def api_execute_tool(
+        request: ToolExecuteRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         agent = _get_agent()
         decision = agent.permission.check(request.tool, request.action, request.parameters)
         if not decision.allowed:
@@ -408,7 +576,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         }
 
     @app.get("/api/config")
-    async def api_config():
+    async def api_config(current_user: CurrentUser = Depends(get_current_user)):
         if _config is None:
             raise HTTPException(503, "Config not loaded")
         return {
@@ -425,13 +593,17 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # Projects
     # ------------------------------------------------------------------
     @app.post("/api/projects")
-    async def api_create_project(request: CreateProjectRequest):
+    async def api_create_project(
+        request: CreateProjectRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
         project = pm.create(
             name=request.name,
             description=request.description,
             goal=request.goal,
             initial_idea=request.initial_idea,
+            user_id=current_user.user_id,
         )
         # Ensure project directory and memory file exist
         if _config is not None:
@@ -440,16 +612,17 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         return project.to_dict()
 
     @app.get("/api/projects")
-    async def api_list_projects():
+    async def api_list_projects(current_user: CurrentUser = Depends(get_current_user)):
         pm = _get_project_manager()
-        return [p.to_dict() for p in pm.list()]
+        return [p.to_dict() for p in pm.list(user_id=current_user.user_id)]
 
     @app.get("/api/projects/{project_id}")
-    async def api_get_project(project_id: str):
+    async def api_get_project(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        project = pm.get(project_id)
-        if project is None:
-            raise HTTPException(404, "Project not found")
+        project = _get_owned_project(project_id, current_user)
         data = project.to_dict()
         data["recent_tasks"] = [t.to_dict() for t in pm.list_tasks(project_id)[:5]]
         data["recent_decisions"] = [d.to_dict() for d in pm.list_decisions(project_id)[:5]]
@@ -457,8 +630,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         return data
 
     @app.put("/api/projects/{project_id}")
-    async def api_update_project(project_id: str, request: UpdateProjectRequest):
+    async def api_update_project(
+        project_id: str,
+        request: UpdateProjectRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
         updates = {k: v for k, v in request.model_dump().items() if v is not None}
         project = pm.update(project_id, **updates)
         if project is None:
@@ -466,30 +644,97 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         return project.to_dict()
 
     @app.delete("/api/projects/{project_id}")
-    async def api_archive_project(project_id: str):
+    async def api_archive_project(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
         project = pm.archive(project_id)
         if project is None:
             raise HTTPException(404, "Project not found")
         return project.to_dict()
 
-    @app.get("/api/projects/{project_id}/tasks")
-    async def api_project_tasks(project_id: str):
+    @app.get("/api/projects/{project_id}/state")
+    async def api_project_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        project = _get_owned_project(project_id, current_user)
+        next_action = _recommend_next_action(project)
+        return {
+            "project_id": project_id,
+            "stage": project.current_stage,
+            "progress": project.progress,
+            "blocked_reason": project.blocked_reason or None,
+            "next_action": next_action,
+        }
+
+    @app.post("/api/projects/{project_id}/advance")
+    async def api_advance_project(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
+        project = _get_owned_project(project_id, current_user)
+        stages = list(PROJECT_STAGES)
+        try:
+            current_index = stages.index(project.current_stage)
+        except ValueError:
+            current_index = -1
+        max_index = len(stages) - 1
+        if current_index < max_index:
+            next_index = current_index + 1
+            new_stage = stages[next_index]
+            original_stage = project.current_stage
+            project.current_stage = new_stage
+            next_action = _recommend_next_action(project)
+            project.current_stage = original_stage
+            next_steps = next_action["action"] if next_action else ""
+            updated = pm.update(
+                project_id,
+                current_stage=new_stage,
+                progress=next_index * 100 // max_index,
+                next_steps=next_steps,
+            )
+        else:
+            next_action = _recommend_next_action(project)
+            updated = pm.update(
+                project_id,
+                status="completed",
+                progress=100,
+                next_steps=next_action["action"] if next_action else "",
+            )
+        if updated is None:
             raise HTTPException(404, "Project not found")
+        return updated.to_dict()
+
+    @app.get("/api/projects/{project_id}/tasks")
+    async def api_project_tasks(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
         return [t.to_dict() for t in pm.list_tasks(project_id)]
 
     @app.get("/api/projects/{project_id}/decisions")
-    async def api_project_decisions(project_id: str):
+    async def api_project_decisions(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         return [d.to_dict() for d in pm.list_decisions(project_id)]
 
     @app.post("/api/projects/{project_id}/decisions")
-    async def api_create_decision(project_id: str, request: CreateDecisionRequest):
+    async def api_create_decision(
+        project_id: str,
+        request: CreateDecisionRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
         try:
             decision = pm.add_decision(
                 project_id=project_id,
@@ -504,15 +749,22 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(404, str(e))
 
     @app.get("/api/projects/{project_id}/artifacts")
-    async def api_project_artifacts(project_id: str):
+    async def api_project_artifacts(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         return [a.to_dict() for a in pm.list_artifacts(project_id)]
 
     @app.post("/api/projects/{project_id}/artifacts")
-    async def api_create_artifact(project_id: str, request: CreateArtifactRequest):
+    async def api_create_artifact(
+        project_id: str,
+        request: CreateArtifactRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
         try:
             artifact = pm.save_artifact(
                 project_id=project_id,
@@ -526,21 +778,120 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(404, str(e))
 
     @app.get("/api/projects/{project_id}/artifacts/{artifact_id}")
-    async def api_get_artifact(project_id: str, artifact_id: str):
+    async def api_get_artifact(
+        project_id: str,
+        artifact_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
         artifact = pm.get_artifact(project_id, artifact_id)
         if artifact is None:
             raise HTTPException(404, "Artifact not found")
         return artifact.to_dict()
 
     # ------------------------------------------------------------------
+    # Feedback, Analytics & Error Monitoring
+    # ------------------------------------------------------------------
+    @app.post("/api/feedback")
+    async def api_create_feedback(
+        request: CreateFeedbackRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        if _db is None:
+            raise HTTPException(503, "Database not initialized")
+        if request.project_id:
+            _get_owned_project(request.project_id, current_user)
+        feedback_id = str(uuid.uuid4())
+        now = _utc_now_iso()
+        feedback = {
+            "id": feedback_id,
+            "user_id": current_user.user_id,
+            "project_id": request.project_id,
+            "type": request.type,
+            "description": request.description,
+            "priority": request.priority,
+            "status": "open",
+            "metadata": {},
+            "created_at": now,
+            "updated_at": now,
+        }
+        _db.save_feedback(feedback)
+        return feedback
+
+    @app.get("/api/feedback")
+    async def api_list_feedback(
+        current_user: CurrentUser = Depends(get_current_user),
+        admin: CurrentUser = Depends(require_admin),
+    ):
+        if _db is None:
+            raise HTTPException(503, "Database not initialized")
+        if admin.is_admin():
+            return _db.list_feedback()
+        return _db.list_feedback(user_id=current_user.user_id)
+
+    @app.post("/api/events")
+    async def api_create_event(
+        request: CreateEventRequest,
+        current_user: CurrentUser | None = Depends(get_current_user_optional),
+    ):
+        if _db is None:
+            raise HTTPException(503, "Database not initialized")
+        user_id = current_user.user_id if current_user else None
+        if request.project_id and current_user:
+            _get_owned_project(request.project_id, current_user)
+        event = {
+            "user_id": user_id,
+            "project_id": request.project_id,
+            "event_type": request.event_type,
+            "payload": request.payload,
+            "session_id": request.session_id,
+            "created_at": _utc_now_iso(),
+        }
+        _db.save_event(event)
+        return {"status": "ok"}
+
+    @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
+    async def api_analytics_summary(
+        admin: CurrentUser = Depends(require_admin),
+    ):
+        if _db is None:
+            raise HTTPException(503, "Database not initialized")
+        events = _db.list_events(limit=10000)
+        feedback = _db.list_feedback()
+        events_by_type: dict[str, int] = {}
+        unique_users: set[str] = set()
+        for event in events:
+            event_type = event.get("event_type", "unknown")
+            events_by_type[event_type] = events_by_type.get(event_type, 0) + 1
+            user_id = event.get("user_id")
+            if user_id:
+                unique_users.add(user_id)
+        feedback_by_type: dict[str, int] = {}
+        for item in feedback:
+            feedback_type = item.get("type", "unknown")
+            feedback_by_type[feedback_type] = feedback_by_type.get(feedback_type, 0) + 1
+            user_id = item.get("user_id")
+            if user_id:
+                unique_users.add(user_id)
+        return AnalyticsSummaryResponse(
+            total_events=len(events),
+            events_by_type=events_by_type,
+            unique_users=len(unique_users),
+            total_feedback=len(feedback),
+            feedback_by_type=feedback_by_type,
+        )
+
+    # ------------------------------------------------------------------
     # Problem Discovery
     # ------------------------------------------------------------------
     @app.get("/api/projects/{project_id}/problem-discovery/state")
-    async def api_discovery_state(project_id: str):
+    async def api_discovery_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         from kyrozen.discovery.brief import ProblemBrief
         from kyrozen.discovery.question_engine import QuestionEngine
 
@@ -565,10 +916,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # Market Research
     # ------------------------------------------------------------------
     @app.get("/api/projects/{project_id}/market-research/state")
-    async def api_market_research_state(project_id: str):
+    async def api_market_research_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         from kyrozen.research.models import MarketResearchReport
 
         latest_report = pm.get_latest_artifact(
@@ -599,10 +952,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # Product Planning
     # ------------------------------------------------------------------
     @app.get("/api/projects/{project_id}/planning/state")
-    async def api_planning_state(project_id: str):
+    async def api_planning_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         from kyrozen.planning.models import PRD, ProductBrief, SolutionComparison
 
         latest_brief = pm.get_latest_artifact(project_id, "product_brief", title="Product Brief")
@@ -651,10 +1006,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # Software Development
     # ------------------------------------------------------------------
     @app.get("/api/projects/{project_id}/development/state")
-    async def api_development_state(project_id: str):
+    async def api_development_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         from kyrozen.development.models import (
             DeploymentGuide,
             FeatureImplementation,
@@ -743,10 +1100,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # Hardware Development
     # ------------------------------------------------------------------
     @app.get("/api/projects/{project_id}/hardware/state")
-    async def api_hardware_state(project_id: str):
+    async def api_hardware_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         from kyrozen.hardware.models import (
             BOM,
             FirmwareProject,
@@ -857,10 +1216,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # Testing & Validation
     # ------------------------------------------------------------------
     @app.get("/api/projects/{project_id}/testing/state")
-    async def api_testing_state(project_id: str):
+    async def api_testing_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
         from kyrozen.testing.models import TestPlan, ValidationReport
 
         latest_test_plan = pm.get_latest_artifact(project_id, "test_plan", title="Test Plan")
@@ -932,31 +1293,31 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # Learning & Proactive Improvement
     # ------------------------------------------------------------------
     @app.get("/api/projects/{project_id}/learning/state")
-    async def api_learning_state(project_id: str):
+    async def api_learning_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
 
-        memory = _learning_memory
+        repo = _learning_repository
         learning_records = []
         failure_knowledge = []
         success_knowledge = []
-        if memory is not None:
-            for record in memory.query(category="learning", limit=100):
-                try:
-                    data = json.loads(record.content)
-                    memory_type = record.metadata.get("memory_type", "")
-                    if memory_type == "validated_failure":
-                        from kyrozen.learning.models import FailureKnowledge
-                        failure_knowledge.append(FailureKnowledge.from_dict(data).to_dict())
-                    elif memory_type == "validated_success":
-                        from kyrozen.learning.models import SuccessKnowledge
-                        success_knowledge.append(SuccessKnowledge.from_dict(data).to_dict())
-                    else:
-                        from kyrozen.learning.models import LearningRecord
-                        learning_records.append(LearningRecord.from_dict(data).to_dict())
-                except (json.JSONDecodeError, ValueError):
-                    continue
+        if repo is not None:
+            for record in repo.list_records(source_project_id=project_id, limit=100):
+                if record.memory_type == "validated_failure":
+                    failure_knowledge.append(record.to_dict())
+                elif record.memory_type == "validated_success":
+                    success_knowledge.append(record.to_dict())
+                else:
+                    learning_records.append(record.to_dict())
+            failure_knowledge.extend(
+                f.to_dict() for f in repo.list_failures(source_project_id=project_id, limit=100)
+            )
+            success_knowledge.extend(
+                s.to_dict() for s in repo.list_successes(source_project_id=project_id, limit=100)
+            )
 
         return {
             "project_id": project_id,
@@ -966,21 +1327,20 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         }
 
     @app.get("/api/projects/{project_id}/improvement/state")
-    async def api_improvement_state(project_id: str):
+    async def api_improvement_state(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
         pm = _get_project_manager()
-        if pm.get(project_id) is None:
-            raise HTTPException(404, "Project not found")
+        _get_owned_project(project_id, current_user)
 
-        memory = _learning_memory
+        repo = _learning_repository
         suggestions = []
-        if memory is not None:
-            for record in memory.query(category="suggestion", limit=100, source_project_id=project_id):
-                try:
-                    data = json.loads(record.content)
-                    from kyrozen.learning.models import Suggestion
-                    suggestions.append(Suggestion.from_dict(data).to_dict())
-                except (json.JSONDecodeError, ValueError):
-                    continue
+        if repo is not None:
+            suggestions = [
+                s.to_dict()
+                for s in repo.list_suggestions(source_project_id=project_id, limit=100)
+            ]
 
         return {
             "project_id": project_id,

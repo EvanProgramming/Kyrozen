@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { getProject, getProjectState } from '../api/projects';
+import { sendChatMessage, getTask, confirmTask } from '../api/chat';
 import { handleApiError } from '../api/client';
 import type { Project, ProjectState } from '../types/api';
-import { ChatIcon, DocumentIcon, SparklesIcon } from '../components/Icons';
+import { ChatIcon, DocumentIcon, SendIcon, SparklesIcon } from '../components/Icons';
 
 const STAGES = [
   { id: 'problem_discovery', label: '问题发现', mode: 'discovery' },
@@ -17,6 +18,13 @@ const STAGES = [
   { id: 'iteration', label: '迭代优化', mode: 'learning' },
 ];
 
+type Message = {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  status?: 'loading' | 'error';
+  taskId?: string;
+};
+
 export function ProjectWorkspacePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
@@ -24,6 +32,19 @@ export function ProjectWorkspacePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'chat'>('overview');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    taskId: string;
+    tool: string;
+    action: string;
+    parameters: Record<string, unknown>;
+    reason?: string;
+  } | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
@@ -45,6 +66,151 @@ export function ProjectWorkspacePage() {
     loadData();
   }, [projectId]);
 
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!project) return;
+    if (activeTab === 'chat' && messages.length === 0) {
+      const stageLabel = STAGES.find((s) => s.id === project.current_stage)?.label ?? project.current_stage;
+      setMessages([
+        { role: 'system', content: `我是 Kyrozen，你的 AI 产品开发伙伴。当前阶段：${stageLabel}。告诉我你想做什么。` },
+      ]);
+    }
+  }, [activeTab, project, messages.length]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, pendingConfirmation]);
+
+  function stopPolling() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
+
+  function startPolling(taskId: string) {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const task = await getTask(taskId);
+        if (task.status === 'completed') {
+          stopPolling();
+          const answer =
+            typeof task.result === 'string'
+              ? task.result
+              : task.result?.answer ?? JSON.stringify(task.result) ?? '已完成';
+          updateMessageByTaskId(taskId, { content: answer, status: undefined });
+          setIsSending(false);
+        } else if (task.status === 'failed') {
+          stopPolling();
+          updateMessageByTaskId(taskId, { content: `任务失败: ${task.errors.join(', ')}`, status: 'error' });
+          setIsSending(false);
+        } else if (task.status === 'cancelled') {
+          stopPolling();
+          updateMessageByTaskId(taskId, { content: '已取消', status: 'error' });
+          setIsSending(false);
+        } else if (task.status === 'waiting_confirmation') {
+          stopPolling();
+          const latestStep = [...task.steps].reverse().find((s) => s.status === 'waiting_confirmation');
+          const metadata = latestStep?.metadata;
+          if (metadata) {
+            setPendingConfirmation({
+              taskId,
+              tool: metadata.tool ?? '',
+              action: metadata.action ?? '',
+              parameters: metadata.parameters ?? {},
+              reason: latestStep?.description,
+            });
+            updateMessageByTaskId(taskId, { content: latestStep?.description || '等待确认', status: undefined });
+          } else {
+            updateMessageByTaskId(taskId, { content: '等待确认', status: undefined });
+          }
+          setIsSending(false);
+        }
+      } catch (err) {
+        stopPolling();
+        updateMessageByTaskId(taskId, { content: `轮询失败: ${handleApiError(err)}`, status: 'error' });
+        setIsSending(false);
+      }
+    }, 1500);
+  }
+
+  function updateMessageByTaskId(taskId: string, updates: Partial<Message>) {
+    setMessages((prev) => prev.map((m) => (m.taskId === taskId ? { ...m, ...updates } : m)));
+  }
+
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    if (!input.trim() || isSending || !project || !projectId) return;
+
+    const userContent = input.trim();
+    setInput('');
+    setMessages((prev) => [...prev, { role: 'user', content: userContent }]);
+    setIsSending(true);
+
+    try {
+      const mode = STAGES.find((s) => s.id === project.current_stage)?.mode ?? project.current_stage;
+      const response = await sendChatMessage({ message: userContent, project_id: projectId, mode });
+      const assistantTaskId = response.task_id;
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: '', status: 'loading', taskId: assistantTaskId },
+      ]);
+      startPolling(assistantTaskId);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `发送失败: ${handleApiError(err)}`, status: 'error' },
+      ]);
+      setIsSending(false);
+    }
+  }
+
+  async function handleConfirm(confirmed: boolean) {
+    if (!pendingConfirmation) return;
+    const { taskId } = pendingConfirmation;
+    setPendingConfirmation(null);
+    setIsSending(true);
+    updateMessageByTaskId(taskId, { content: confirmed ? '正在执行...' : '已取消', status: confirmed ? 'loading' : 'error' });
+
+    try {
+      const task = await confirmTask(taskId, confirmed);
+      if (task.status === 'completed') {
+        stopPolling();
+        const answer =
+          typeof task.result === 'string'
+            ? task.result
+            : task.result?.answer ?? JSON.stringify(task.result) ?? '已完成';
+        updateMessageByTaskId(taskId, { content: answer, status: undefined });
+        setIsSending(false);
+      } else if (task.status === 'failed') {
+        stopPolling();
+        updateMessageByTaskId(taskId, { content: `任务失败: ${task.errors.join(', ')}`, status: 'error' });
+        setIsSending(false);
+      } else if (task.status === 'cancelled') {
+        stopPolling();
+        updateMessageByTaskId(taskId, { content: '已取消', status: 'error' });
+        setIsSending(false);
+      } else if (confirmed) {
+        startPolling(taskId);
+      } else {
+        updateMessageByTaskId(taskId, { content: '已取消', status: 'error' });
+        setIsSending(false);
+      }
+    } catch (err) {
+      updateMessageByTaskId(taskId, { content: `确认失败: ${handleApiError(err)}`, status: 'error' });
+      setIsSending(false);
+    }
+  }
+
   if (isLoading) {
     return (
       <Layout>
@@ -56,9 +222,7 @@ export function ProjectWorkspacePage() {
   if (error || !project) {
     return (
       <Layout>
-        <div className="card text-center py-20 text-red-600">
-          {error || '项目不存在'}
-        </div>
+        <div className="card text-center py-20 text-red-600">{error || '项目不存在'}</div>
       </Layout>
     );
   }
@@ -71,9 +235,7 @@ export function ProjectWorkspacePage() {
             <span className="px-3 py-1 bg-sky-50 text-sky-700 text-xs font-medium rounded-full">
               {project.current_stage}
             </span>
-            <span className="px-3 py-1 bg-warm-100 text-warm-600 text-xs rounded-full">
-              {project.status}
-            </span>
+            <span className="px-3 py-1 bg-warm-100 text-warm-600 text-xs rounded-full">{project.status}</span>
           </div>
           <h1 className="mb-2">{project.name}</h1>
           <p className="text-warm-500">{project.description || '暂无项目描述'}</p>
@@ -83,9 +245,7 @@ export function ProjectWorkspacePage() {
           {/* Sidebar */}
           <div className="lg:col-span-1">
             <div className="card p-4">
-              <h3 className="text-sm font-medium text-warm-500 uppercase tracking-wide mb-4">
-                开发阶段
-              </h3>
+              <h3 className="text-sm font-medium text-warm-500 uppercase tracking-wide mb-4">开发阶段</h3>
               <nav className="space-y-1">
                 {STAGES.map((stage) => (
                   <button
@@ -123,16 +283,9 @@ export function ProjectWorkspacePage() {
                       <h3 className="text-lg mb-2">推荐下一步</h3>
                       {projectState?.next_action ? (
                         <>
-                          <p className="text-warm-900 font-medium mb-2">
-                            {projectState.next_action.action}
-                          </p>
-                          <p className="text-sm text-warm-500 mb-4">
-                            {projectState.next_action.reason}
-                          </p>
-                          <button
-                            onClick={() => setActiveTab('chat')}
-                            className="btn-primary text-sm"
-                          >
+                          <p className="text-warm-900 font-medium mb-2">{projectState.next_action.action}</p>
+                          <p className="text-sm text-warm-500 mb-4">{projectState.next_action.reason}</p>
+                          <button onClick={() => setActiveTab('chat')} className="btn-primary text-sm">
                             <ChatIcon className="w-4 h-4 mr-2" />
                             开始对话
                           </button>
@@ -151,9 +304,7 @@ export function ProjectWorkspacePage() {
                       <DocumentIcon className="w-5 h-5 text-sky-500" />
                       <h3 className="text-lg">项目目标</h3>
                     </div>
-                    <p className="text-warm-600">
-                      {project.goal || '尚未设定项目目标'}
-                    </p>
+                    <p className="text-warm-600">{project.goal || '尚未设定项目目标'}</p>
                   </div>
 
                   <div className="card">
@@ -161,9 +312,7 @@ export function ProjectWorkspacePage() {
                       <SparklesIcon className="w-5 h-5 text-sky-500" />
                       <h3 className="text-lg">下一步计划</h3>
                     </div>
-                    <p className="text-warm-600">
-                      {project.next_steps || '暂无下一步计划'}
-                    </p>
+                    <p className="text-warm-600">{project.next_steps || '暂无下一步计划'}</p>
                   </div>
                 </div>
 
@@ -180,19 +329,88 @@ export function ProjectWorkspacePage() {
                 </div>
               </>
             ) : (
-              <div className="card min-h-[500px]">
+              <div className="card min-h-[500px] flex flex-col">
                 <div className="flex items-center gap-3 mb-6">
                   <ChatIcon className="w-5 h-5 text-sky-500" />
                   <h3 className="text-lg">AI 助手</h3>
                 </div>
-                <div className="bg-warm-50 rounded-xl p-8 text-center">
-                  <p className="text-warm-500 mb-4">
-                    聊天功能将在后续步骤接入 Kyrozen Agent Runtime。
-                  </p>
-                  <p className="text-sm text-warm-400">
-                    当前阶段：{project.current_stage}
-                  </p>
+
+                <div className="flex-1 overflow-y-auto space-y-4 mb-4 min-h-0">
+                  {messages.map((message, index) => (
+                    <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
+                          message.role === 'user'
+                            ? 'bg-sky-500 text-white'
+                            : message.role === 'system'
+                              ? 'bg-warm-100 text-warm-600'
+                              : 'bg-white border border-warm-200 text-warm-900'
+                        }`}
+                      >
+                        {message.status === 'loading' ? (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-block w-4 h-4 border-2 border-warm-300 border-t-sky-500 rounded-full animate-spin" />
+                            <span>思考中...</span>
+                          </div>
+                        ) : (
+                          <div className="whitespace-pre-wrap">{message.content}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {pendingConfirmation && (
+                    <div className="flex justify-start">
+                      <div className="max-w-[90%] w-full bg-white border border-warm-200 rounded-2xl p-4">
+                        <h4 className="font-medium text-warm-900 mb-2">等待确认</h4>
+                        <div className="space-y-2 text-sm text-warm-600 mb-4">
+                          <p>
+                            <span className="font-medium">工具:</span> {pendingConfirmation.tool}
+                          </p>
+                          <p>
+                            <span className="font-medium">动作:</span> {pendingConfirmation.action}
+                          </p>
+                          <pre className="bg-warm-50 rounded-lg p-2 overflow-x-auto text-xs">
+                            {JSON.stringify(pendingConfirmation.parameters, null, 2)}
+                          </pre>
+                          {pendingConfirmation.reason && (
+                            <p>
+                              <span className="font-medium">原因:</span> {pendingConfirmation.reason}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => handleConfirm(true)} className="btn-primary text-sm">
+                            确认执行
+                          </button>
+                          <button onClick={() => handleConfirm(false)} className="btn-secondary text-sm">
+                            取消
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div ref={messagesEndRef} />
                 </div>
+
+                <form onSubmit={handleSend} className="flex items-center gap-2 pt-4 border-t border-warm-200">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={pendingConfirmation ? '请先确认或取消上方操作' : '输入消息...'}
+                    disabled={isSending || !!pendingConfirmation}
+                    className="input flex-1"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSending || !input.trim() || !!pendingConfirmation}
+                    className="btn-primary p-2.5"
+                  >
+                    <SendIcon className="w-5 h-5" />
+                  </button>
+                </form>
               </div>
             )}
           </div>

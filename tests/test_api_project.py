@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kyrozen.api.server import create_app
+from kyrozen.auth.dependencies import CurrentUser, get_current_user
 from kyrozen.config import KyrozenConfig
 
 from tests.conftest import MockModel
@@ -24,6 +25,12 @@ def api_client(temp_dir: str):
         task_store_path=os.path.join(temp_dir, "tasks.json"),
     )
     app = create_app(config=config, model=MockModel(["Done"]))
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="test-user-1",
+        email="test@example.com",
+        name="Test",
+        role="user",
+    )
     with TestClient(app) as client:
         yield client
 
@@ -143,3 +150,29 @@ def test_chat_with_project_context(api_client: TestClient):
 def test_chat_with_missing_project(api_client: TestClient):
     res = api_client.post("/api/chat", json={"message": "Hi", "project_id": "proj_missing"})
     assert res.status_code == 404
+
+
+def test_project_user_isolation(api_client: TestClient):
+    create = api_client.post("/api/projects", json={"name": "Private"})
+    assert create.status_code == 200
+    pid = create.json()["id"]
+
+    # Switch to a different user within the same app
+    api_client.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="test-user-2",
+        email="other@example.com",
+        name="Other",
+        role="user",
+    )
+    try:
+        assert api_client.get("/api/projects").json() == []
+        assert api_client.get(f"/api/projects/{pid}").status_code == 404
+        assert api_client.get(f"/api/projects/{pid}/state").status_code == 404
+        assert api_client.post(f"/api/projects/{pid}/advance").status_code == 404
+    finally:
+        api_client.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id="test-user-1",
+            email="test@example.com",
+            name="Test",
+            role="user",
+        )

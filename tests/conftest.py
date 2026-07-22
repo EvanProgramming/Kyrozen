@@ -8,7 +8,10 @@ from typing import Any, Iterator
 
 import pytest
 
+from kyrozen.auth.context import current_user_ctx
+from kyrozen.auth.dependencies import CurrentUser
 from kyrozen.config import KyrozenConfig
+from kyrozen.learning.repository import LearningRepository
 from kyrozen.models.base import ModelInterface, ModelResponse
 from kyrozen.project import KyrozenDatabase, ProjectManager
 
@@ -60,3 +63,15 @@ def project_manager(test_config: KyrozenConfig) -> Iterator[ProjectManager]:
     db = KyrozenDatabase(test_config.db_path)
     pm = ProjectManager(db)
     yield pm
+
+
+@pytest.fixture
+def learning_repository(project_manager: ProjectManager) -> Iterator[LearningRepository]:
+    repo = LearningRepository(project_manager.db)
+    token = current_user_ctx.set(
+        CurrentUser(user_id="test_user", email="test@example.com", name="Test User")
+    )
+    try:
+        yield repo
+    finally:
+        current_user_ctx.reset(token)

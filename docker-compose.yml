@@ -1,0 +1,73 @@
+version: "3.8"
+
+# Kyrozen Beta — Docker Compose
+# Copy .env.example to .env, fill in your secrets, then run:
+#   docker compose up -d --build
+#
+# For local SQLite-only development you only need to set:
+#   KYROZEN_DB_BACKEND=sqlite
+#   KYROZEN_DB_PATH=./workspace/kyrozen.db
+#
+# For production with Supabase Auth + PostgreSQL set:
+#   KYROZEN_DB_BACKEND=supabase
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET
+
+services:
+  kyrozen-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: kyrozen-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - KYROZEN_HOST=0.0.0.0
+      - KYROZEN_PORT=8000
+    volumes:
+      - kyrozen_workspace:/app/workspace
+    networks:
+      - kyrozen-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  kyrozen-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: kyrozen-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_BASE_URL=/api
+    depends_on:
+      kyrozen-backend:
+        condition: service_healthy
+    networks:
+      - kyrozen-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+volumes:
+  kyrozen_workspace:
+    driver: local
+
+networks:
+  kyrozen-network:
+    driver: bridge

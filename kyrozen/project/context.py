@@ -6,7 +6,9 @@ import json
 import os
 from typing import Any
 
+from kyrozen.development.models import TechnicalPlan
 from kyrozen.discovery.brief import ProblemBrief
+from kyrozen.hardware.models import BOM, FirmwareProject, HardwareArchitecture, WiringDesign
 from kyrozen.memory.interface import MemoryInterface
 from kyrozen.planning.models import PRD, ProductBrief
 from kyrozen.research.models import MarketResearchReport
@@ -442,6 +444,200 @@ class ProjectContextBuilder:
         )
         if memories:
             lines.append("\n[Recent Development Notes]")
+            for mem in memories:
+                lines.append(f"- {mem.content}")
+
+        lines.append("\n[User Message]")
+        return "\n".join(lines)
+
+    def _summarize_hardware_dir(self, project: Project, max_files: int = 20) -> str:
+        """Return a short summary of the existing hardware project directory."""
+        if self.project_manager is None:
+            return ""
+        hardware_dir = os.path.join(
+            os.path.dirname(self.project_manager.db.db_path),
+            "projects",
+            project.id,
+            "hardware",
+        )
+        if not os.path.isdir(hardware_dir):
+            return ""
+        try:
+            entries = []
+            for root, _dirs, files in os.walk(hardware_dir):
+                for f in files:
+                    rel = os.path.relpath(os.path.join(root, f), hardware_dir)
+                    if ".git/" not in rel and not rel.startswith(".git/"):
+                        entries.append(rel)
+                        if len(entries) >= max_files:
+                            break
+                if len(entries) >= max_files:
+                    break
+            if not entries:
+                return ""
+            return "\n".join([f"  - {e}" for e in entries])
+        except OSError:
+            return ""
+
+    def build_hardware_context(
+        self,
+        project: Project,
+        memory: MemoryInterface | None = None,
+        max_memories: int = 10,
+    ) -> str:
+        """Build context for Hardware Development mode."""
+        memory_backend = memory or self.memory
+        lines = ["[Hardware Development Context]"]
+        lines.append(f"Project ID: {project.id}")
+        lines.append(f"Project: {project.name}")
+        if project.description:
+            lines.append(f"Initial Idea: {project.description}")
+        lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(
+            "Your role: Turn the approved PRD into a real, buildable hardware prototype. "
+            "Do not change product requirements, do not add out-of-scope features, "
+            "and do not design PCB, CAD, 3D prints, or enter manufacturing.\n"
+        )
+
+        # Load Product Brief
+        latest_brief = self.project_manager.get_latest_artifact(
+            project.id, "product_brief", title="Product Brief"
+        )
+        brief = ProductBrief()
+        if latest_brief is not None:
+            try:
+                brief = ProductBrief.from_dict(json.loads(latest_brief.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        lines.append("[Product Brief]")
+        lines.append(f"  product_goal: {brief.product_goal.product_goal or '(not set)'}")
+        lines.append(f"  target_user: {brief.target_user.primary_user or '(not set)'}")
+        lines.append(f"  value_proposition: {brief.product_goal.value_proposition or '(not set)'}")
+        lines.append(f"  mvp_features: {', '.join(brief.mvp_scope.mvp_features) or 'none'}")
+        if brief.constraints:
+            lines.append(f"  constraints: {', '.join(brief.constraints)}")
+        if brief.risks:
+            lines.append(f"  risks: {', '.join(brief.risks)}")
+
+        # Load PRD
+        latest_prd = self.project_manager.get_latest_artifact(
+            project.id, "prd", title="Product Requirements Document"
+        )
+        prd = PRD()
+        if latest_prd is not None:
+            try:
+                prd = PRD.from_dict(json.loads(latest_prd.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        lines.append("\n[PRD]")
+        lines.append(f"  overview: {prd.overview or '(not set)'}")
+        lines.append("  functional_requirements:")
+        for req in prd.functional_requirements:
+            lines.append(f"    - {req}")
+        if not prd.functional_requirements:
+            lines.append("    none")
+        lines.append("  mvp_features:")
+        for feat in prd.mvp_scope.mvp_features:
+            lines.append(f"    - {feat}")
+        if not prd.mvp_scope.mvp_features:
+            lines.append("    none")
+        lines.append("  out_of_scope:")
+        for item in prd.out_of_scope:
+            lines.append(f"    - {item}")
+        if not prd.out_of_scope:
+            lines.append("    none")
+
+        # Load Technical Plan (for hybrid products)
+        latest_tech_plan = self.project_manager.get_latest_artifact(
+            project.id, "technical_plan", title="Technical Plan"
+        )
+        tech_plan = TechnicalPlan()
+        if latest_tech_plan is not None:
+            try:
+                tech_plan = TechnicalPlan.from_dict(json.loads(latest_tech_plan.content))
+            except (json.JSONDecodeError, ValueError):
+                pass
+        if tech_plan.application_type:
+            lines.append("\n[Technical Plan (Software)]")
+            lines.append(f"  application_type: {tech_plan.application_type}")
+            lines.append(f"  backend: {tech_plan.backend or '(not set)'}")
+            lines.append(f"  database: {tech_plan.database or '(not set)'}")
+            lines.append(f"  apis: {tech_plan.apis or '(not set)'}")
+            lines.append(f"  deployment: {tech_plan.deployment or '(not set)'}")
+
+        # Approved product and development decisions
+        decisions = [
+            d for d in self.project_manager.list_decisions(project.id)
+            if d.decision.startswith("Product decision: ") or d.decision.startswith("Development decision: ")
+        ]
+        if decisions:
+            lines.append("\n[Approved Product / Development Decisions]")
+            for d in decisions[-5:]:
+                lines.append(f"  - {d.decision}: {d.reason}")
+
+        # Existing hardware artifacts
+        latest_arch = self.project_manager.get_latest_artifact(
+            project.id, "hardware_architecture", title="Hardware Architecture"
+        )
+        if latest_arch is not None:
+            try:
+                arch = HardwareArchitecture.from_dict(json.loads(latest_arch.content))
+                lines.append("\n[Current Hardware Architecture]")
+                lines.append(f"  controller: {arch.controller_model or arch.controller or '(not set)'}")
+                lines.append(f"  sensors: {', '.join(arch.sensors) or 'none'}")
+                lines.append(f"  outputs: {', '.join(arch.outputs) or 'none'}")
+                lines.append(f"  communication: {', '.join(arch.communication) or 'none'}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_bom = self.project_manager.get_latest_artifact(
+            project.id, "bom", title="Bill of Materials"
+        )
+        if latest_bom is not None:
+            try:
+                bom = BOM.from_dict(json.loads(latest_bom.content))
+                lines.append(f"\n[Current BOM] {len(bom.items)} items")
+                for item in bom.items:
+                    lines.append(f"  - {item.name} ({item.purchase_status})")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_wiring = self.project_manager.get_latest_artifact(
+            project.id, "wiring_design", title="Wiring Design"
+        )
+        if latest_wiring is not None:
+            try:
+                wiring = WiringDesign.from_dict(json.loads(latest_wiring.content))
+                lines.append(f"\n[Current Wiring Design] {len(wiring.connections)} connections")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        latest_firmware = self.project_manager.get_latest_artifact(
+            project.id, "firmware_project", title="Firmware Project"
+        )
+        if latest_firmware is not None:
+            try:
+                fw = FirmwareProject.from_dict(json.loads(latest_firmware.content))
+                lines.append(f"\n[Current Firmware] platform={fw.platform} build={fw.build_status}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Existing hardware files summary
+        hardware_summary = self._summarize_hardware_dir(project)
+        if hardware_summary:
+            lines.append("\n[Existing Hardware Project Files]")
+            lines.append(hardware_summary)
+
+        # Recent hardware memories
+        memories = memory_backend.query(
+            category="hardware",
+            limit=max_memories,
+            project_id=project.id,
+        )
+        if memories:
+            lines.append("\n[Recent Hardware Notes]")
             for mem in memories:
                 lines.append(f"- {mem.content}")
 

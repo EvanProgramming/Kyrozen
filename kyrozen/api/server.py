@@ -12,11 +12,13 @@ from pathlib import Path
 from typing import Any
 
 import asyncio
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from supabase import create_client
 
 from kyrozen.auth.context import current_user_ctx
 from kyrozen.auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_admin
@@ -207,6 +209,17 @@ class ChatRequest(BaseModel):
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
     mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, development, hardware, testing, or learning")
     stream: bool = Field(False, description="Stream task progress via Server-Sent Events")
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=6)
+    name: str | None = None
+
+
+class SigninRequest(BaseModel):
+    email: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
 
 
 class ConfirmRequest(BaseModel):
@@ -527,6 +540,63 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "name": current_user.name,
             "role": current_user.role,
         }
+
+    def _auth_user_payload(user, fallback_email: str = "") -> dict[str, Any]:
+        metadata = getattr(user, "user_metadata", None) or {}
+        created_at = getattr(user, "created_at", None)
+        return {
+            "user_id": getattr(user, "id", ""),
+            "email": getattr(user, "email", fallback_email),
+            "name": metadata.get("name") if metadata else None,
+            "role": metadata.get("role", "user") if metadata else "user",
+            "created_at": created_at or datetime.now(timezone.utc).isoformat(),
+        }
+
+    @app.post("/api/auth/signup")
+    async def api_auth_signup(request: SignupRequest):
+        config = get_config()
+        if not config.supabase_url or not config.supabase_service_role_key:
+            raise HTTPException(status_code=500, detail="Supabase auth is not configured on the server")
+        try:
+            admin_client = create_client(config.supabase_url, config.supabase_service_role_key)
+            name = request.name or request.email.split("@")[0]
+            new_user = admin_client.auth.admin.create_user(
+                {
+                    "email": request.email,
+                    "password": request.password,
+                    "user_metadata": {"name": name},
+                    "email_confirm": True,
+                }
+            )
+            anon_client = create_client(config.supabase_url, config.supabase_anon_key)
+            session = anon_client.auth.sign_in_with_password(
+                {"email": request.email, "password": request.password}
+            )
+            return {
+                "user": _auth_user_payload(new_user.user if hasattr(new_user, "user") else new_user, request.email),
+                "access_token": session.session.access_token,
+                "refresh_token": session.session.refresh_token,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Registration failed: {exc}") from exc
+
+    @app.post("/api/auth/signin")
+    async def api_auth_signin(request: SigninRequest):
+        config = get_config()
+        if not config.supabase_url or not config.supabase_anon_key:
+            raise HTTPException(status_code=500, detail="Supabase auth is not configured on the server")
+        try:
+            anon_client = create_client(config.supabase_url, config.supabase_anon_key)
+            session = anon_client.auth.sign_in_with_password(
+                {"email": request.email, "password": request.password}
+            )
+            return {
+                "user": _auth_user_payload(session.user, request.email),
+                "access_token": session.session.access_token,
+                "refresh_token": session.session.refresh_token,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail=f"Invalid credentials: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Chat

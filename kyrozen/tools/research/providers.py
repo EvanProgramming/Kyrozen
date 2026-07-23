@@ -33,7 +33,7 @@ class TavilySearchProvider(SearchProvider):
     name = "tavily"
 
     def __init__(self, api_key: str | None = None) -> None:
-        self.api_key = api_key or os.environ.get("TAVILY_API_KEY", "")
+        self.api_key = api_key if api_key is not None else os.environ.get("TAVILY_API_KEY", "")
         if not self.api_key:
             self._fallback = UnconfiguredSearchProvider(
                 self.name,
@@ -106,7 +106,7 @@ class SerperSearchProvider(SearchProvider):
     name = "serper"
 
     def __init__(self, api_key: str | None = None) -> None:
-        self.api_key = api_key or os.environ.get("SERPER_API_KEY", "")
+        self.api_key = api_key if api_key is not None else os.environ.get("SERPER_API_KEY", "")
         if not self.api_key:
             self._fallback = UnconfiguredSearchProvider(
                 self.name,

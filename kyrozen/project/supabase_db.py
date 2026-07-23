@@ -667,7 +667,17 @@ class SupabaseDatabase:
             "metadata": message.get("metadata") or {},
             "created_at": message.get("created_at"),
         }
-        self.client.table("chat_messages").upsert(data).execute()
+        try:
+            self.client.table("chat_messages").upsert(data).execute()
+        except Exception as exc:
+            if self._is_missing_table_error(exc):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "chat_messages table does not exist in Supabase; chat history will not be persisted. "
+                    "Run the provided migration to enable cloud chat history."
+                )
+                return
+            raise
 
     def list_chat_messages(
         self,
@@ -682,7 +692,7 @@ class SupabaseDatabase:
             response = query.order("created_at", desc=False).limit(limit).execute()
         except Exception as exc:
             if self._is_missing_table_error(exc):
-                raise
+                return []
             return []
         return list(getattr(response, "data", []))
 

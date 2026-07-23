@@ -14,14 +14,9 @@ from kyrozen.config.settings import PROVIDER_BASE_URLS
 from .base import ModelInterface, ModelResponse, Usage
 
 
-# Approximate cost per 1M tokens (input, output) in USD
-PROVIDER_COSTS: dict[str, tuple[float, float]] = {
-    "deepseek": (0.27, 1.10),
-    "openai": (2.50, 10.00),
-    "anthropic": (3.00, 15.00),
-    "google": (0.15, 0.60),
-    "ollama": (0.0, 0.0),
-}
+# Provider-specific token costs are maintained in KyrozenConfig so they can be
+# overridden via the KYROZEN_PROVIDER_COSTS environment variable. The values are
+# approximate estimates; callers should treat them as such.
 
 
 def _retry_with_backoff(fn, max_retries: int = 3, base_delay: float = 1.0):

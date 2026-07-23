@@ -73,6 +73,10 @@
     @apply btn text-warm-600 hover:bg-warm-100;
   }
 
+  .btn-danger {
+    @apply btn bg-red-500 text-white hover:bg-red-600 shadow-soft;
+  }
+
   .card {
     @apply bg-white rounded-2xl border border-warm-200 shadow-card p-6;
   }

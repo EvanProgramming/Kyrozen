@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+// Dashboard stat cards link to the projects list
 import { Layout } from '../components/Layout';
 import { listProjects } from '../api/projects';
 import { handleApiError } from '../api/client';
@@ -33,24 +34,24 @@ export function DashboardPage() {
       <div className="max-w-5xl mx-auto">
         <div className="mb-10">
           <h1 className="mb-3">控制台</h1>
-          <p className="text-warm-500"> overview of your product development journey.</p>
+          <p className="text-warm-500">管理和追踪你的产品开发旅程</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-          <div className="card">
+          <Link to="/projects" className="card hover:shadow-soft transition-shadow">
             <p className="text-sm text-warm-500 mb-1">总项目数</p>
             <p className="text-4xl font-serif text-warm-900">{projects.length}</p>
-          </div>
-          <div className="card">
+          </Link>
+          <Link to="/projects" className="card hover:shadow-soft transition-shadow">
             <p className="text-sm text-warm-500 mb-1">进行中</p>
             <p className="text-4xl font-serif text-sky-600">{activeCount}</p>
-          </div>
-          <div className="card">
+          </Link>
+          <Link to="/projects" className="card hover:shadow-soft transition-shadow">
             <p className="text-sm text-warm-500 mb-1">已完成</p>
             <p className="text-4xl font-serif text-warm-900">
               {projects.filter((p) => p.status === 'completed').length}
             </p>
-          </div>
+          </Link>
         </div>
 
         <div className="flex items-center justify-between mb-6">
@@ -67,7 +68,7 @@ export function DashboardPage() {
         ) : recentProjects.length === 0 ? (
           <div className="card text-center py-16">
             <p className="text-warm-500 mb-6">还没有项目，创建第一个开始吧</p>
-            <Link to="/projects/new" className="btn-primary inline-flex">
+            <Link to="/projects" className="btn-primary inline-flex">
               <PlusIcon className="w-4 h-4 mr-2" />
               创建项目
             </Link>

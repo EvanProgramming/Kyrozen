@@ -24,8 +24,23 @@ export async function updateProject(
   return response.data;
 }
 
+export async function renameProject(projectId: string, name: string): Promise<Project> {
+  const response = await apiClient.put<Project>(`/projects/${projectId}`, { name });
+  return response.data;
+}
+
 export async function archiveProject(projectId: string): Promise<Project> {
-  const response = await apiClient.delete<Project>(`/projects/${projectId}`);
+  const response = await apiClient.post<Project>(`/projects/${projectId}/archive`, {});
+  return response.data;
+}
+
+export async function restoreProject(projectId: string): Promise<Project> {
+  const response = await apiClient.post<Project>(`/projects/${projectId}/restore`, {});
+  return response.data;
+}
+
+export async function deleteProject(projectId: string): Promise<{ status: string; project_id: string }> {
+  const response = await apiClient.delete<{ status: string; project_id: string }>(`/projects/${projectId}`);
   return response.data;
 }
 

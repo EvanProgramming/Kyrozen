@@ -10,8 +10,20 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from kyrozen.logs import get_logger
+
 
 TASK_STATUSES = {"pending", "running", "waiting_confirmation", "completed", "failed", "cancelled"}
+
+# Valid status transitions. Terminal states cannot change unless forced.
+VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"running", "completed", "failed", "cancelled"},
+    "running": {"waiting_confirmation", "completed", "failed", "cancelled"},
+    "waiting_confirmation": {"running", "completed", "failed", "cancelled"},
+    "completed": set(),
+    "failed": set(),
+    "cancelled": set(),
+}
 
 
 @dataclass
@@ -56,9 +68,11 @@ class Task:
         self.result: Any = None
         self.errors: list[str] = []
 
-    def update_status(self, status: str) -> None:
+    def update_status(self, status: str, force: bool = False) -> None:
         if status not in TASK_STATUSES:
             raise ValueError(f"Invalid status '{status}'. Valid: {TASK_STATUSES}")
+        if not force and status not in VALID_STATUS_TRANSITIONS.get(self.status, set()):
+            raise ValueError(f"Invalid status transition from '{self.status}' to '{status}'")
         self.status = status
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
@@ -116,11 +130,13 @@ class TaskManager:
         self,
         store_path: str = "./kyrozen_tasks.json",
         db: Any | None = None,
+        logger: Any | None = None,
     ) -> None:
         self.store_path = store_path
         self.db = db
         self._tasks: dict[str, Task] = {}
         self._lock = threading.Lock()
+        self._logger = logger or get_logger("INFO")
         if db is not None:
             self._load_from_db()
         else:
@@ -166,15 +182,17 @@ class TaskManager:
         if self.db is not None:
             try:
                 self.db.save_task(task)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._logger.error(f"Failed to save task {task.id} to database: {exc}")
+                raise RuntimeError(f"Failed to persist task {task.id}") from exc
             return
         try:
             data = {tid: t.to_dict() for tid, t in self._tasks.items()}
             with open(self.store_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._logger.error(f"Failed to save task {task.id} to {self.store_path}: {exc}")
+            raise RuntimeError(f"Failed to persist task {task.id}") from exc
 
     def _load(self) -> None:
         if not os.path.exists(self.store_path):
@@ -184,8 +202,8 @@ class TaskManager:
                 data = json.load(f)
             for tid, task_data in data.items():
                 self._tasks[tid] = Task.from_dict(task_data)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._logger.error(f"Failed to load tasks from {self.store_path}: {exc}")
 
     def _load_from_db(self) -> None:
         if self.db is None:
@@ -193,5 +211,5 @@ class TaskManager:
         try:
             for task in self.db.list_tasks():
                 self._tasks[task.id] = task
-        except Exception:
-            pass
+        except Exception as exc:
+            self._logger.error(f"Failed to load tasks from database: {exc}")

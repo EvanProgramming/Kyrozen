@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ._paths import _get_allowed_root, _resolve_safe_path
 from .base import Tool, ToolParameter, ToolResult, ToolSchema
 
 
@@ -25,9 +26,10 @@ class FileReadTool(Tool):
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         raw_path = parameters.get("path", "")
-        path = Path(os.path.expanduser(raw_path))
-        if not path.is_absolute():
-            path = Path(os.getcwd()) / path
+        allowed_root = _get_allowed_root(parameters)
+        path, error = _resolve_safe_path(raw_path, allowed_root)
+        if path is None:
+            return ToolResult(success=False, data=None, error=error)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -57,9 +59,10 @@ class FileWriteTool(Tool):
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         raw_path = parameters.get("path", "")
         content = parameters.get("content", "")
-        path = Path(os.path.expanduser(raw_path))
-        if not path.is_absolute():
-            path = Path(os.getcwd()) / path
+        allowed_root = _get_allowed_root(parameters)
+        path, error = _resolve_safe_path(raw_path, allowed_root)
+        if path is None:
+            return ToolResult(success=False, data=None, error=error)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
@@ -84,9 +87,10 @@ class ListDirTool(Tool):
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         raw_path = parameters.get("path", ".") or "."
-        path = Path(os.path.expanduser(raw_path))
-        if not path.is_absolute():
-            path = Path(os.getcwd()) / path
+        allowed_root = _get_allowed_root(parameters)
+        path, error = _resolve_safe_path(raw_path, allowed_root)
+        if path is None:
+            return ToolResult(success=False, data=None, error=error)
         try:
             entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name))
             items = [{"name": p.name, "type": "file" if p.is_file() else "directory"} for p in entries]
@@ -113,11 +117,20 @@ class FindFilesTool(Tool):
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         pattern = parameters.get("pattern", "")
-        directory = parameters.get("directory", ".") or "."
-        dir_path = Path(os.path.expanduser(directory))
-        if not dir_path.is_absolute():
-            dir_path = Path(os.getcwd()) / dir_path
+        raw_directory = parameters.get("directory", ".") or "."
+        allowed_root = _get_allowed_root(parameters)
+        dir_path, error = _resolve_safe_path(raw_directory, allowed_root)
+        if dir_path is None:
+            return ToolResult(success=False, data=None, error=error)
         try:
+            # Ensure the glob stays inside the allowed directory by refusing
+            # absolute patterns or patterns that walk upward.
+            if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+                return ToolResult(
+                    success=False,
+                    data=None,
+                    error="Glob pattern must be relative and cannot contain '..'",
+                )
             matches = sorted(glob.glob(str(dir_path / pattern), recursive=True))
             return ToolResult(success=True, data={"pattern": pattern, "directory": str(dir_path), "matches": matches})
         except Exception as e:

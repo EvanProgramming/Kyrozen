@@ -106,6 +106,40 @@ def test_project_manager_crud(temp_dir: str):
     assert archived.status == "archived"
 
 
+def test_project_manager_restore(temp_dir: str):
+    db = KyrozenDatabase(os.path.join(temp_dir, "kyrozen.db"))
+    pm = ProjectManager(db)
+
+    p = pm.create(name="Restore Me")
+    archived = pm.archive(p.id)
+    assert archived is not None
+    assert archived.status == "archived"
+
+    restored = pm.restore(p.id)
+    assert restored is not None
+    assert restored.status == "active"
+    assert pm.get(p.id).status == "active"
+
+    # Restoring a non-archived project should fail
+    assert pm.restore(p.id) is None
+
+
+def test_project_manager_delete(temp_dir: str):
+    db = KyrozenDatabase(os.path.join(temp_dir, "kyrozen.db"))
+    pm = ProjectManager(db)
+
+    p = pm.create(name="Delete Me")
+    assert pm.get(p.id) is not None
+
+    deleted = pm.delete(p.id)
+    assert deleted is True
+    assert pm.get(p.id) is None
+    assert pm.list() == []
+
+    # Deleting a non-existent project returns False
+    assert pm.delete("nonexistent") is False
+
+
 def test_project_manager_decisions(temp_dir: str):
     db = KyrozenDatabase(os.path.join(temp_dir, "kyrozen.db"))
     pm = ProjectManager(db)

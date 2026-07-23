@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -113,3 +115,17 @@ def test_list_tasks(client):
     response = client.get("/api/tasks")
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+
+
+def test_chat_stream(test_config):
+    test_config.permission_mode = "permissive"
+    app = make_authenticated_app(test_config, MockModel(["Streamed answer from API."]))
+    with TestClient(app) as c:
+        response = c.post("/api/chat", json={"message": "Hello", "stream": True})
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        lines = [line for line in response.iter_lines() if line]
+        assert lines
+        final = json.loads(lines[-1].replace("data: ", ""))
+        assert final["status"] == "completed"
+        assert final["result"]["answer"] == "Streamed answer from API."

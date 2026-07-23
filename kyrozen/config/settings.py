@@ -64,6 +64,39 @@ PROVIDER_BASE_URLS: dict[str, str] = {
 }
 
 
+# Approximate cost per 1M tokens (input, output) in USD.
+# These defaults are estimates; override via KYROZEN_PROVIDER_COSTS env var.
+DEFAULT_PROVIDER_COSTS: dict[str, tuple[float, float]] = {
+    "deepseek": (0.27, 1.10),
+    "openai": (2.50, 10.00),
+    "anthropic": (3.00, 15.00),
+    "google": (0.15, 0.60),
+    "ollama": (0.0, 0.0),
+}
+
+
+def _load_provider_costs() -> dict[str, tuple[float, float]]:
+    """Load provider cost overrides from KYROZEN_PROVIDER_COSTS JSON env var."""
+    raw = os.environ.get("KYROZEN_PROVIDER_COSTS", "")
+    if not raw:
+        return dict(DEFAULT_PROVIDER_COSTS)
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return dict(DEFAULT_PROVIDER_COSTS)
+        costs: dict[str, tuple[float, float]] = {}
+        for provider, value in parsed.items():
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                costs[provider] = (float(value[0]), float(value[1]))
+        if costs:
+            merged = dict(DEFAULT_PROVIDER_COSTS)
+            merged.update(costs)
+            return merged
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return dict(DEFAULT_PROVIDER_COSTS)
+
+
 @dataclass
 class KyrozenConfig:
     """Central configuration object."""
@@ -95,6 +128,7 @@ class KyrozenConfig:
     db_backend: str = "sqlite"  # "sqlite" or "supabase"
     beta_invite_only: bool = False
     cors_origins: list[str] = field(default_factory=list)
+    provider_costs: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.model_simple:
@@ -111,6 +145,8 @@ class KyrozenConfig:
         if not self.cors_origins:
             raw = os.environ.get("KYROZEN_CORS_ORIGINS", "")
             self.cors_origins = [o.strip() for o in raw.split(",") if o.strip()]
+        if not self.provider_costs:
+            self.provider_costs = _load_provider_costs()
 
     def project_dir(self, project_id: str) -> str:
         return os.path.join(self.projects_dir, project_id)

@@ -8,14 +8,14 @@ import type { Project, ProjectState } from '../types/api';
 import { ChatIcon, DocumentIcon, SendIcon, SparklesIcon } from '../components/Icons';
 
 const STAGES = [
-  { id: 'problem_discovery', label: '问题发现', mode: 'discovery' },
-  { id: 'market_research', label: '市场调研', mode: 'market_research' },
-  { id: 'product_definition', label: '产品规划', mode: 'planning' },
-  { id: 'solution_design', label: '方案设计', mode: 'planning' },
-  { id: 'development', label: '软件开发', mode: 'development' },
-  { id: 'hardware', label: '硬件开发', mode: 'hardware' },
-  { id: 'testing', label: '测试验证', mode: 'testing' },
-  { id: 'iteration', label: '迭代优化', mode: 'learning' },
+  { id: 'problem_discovery', label: '问题发现', mode: 'discovery', hint: '澄清用户痛点，生成 Problem Brief' },
+  { id: 'market_research', label: '市场调研', mode: 'market_research', hint: '搜索竞品、用户反馈与市场机会' },
+  { id: 'product_definition', label: '产品规划', mode: 'planning', hint: '定义产品目标、用户与功能优先级' },
+  { id: 'solution_design', label: '方案设计', mode: 'planning', hint: '对比技术方案并输出 PRD' },
+  { id: 'development', label: '软件开发', mode: 'development', hint: '生成代码、运行测试与调试' },
+  { id: 'hardware', label: '硬件开发', mode: 'hardware', hint: '生成 BOM、固件与硬件方案' },
+  { id: 'testing', label: '测试验证', mode: 'testing', hint: '生成测试计划与验证报告' },
+  { id: 'iteration', label: '迭代优化', mode: 'learning', hint: '总结经验并生成改进建议' },
 ];
 
 type Message = {
@@ -96,12 +96,35 @@ export function ProjectWorkspacePage() {
     }
   }
 
+  async function refreshProjectState() {
+    if (!projectId) return;
+    try {
+      const [projectData, stateData] = await Promise.all([
+        getProject(projectId),
+        getProjectState(projectId),
+      ]);
+      setProject(projectData);
+      setProjectState(stateData);
+    } catch (err) {
+      // Non-fatal refresh error; the existing error state remains visible.
+      console.error('Failed to refresh project state', err);
+    }
+  }
+
   function startPolling(taskId: string) {
     stopPolling();
     pollRef.current = setInterval(async () => {
       try {
         const task = await getTask(taskId);
-        if (task.status === 'completed') {
+        if (task.status === 'running') {
+          const latest = task.steps[task.steps.length - 1];
+          const progressText = latest
+            ? latest.metadata?.tool
+              ? `${latest.description} · ${latest.metadata.tool}`
+              : latest.description
+            : '思考中...';
+          updateMessageByTaskId(taskId, { content: progressText });
+        } else if (task.status === 'completed') {
           stopPolling();
           const answer =
             typeof task.result === 'string'
@@ -109,14 +132,17 @@ export function ProjectWorkspacePage() {
               : task.result?.answer ?? JSON.stringify(task.result) ?? '已完成';
           updateMessageByTaskId(taskId, { content: answer, status: undefined });
           setIsSending(false);
+          await refreshProjectState();
         } else if (task.status === 'failed') {
           stopPolling();
           updateMessageByTaskId(taskId, { content: `任务失败: ${task.errors.join(', ')}`, status: 'error' });
           setIsSending(false);
+          await refreshProjectState();
         } else if (task.status === 'cancelled') {
           stopPolling();
           updateMessageByTaskId(taskId, { content: '已取消', status: 'error' });
           setIsSending(false);
+          await refreshProjectState();
         } else if (task.status === 'waiting_confirmation') {
           stopPolling();
           const latestStep = [...task.steps].reverse().find((s) => s.status === 'waiting_confirmation');
@@ -147,12 +173,9 @@ export function ProjectWorkspacePage() {
     setMessages((prev) => prev.map((m) => (m.taskId === taskId ? { ...m, ...updates } : m)));
   }
 
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || isSending || !project || !projectId) return;
+  async function submitUserMessage(userContent: string) {
+    if (isSending || !project || !projectId) return;
 
-    const userContent = input.trim();
-    setInput('');
     setMessages((prev) => [...prev, { role: 'user', content: userContent }]);
     setIsSending(true);
 
@@ -174,6 +197,23 @@ export function ProjectWorkspacePage() {
     }
   }
 
+  function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    const userContent = input.trim();
+    if (!userContent) return;
+    setInput('');
+    void submitUserMessage(userContent);
+  }
+
+  function handleRetry(messageIndex: number) {
+    const userMessage = messages[messageIndex - 1];
+    if (!userMessage || userMessage.role !== 'user') return;
+
+    const userContent = userMessage.content;
+    setMessages((prev) => prev.filter((_, i) => i !== messageIndex - 1 && i !== messageIndex));
+    void submitUserMessage(userContent);
+  }
+
   async function handleConfirm(confirmed: boolean) {
     if (!pendingConfirmation) return;
     const { taskId } = pendingConfirmation;
@@ -191,14 +231,17 @@ export function ProjectWorkspacePage() {
             : task.result?.answer ?? JSON.stringify(task.result) ?? '已完成';
         updateMessageByTaskId(taskId, { content: answer, status: undefined });
         setIsSending(false);
+        await refreshProjectState();
       } else if (task.status === 'failed') {
         stopPolling();
         updateMessageByTaskId(taskId, { content: `任务失败: ${task.errors.join(', ')}`, status: 'error' });
         setIsSending(false);
+        await refreshProjectState();
       } else if (task.status === 'cancelled') {
         stopPolling();
         updateMessageByTaskId(taskId, { content: '已取消', status: 'error' });
         setIsSending(false);
+        await refreshProjectState();
       } else if (confirmed) {
         startPolling(taskId);
       } else {
@@ -251,6 +294,7 @@ export function ProjectWorkspacePage() {
                   <button
                     key={stage.id}
                     onClick={() => setActiveTab('chat')}
+                    title={`${stage.hint}（点击进入对话）`}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors text-left ${
                       project.current_stage === stage.id
                         ? 'bg-sky-50 text-sky-700 font-medium'
@@ -348,12 +392,22 @@ export function ProjectWorkspacePage() {
                         }`}
                       >
                         {message.status === 'loading' ? (
-                          <div className="flex items-center gap-2">
-                            <span className="inline-block w-4 h-4 border-2 border-warm-300 border-t-sky-500 rounded-full animate-spin" />
-                            <span>思考中...</span>
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="inline-block w-4 h-4 border-2 border-warm-300 border-t-sky-500 rounded-full animate-spin" />
+                              <span className="truncate">{message.content || '思考中...'}</span>
+                            </div>
                           </div>
                         ) : (
                           <div className="whitespace-pre-wrap">{message.content}</div>
+                        )}
+                        {message.role === 'assistant' && message.status === 'error' && (
+                          <button
+                            onClick={() => handleRetry(index)}
+                            className="mt-2 text-xs font-medium text-sky-600 hover:text-sky-700"
+                          >
+                            重试
+                          </button>
                         )}
                       </div>
                     </div>
@@ -401,12 +455,12 @@ export function ProjectWorkspacePage() {
                     onChange={(e) => setInput(e.target.value)}
                     placeholder={pendingConfirmation ? '请先确认或取消上方操作' : '输入消息...'}
                     disabled={isSending || !!pendingConfirmation}
-                    className="input flex-1"
+                    className="input flex-1 min-w-0"
                   />
                   <button
                     type="submit"
                     disabled={isSending || !input.trim() || !!pendingConfirmation}
-                    className="btn-primary p-2.5"
+                    className="btn-primary p-2 sm:p-2.5 shrink-0"
                   >
                     <SendIcon className="w-5 h-5" />
                   </button>

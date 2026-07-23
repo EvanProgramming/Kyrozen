@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 
+from kyrozen.auth.context import current_user_ctx
 from kyrozen.config import get_config
 
 security = HTTPBearer(auto_error=False)
@@ -55,13 +56,15 @@ async def get_current_user(
     config = get_config()
     jwt_secret = config.supabase_jwt_secret
 
+    if not jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is not configured on the server",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     try:
-        if jwt_secret:
-            payload = jwt.decode(token, jwt_secret, algorithms=["HS256"], audience="authenticated")
-        else:
-            # When no JWT secret is configured, decode without verification for local dev.
-            # This is NOT safe for production.
-            payload = jwt.decode(token, "", algorithms=["HS256"], options={"verify_signature": False})
+        payload = jwt.decode(token, jwt_secret, algorithms=["HS256"], audience="authenticated")
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -77,24 +80,36 @@ async def get_current_user(
             detail="Invalid token: missing user id",
         )
 
-    return CurrentUser(
+    user = CurrentUser(
         user_id=user_id,
         email=email,
         name=payload.get("user_metadata", {}).get("name"),
         role=payload.get("user_metadata", {}).get("role", "user"),
         raw_claims=payload,
     )
+    current_user_ctx.set(user)
+    return user
 
 
 async def get_current_user_optional(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> CurrentUser | None:
-    """Optionally validate JWT; returns None if missing or invalid."""
-    try:
-        return await get_current_user(request, credentials)
-    except HTTPException:
+    """Optionally validate JWT; returns None if no credentials provided.
+
+    If credentials are present but invalid, or authentication is not configured,
+    the error is propagated rather than silently treating the request as anonymous.
+    """
+    token = None
+    if credentials:
+        token = credentials.credentials
+    else:
+        token = request.cookies.get("access_token")
+
+    if not token:
         return None
+
+    return await get_current_user(request, credentials)
 
 
 async def require_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

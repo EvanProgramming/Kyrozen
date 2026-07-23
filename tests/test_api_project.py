@@ -81,9 +81,66 @@ def test_update_and_archive_project(api_client: TestClient):
     assert data["current_stage"] == "product_definition"
     assert data["next_steps"] == "Define MVP"
 
-    del_res = api_client.delete(f"/api/projects/{pid}")
-    assert del_res.status_code == 200
-    assert del_res.json()["status"] == "archived"
+    archive_res = api_client.post(f"/api/projects/{pid}/archive", json={})
+    assert archive_res.status_code == 200
+    assert archive_res.json()["status"] == "archived"
+
+
+def test_rename_project(api_client: TestClient):
+    create = api_client.post("/api/projects", json={"name": "Original Name"})
+    pid = create.json()["id"]
+
+    rename_res = api_client.put(f"/api/projects/{pid}", json={"name": "Renamed Project"})
+    assert rename_res.status_code == 200
+    assert rename_res.json()["name"] == "Renamed Project"
+
+    get_res = api_client.get(f"/api/projects/{pid}")
+    assert get_res.status_code == 200
+    assert get_res.json()["name"] == "Renamed Project"
+
+
+def test_advance_project_stage_order(api_client: TestClient):
+    create = api_client.post("/api/projects", json={"name": "Advance"})
+    pid = create.json()["id"]
+    assert create.json()["current_stage"] == "problem_discovery"
+
+    expected_order = [
+        "market_research",
+        "product_definition",
+        "solution_design",
+        "development",
+        "testing",
+        "iteration",
+    ]
+    for expected_stage in expected_order:
+        advance_res = api_client.post(f"/api/projects/{pid}/advance", json={})
+        assert advance_res.status_code == 200
+        assert advance_res.json()["current_stage"] == expected_stage
+
+    # Final advance marks project completed
+    final_res = api_client.post(f"/api/projects/{pid}/advance", json={})
+    assert final_res.status_code == 200
+    assert final_res.json()["status"] == "completed"
+    assert final_res.json()["progress"] == 100
+
+
+def test_restore_and_delete_project(api_client: TestClient):
+    create = api_client.post("/api/projects", json={"name": "P2-delete"})
+    pid = create.json()["id"]
+
+    archive_res = api_client.post(f"/api/projects/{pid}/archive", json={})
+    assert archive_res.status_code == 200
+    assert archive_res.json()["status"] == "archived"
+
+    restore_res = api_client.post(f"/api/projects/{pid}/restore", json={})
+    assert restore_res.status_code == 200
+    assert restore_res.json()["status"] == "active"
+
+    delete_res = api_client.delete(f"/api/projects/{pid}")
+    assert delete_res.status_code == 200
+    assert delete_res.json()["status"] == "deleted"
+
+    assert api_client.get(f"/api/projects/{pid}").status_code == 404
 
 
 def test_project_decisions_and_artifacts(api_client: TestClient):

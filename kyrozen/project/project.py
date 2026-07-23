@@ -10,7 +10,7 @@ from typing import Any
 
 PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 
-PROJECT_STAGES = {
+PROJECT_STAGES = (
     "problem_discovery",
     "market_research",
     "product_definition",
@@ -18,7 +18,7 @@ PROJECT_STAGES = {
     "development",
     "testing",
     "iteration",
-}
+)
 
 
 @dataclass

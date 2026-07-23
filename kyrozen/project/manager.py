@@ -54,6 +54,13 @@ class ProjectManager:
     def archive(self, project_id: str) -> Project | None:
         return self.update(project_id, status="archived")
 
+    def restore(self, project_id: str) -> Project | None:
+        """Restore an archived project back to active status."""
+        project = self.db.get_project(project_id)
+        if project is None or project.status != "archived":
+            return None
+        return self.update(project_id, status="active")
+
     def delete(self, project_id: str) -> bool:
         return self.db.delete_project(project_id)
 

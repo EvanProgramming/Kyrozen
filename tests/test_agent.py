@@ -86,3 +86,29 @@ def test_agent_extract_inline_tool_call_with_preamble(test_config):
     calls = agent._extract_tool_calls(text)
     assert len(calls) == 1
     assert calls[0]["tool"] == "list_dir"
+
+
+def test_agent_strip_tool_calls_from_text(test_config):
+    agent = build_agent(test_config)
+    text = 'I will search.\n{"tool": "web_search", "action": "search", "parameters": {"query": "x"}}'
+    clean = agent._strip_tool_calls_from_text(text)
+    assert clean == "I will search."
+
+
+def test_agent_tool_call_only_does_not_return_raw_json(test_config):
+    """If the model outputs only an inline tool-call JSON, the final answer must not be raw JSON."""
+    tool_call = '{"tool": "list_dir", "action": "list", "parameters": {"path": "."}}'
+    agent = build_agent(test_config, responses=[tool_call, "Done."])
+    task = agent.run("List files")
+    assert task.status == "completed"
+    assert "tool" not in task.result["answer"]
+    assert "{" not in task.result["answer"]
+
+
+def test_agent_tool_call_in_code_block_does_not_return_raw_json(test_config):
+    tool_call = '```json\n{"tool": "list_dir", "action": "list", "parameters": {"path": "."}}\n```'
+    agent = build_agent(test_config, responses=[tool_call, "Done."])
+    task = agent.run("List files")
+    assert task.status == "completed"
+    assert "tool" not in task.result["answer"]
+    assert "{" not in task.result["answer"]

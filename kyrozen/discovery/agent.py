@@ -59,6 +59,7 @@ class ProblemDiscoveryAgent(BaseAgent):
             "- Use record_evidence to mark important claims and their source.\n"
             "- After updating the brief, use assess_confidence to evaluate confidence.\n"
             "- If the problem already has a simple existing solution (e.g. phone alarm for drinking water), say so and suggest existing_solution_enough.\n"
+            "- When setting the Problem Brief 'decision' field, you MUST use one of these exact values: continue_research, need_more_information, existing_solution_enough, problem_not_clear, not_suitable_for_product. 'continue_research' means the user wants to proceed to market research.\n"
             "- Only update project state or record decisions when the user explicitly asks.\n"
         )
 

@@ -281,6 +281,7 @@ class BaseAgent:
 
         max_rounds = 8
         final_answer = ""
+        last_response_had_tools = False
 
         try:
             for round_num in range(max_rounds):
@@ -297,6 +298,7 @@ class BaseAgent:
 
                 text = response.content
                 calls = self._extract_tool_calls(text)
+                last_response_had_tools = bool(calls)
                 if not calls:
                     final_answer = text
                     break
@@ -313,10 +315,36 @@ class BaseAgent:
 
                 tool_results_text = json.dumps(results, ensure_ascii=False, indent=2)
                 messages.append({"role": "assistant", "content": text})
-                messages.append({
+                if round_num == max_rounds - 1:
+                    messages.append({
+                        "role": "user",
+                        "content": f"Tool results:\n{tool_results_text}\n\nYou have used the maximum number of tool calls. Do NOT use any more tools. Provide a final natural-language summary for the user based on all results above.",
+                    })
+                else:
+                    messages.append({
+                        "role": "user",
+                        "content": f"Tool results:\n{tool_results_text}\n\nPlease continue or provide the final answer.",
+                    })
+
+            # If we exhausted all rounds and the last response still requested tools,
+            # make one final synthesis call that is not allowed to invoke tools.
+            if last_response_had_tools and not final_answer:
+                self.logger.model("Calling model (final synthesis)", task_id=task.id)
+                synthesis_messages = list(messages)
+                synthesis_messages.append({
                     "role": "user",
-                    "content": f"Tool results:\n{tool_results_text}\n\nPlease continue or provide the final answer.",
+                    "content": "You have reached the tool-call limit. Do NOT output any tool JSON. Provide a concise final answer in the same language as the user's original request, summarizing what was learned and what remains unknown.",
                 })
+                response = self.model.chat(synthesis_messages)
+                self.logger.model(
+                    "Model response received",
+                    task_id=task.id,
+                    model=response.model,
+                    provider=response.provider,
+                    prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
+                    completion_tokens=response.usage.completion_tokens if response.usage else 0,
+                )
+                final_answer = self._strip_tool_calls_from_text(response.content) or final_answer
 
             if not final_answer:
                 if task.steps:

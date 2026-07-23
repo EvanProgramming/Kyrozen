@@ -20,6 +20,18 @@ PROBLEM_DECISIONS = {
     "not_suitable_for_product",
 }
 
+# Common agent-invented aliases that should map to canonical decision values.
+DECISION_ALIASES = {
+    "continue_to_market_research": "continue_research",
+    "continue_market_research": "continue_research",
+    "continue": "continue_research",
+    "proceed": "continue_research",
+    "more_info": "need_more_information",
+    "need_more_info": "need_more_information",
+    "not_clear": "problem_not_clear",
+    "unclear": "problem_not_clear",
+}
+
 EVIDENCE_SOURCES = {
     "user_statement",
     "ai_inference",
@@ -99,6 +111,33 @@ class ProblemBrief:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProblemBrief":
         assumptions = data.get("unknown_assumptions") or []
+        evidence_items: list[EvidenceItem] = []
+
+        def _split_assumption_text(text: str) -> list[str]:
+            """Split a Chinese or English assumption string into individual claims."""
+            # Split on sentence-ending punctuation or newlines, then clean up.
+            import re
+
+            parts = re.split(r"(?<=[。！？.!?])\s*|\n", text)
+            return [p.strip(" \t\r\n一二三四五六七八九十、. ") for p in parts if p.strip(" \t\r\n一二三四五六七八九十、. ")]
+
+        if isinstance(assumptions, str):
+            for claim in _split_assumption_text(assumptions):
+                evidence_items.append(EvidenceItem(claim=claim, source="ai_inference"))
+        else:
+            for a in assumptions:
+                if isinstance(a, str):
+                    for claim in _split_assumption_text(a):
+                        evidence_items.append(EvidenceItem(claim=claim, source="ai_inference"))
+                elif isinstance(a, dict):
+                    evidence_items.append(EvidenceItem.from_dict(a))
+                else:
+                    evidence_items.append(EvidenceItem(claim=str(a), source="ai_inference"))
+        raw_decision = data.get("decision", "need_more_information")
+        decision = DECISION_ALIASES.get(raw_decision, raw_decision)
+        if decision not in PROBLEM_DECISIONS:
+            decision = "need_more_information"
+
         return cls(
             title=data.get("title", ""),
             target_user=data.get("target_user", ""),
@@ -109,11 +148,11 @@ class ProblemBrief:
             current_solution_problem=data.get("current_solution_problem", ""),
             frequency=data.get("frequency", ""),
             impact=data.get("impact", ""),
-            unknown_assumptions=[EvidenceItem.from_dict(a) for a in assumptions],
+            unknown_assumptions=evidence_items,
             opportunity_direction=data.get("opportunity_direction", ""),
             confidence=data.get("confidence", "low"),
             confidence_reason=data.get("confidence_reason", ""),
-            decision=data.get("decision", "need_more_information"),
+            decision=decision,
             decision_reason=data.get("decision_reason", ""),
         )
 

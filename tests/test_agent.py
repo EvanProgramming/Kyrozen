@@ -112,3 +112,13 @@ def test_agent_tool_call_in_code_block_does_not_return_raw_json(test_config):
     assert task.status == "completed"
     assert "tool" not in task.result["answer"]
     assert "{" not in task.result["answer"]
+
+
+def test_agent_final_synthesis_when_max_rounds_exhausted(test_config):
+    """If the model keeps requesting tools, the agent must still produce a non-JSON final answer."""
+    tool_call = '{"tool": "list_dir", "action": "list", "parameters": {"path": "."}}'
+    agent = build_agent(test_config, responses=[tool_call])
+    task = agent.run("List files")
+    assert task.status == "completed"
+    assert "tool" not in task.result["answer"]
+    assert "{" not in task.result["answer"]

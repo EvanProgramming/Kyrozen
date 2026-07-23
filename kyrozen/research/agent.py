@@ -41,13 +41,15 @@ class MarketResearchAgent(BaseAgent):
             "- Distinguish Fact, Inference, and Unknown in every source item.\n"
             "- Analyze competitors honestly: include why they succeed and why they fail.\n"
             "- First, build a research plan based on the Problem Brief.\n"
-            "- Then search for: existing products/apps, open source projects, academic papers, patents, community discussions, alternative solutions.\n"
-            "- Save important sources with save_research_source.\n"
+            "- Then search for: existing products/apps, open source projects, academic papers, patents, community discussions, alternative solutions. Use at most 5 searches.\n"
+            "- After each search, save important sources with save_research_source. Do not rely on memory; save every source immediately.\n"
             "- When enough evidence is gathered, save the Market Research Report with save_market_research_report.\n"
             "- Finally, record the opportunity decision with record_opportunity_decision.\n"
             "- If existing solutions are good enough, recommend \"use_existing_solution\" or \"abandon\".\n"
             "- After calling any tool, wait for the tool result and then summarize it in natural language. NEVER output raw JSON to the user.\n"
+            "- NEVER output internal planning text such as 'Now let me search', 'Search X:', or 'Next I will' to the user. Only output the final summary or the tool JSON.\n"
             "- When a search returns no results or fails, say so clearly instead of fabricating sources.\n"
+            "- The final answer must be a concise summary in the same language as the user's request, covering: market status, key competitors/open-source alternatives, user pain points, and a recommendation.\n"
         )
 
     def build_research_context(

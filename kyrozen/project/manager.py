@@ -153,3 +153,20 @@ class ProjectManager:
     # ------------------------------------------------------------------
     def list_tasks(self, project_id: str) -> list[Any]:
         return self.db.list_tasks(project_id=project_id)
+
+    # ------------------------------------------------------------------
+    # Chat messages
+    # ------------------------------------------------------------------
+    def save_chat_message(self, message: dict[str, Any]) -> None:
+        self.db.save_chat_message(message)
+
+    def list_chat_messages(
+        self,
+        project_id: str,
+        user_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self.db.list_chat_messages(project_id=project_id, user_id=user_id, limit=limit)
+
+    def delete_chat_messages(self, project_id: str, user_id: str) -> bool:
+        return self.db.delete_chat_messages(project_id=project_id, user_id=user_id)

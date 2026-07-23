@@ -176,6 +176,10 @@ class ProjectContextBuilder:
                     lines.append(f"A: {answer}")
                 else:
                     lines.append(f"- {answer}")
+            lines.append(
+                "\n[Discovery Policy] Do NOT repeat any question already listed in [Recent Discovery Q&A]. "
+                "If the user has already answered a question, use that answer and move on."
+            )
 
         lines.append("\n[User Message]")
         return "\n".join(lines)

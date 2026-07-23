@@ -6,12 +6,45 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+from jwt import PyJWKClient, decode as jwt_decode, get_unverified_header
 
 from kyrozen.auth.context import current_user_ctx
-from kyrozen.config import get_config
+from kyrozen.config import KyrozenConfig, get_config
 
 security = HTTPBearer(auto_error=False)
+
+
+def _decode_supabase_token(token: str, config: KyrozenConfig) -> dict[str, Any]:
+    """Verify a Supabase JWT using JWKS when possible, falling back to HS256."""
+    errors: list[str] = []
+
+    if config.supabase_url:
+        try:
+            jwks_url = f"{config.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+            jwks_client = PyJWKClient(jwks_url)
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            alg = get_unverified_header(token).get("alg", "RS256")
+            return jwt_decode(
+                token,
+                signing_key.key,
+                algorithms=[alg],
+                audience="authenticated",
+            )
+        except Exception as exc:
+            errors.append(f"JWKS verification failed: {exc}")
+
+    if config.supabase_jwt_secret:
+        try:
+            return jwt_decode(
+                token,
+                config.supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+        except Exception as exc:
+            errors.append(f"HS256 verification failed: {exc}")
+
+    raise ValueError("Unable to verify token: " + "; ".join(errors))
 
 
 class CurrentUser:
@@ -54,9 +87,8 @@ async def get_current_user(
         )
 
     config = get_config()
-    jwt_secret = config.supabase_jwt_secret
 
-    if not jwt_secret:
+    if not config.supabase_url and not config.supabase_jwt_secret:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication is not configured on the server",
@@ -64,13 +96,13 @@ async def get_current_user(
         )
 
     try:
-        payload = jwt.decode(token, jwt_secret, algorithms=["HS256"], audience="authenticated")
-    except JWTError as exc:
+        payload = _decode_supabase_token(token, config)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid authentication token: {exc}",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from exc
 
     user_id = payload.get("sub")
     email = payload.get("email", "")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from contextlib import asynccontextmanager
 import traceback
@@ -50,7 +51,25 @@ _context_builder: ProjectContextBuilder | None = None
 _learning_repository: LearningRepository | None = None
 
 
-_KYROZEN_QUESTION_RE = __import__("re").compile(r"```kyrozen-question\s*[\s\S]*?\s*```")
+_KYROZEN_QUESTION_RE = re.compile(r"```kyrozen-question\s*([\s\S]*?)\s*```")
+
+
+def _extract_question_text(content: str) -> str:
+    """Extract the question field from a kyrozen-question JSON block if present.
+
+    Falls back to returning the text with the block removed.
+    """
+    match = _KYROZEN_QUESTION_RE.search(content)
+    if match:
+        try:
+            data = json.loads(match.group(1).strip())
+            question = data.get("question", "").strip()
+            if question:
+                return question
+        except json.JSONDecodeError:
+            pass
+    # Fallback: remove the block and clean surrounding text.
+    return _KYROZEN_QUESTION_RE.sub("", content).strip()
 
 
 def _strip_question_block(content: str) -> str:
@@ -58,21 +77,70 @@ def _strip_question_block(content: str) -> str:
     return _KYROZEN_QUESTION_RE.sub("", content).strip()
 
 
+# Common option-value mappings used by the frontend. These normalisations make
+# sure terse option values (e.g. "no_tracking") are interpreted as real brief
+# fields so the agent does not ask about the same dimension again.
+_DISCOVERY_OPTION_MAPPINGS: dict[str, dict[str, str]] = {
+    "target_user": {
+        "myself": "myself",
+        "self": "myself",
+        "family": "family member",
+        "friend": "a friend",
+        "small_business": "small business owner",
+        "business": "business owner",
+        "team": "a team",
+        "students": "students",
+        "elders": "elderly people",
+    },
+    "current_solution": {
+        "no_tracking": "not tracking income/expenses at all",
+        "not_tracking": "not tracking income/expenses at all",
+        "notebook": "notebook / paper",
+        "excel": "Excel spreadsheet",
+        "spreadsheet": "spreadsheet",
+        "memo": "phone memo / notes app",
+        "calculator": "calculator",
+        "app": "existing mobile app",
+        "none": "no existing solution",
+    },
+    "deep_need": {
+        "curiosity": "understand personal spending habits",
+        "save_money": "save money for a goal",
+        "control_spending": "control spending in specific categories",
+        "budget": "stick to a budget",
+        "plan": "plan future spending",
+    },
+}
+
+
+def _apply_discovery_option_mappings(answer: str) -> dict[str, str]:
+    """Return brief fields inferred from known option values."""
+    normalized = answer.strip().lower()
+    result: dict[str, str] = {}
+    for field, mappings in _DISCOVERY_OPTION_MAPPINGS.items():
+        for option_key, mapped_value in mappings.items():
+            if normalized == option_key.lower():
+                result[field] = mapped_value
+                break
+    return result
+
+
 def _record_discovery_qa(
     project_id: str,
     user_id: str,
     answer: str,
     pm: ProjectManager,
-) -> None:
+) -> str | None:
     """Store the latest Q&A pair from chat history into project memory.
 
     This lets the discovery agent see what has already been asked and answered
-    so it does not repeat questions.
+    so it does not repeat questions. Returns the cleaned question text, or None
+    for the very first user message (which has no preceding assistant question).
     """
     try:
         messages = pm.list_chat_messages(project_id=project_id, user_id=user_id, limit=20)
         if not messages:
-            return
+            return None
         # messages are ordered oldest -> newest; find the assistant message
         # immediately before the most recent user message.
         last_user_index = None
@@ -81,11 +149,11 @@ def _record_discovery_qa(
                 last_user_index = i
                 break
         if last_user_index is None or last_user_index == 0:
-            return
+            return None
         previous = messages[last_user_index - 1]
         if previous["role"] != "assistant":
-            return
-        question = _strip_question_block(previous["content"]) or "Follow-up question"
+            return None
+        question = _extract_question_text(previous["content"]) or "Follow-up question"
         memory = _project_memory(project_id)
         memory.save(
             category="discovery_qa",
@@ -93,9 +161,105 @@ def _record_discovery_qa(
             question=question,
             user_id=user_id,
         )
+        return question
     except Exception:
         # Memory saving must not break the chat flow.
         get_logger(__name__).warning("Failed to record discovery Q&A", exc_info=True)
+        return None
+
+
+def _parse_json_response(text: str) -> dict[str, Any]:
+    """Parse a JSON object from a model response, tolerating markdown fences."""
+    text = text.strip()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    if match:
+        try:
+            data = json.loads(match.group(1).strip())
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+async def _auto_update_discovery_brief(
+    project_id: str,
+    question: str,
+    answer: str,
+    pm: ProjectManager,
+    model: ModelInterface,
+) -> None:
+    """Infer Problem Brief fields from the latest Q&A and persist them.
+
+    This is a deterministic fallback so the agent does not have to rely on the
+    LLM calling save_problem_brief after every answer.
+    """
+    from kyrozen.discovery.brief import ProblemBrief
+
+    try:
+        latest = pm.get_latest_artifact(project_id, "problem_brief", title="Problem Brief")
+        current_brief = ProblemBrief()
+        if latest is not None:
+            try:
+                current_brief = ProblemBrief.from_dict(json.loads(latest.content))
+            except Exception:
+                pass
+
+        # Start with deterministic mappings for known terse option values.
+        extracted = _apply_discovery_option_mappings(answer)
+
+        # Use the model to extract any additional structured fields.
+        system = (
+            "You extract structured Problem Brief fields from a user answer. "
+            "Given the current brief, the assistant's last question, and the user's answer, "
+            "return a JSON object with any fields you can infer. Use only these keys: "
+            "target_user, scenario, surface_problem, current_solution, deep_need, frequency, impact. "
+            "Map terse option values to meaningful descriptions, e.g. 'no_tracking' -> "
+            "'not tracking income/expenses at all', 'myself' -> 'myself', 'curiosity' -> "
+            "'understand personal spending habits'. "
+            "If a field is unknown or unchanged, omit it. Return only JSON, no commentary."
+        )
+        prompt = (
+            f"Current brief: {json.dumps(current_brief.to_dict(), ensure_ascii=False)}\n\n"
+            f"Assistant question: {question}\n"
+            f"User answer: {answer}\n\n"
+            "Return updated fields as JSON."
+        )
+        response = await asyncio.to_thread(
+            model.chat,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        model_extracted = _parse_json_response(response.content)
+        if isinstance(model_extracted, dict):
+            for key, value in model_extracted.items():
+                if value not in (None, "", []) and key not in extracted:
+                    extracted[key] = value
+
+        extracted = {k: v for k, v in extracted.items() if v not in (None, "", [])}
+        if not extracted:
+            return
+
+        new_brief = ProblemBrief.from_dict(extracted)
+        merged = current_brief.merge(new_brief)
+        content = json.dumps(merged.to_dict(), ensure_ascii=False, indent=2)
+        pm.save_artifact(
+            project_id=project_id,
+            type="problem_brief",
+            title="Problem Brief",
+            content=content,
+            change_reason="Auto-updated from discovery Q&A",
+        )
+    except Exception:
+        get_logger(__name__).warning("Failed to auto-update discovery brief", exc_info=True)
 
 
 class AgentFactory:
@@ -717,8 +881,42 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         user_input = request.message
         pm = _get_project_manager()
         user_message: dict[str, Any] | None = None
+        context: str | None = None
         if request.project_id:
             project = _get_owned_project(request.project_id, current_user)
+
+            user_message = {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user.user_id,
+                "project_id": request.project_id,
+                "role": "user",
+                "content": request.message,
+                "metadata": {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            pm.save_chat_message(user_message)
+
+            # For discovery mode, capture the latest Q&A and update the Problem Brief
+            # BEFORE building context so the agent sees the freshest state.
+            if request.mode == "discovery":
+                last_question = _record_discovery_qa(
+                    request.project_id,
+                    current_user.user_id,
+                    request.message,
+                    pm,
+                )
+                if last_question is None:
+                    # First user message: still try to extract fields from it.
+                    last_question = "Initial problem description"
+                if agent.model is not None:
+                    await _auto_update_discovery_brief(
+                        request.project_id,
+                        last_question,
+                        request.message,
+                        pm,
+                        agent.model,
+                    )
+
             builder = _get_context_builder()
             # Swap the context builder's memory backend to the project's memory file
             builder.memory = _project_memory(request.project_id)
@@ -744,24 +942,6 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 agent.memory = _learning_repository
             else:
                 agent.memory = _project_memory(request.project_id)
-
-            user_message = {
-                "id": str(uuid.uuid4()),
-                "user_id": current_user.user_id,
-                "project_id": request.project_id,
-                "role": "user",
-                "content": request.message,
-                "metadata": {},
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            pm.save_chat_message(user_message)
-            if request.mode == "discovery":
-                _record_discovery_qa(
-                    request.project_id,
-                    current_user.user_id,
-                    request.message,
-                    pm,
-                )
         else:
             # Use a global in-memory fallback if no project
             from kyrozen.memory import InMemoryMemory

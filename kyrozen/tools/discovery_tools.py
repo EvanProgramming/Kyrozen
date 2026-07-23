@@ -44,14 +44,25 @@ class SaveProblemBriefTool(Tool):
         if not project_id:
             return ToolResult(success=False, data=None, error="Missing project_id")
         try:
-            brief = ProblemBrief.from_dict(brief_data)
+            new_brief = ProblemBrief.from_dict(brief_data)
+            existing = self.project_manager.get_latest_artifact(
+                project_id, "problem_brief", title="Problem Brief"
+            )
+            if existing is not None:
+                try:
+                    current_brief = ProblemBrief.from_dict(json.loads(existing.content))
+                    brief = current_brief.merge(new_brief)
+                except (json.JSONDecodeError, ValueError):
+                    brief = new_brief
+            else:
+                brief = new_brief
             content = json.dumps(brief.to_dict(), ensure_ascii=False, indent=2)
             artifact = self.project_manager.save_artifact(
                 project_id=project_id,
                 type="problem_brief",
                 title="Problem Brief",
                 content=content,
-                change_reason="Discovery update",
+                change_reason="Discovery incremental update",
             )
             return ToolResult(success=True, data={"artifact_id": artifact.id, "version": artifact.version})
         except ValueError as e:

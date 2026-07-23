@@ -8,6 +8,7 @@ from typing import Any
 
 from kyrozen.development.models import TechnicalPlan
 from kyrozen.discovery.brief import ProblemBrief
+from kyrozen.discovery.question_engine import QuestionEngine
 from kyrozen.hardware.models import BOM, FirmwareProject, HardwareArchitecture, WiringDesign
 from kyrozen.memory.interface import MemoryInterface
 from kyrozen.planning.models import PRD, ProductBrief
@@ -150,16 +151,32 @@ class ProjectContextBuilder:
                 lines.append(f"  {key}: {display_value}")
 
         filled_count = sum(1 for dim in key_dimensions if brief_dict.get(dim))
-        if filled_count >= 4:
+        filled_dims = [dim for dim in key_dimensions if brief_dict.get(dim)]
+        missing_dims = [dim for dim in key_dimensions if not brief_dict.get(dim)]
+
+        # Enforce a hard ceiling on follow-up questions so the agent does not
+        # keep probing indefinitely.
+        questions_asked = len(memory_backend.query(category="discovery_qa", limit=100, project_id=project.id))
+        max_follow_up_questions = 2
+        at_question_limit = questions_asked >= max_follow_up_questions
+
+        if filled_count >= 4 or at_question_limit:
             lines.append(
-                f"\n[Discovery Policy] Enough information collected ({filled_count}/{len(key_dimensions)} key dimensions). "
+                f"\n[Discovery Policy] Enough information collected ({filled_count}/{len(key_dimensions)} key dimensions, "
+                f"{questions_asked} follow-up questions asked). "
                 "Do NOT ask any more questions. Synthesize the Problem Brief and call save_problem_brief now."
             )
         else:
             lines.append(
                 f"\n[Discovery Policy] Ask at most 1 focused follow-up question. "
-                f"Currently filled dimensions: {filled_count}/{len(key_dimensions)}."
+                f"Currently filled dimensions: {filled_count}/{len(key_dimensions)}. "
+                f"Follow-up questions asked so far: {questions_asked}/{max_follow_up_questions}."
             )
+            lines.append(f"Filled dimensions (DO NOT ask about these again): {', '.join(filled_dims) or 'none'}")
+            lines.append(f"Missing dimensions (choose the next question from here): {', '.join(missing_dims) or 'none'}")
+            next_q = QuestionEngine().next_question(brief)
+            if next_q:
+                lines.append(f"Recommended next question: {next_q.question}")
 
         memories = memory_backend.query(
             category="discovery_qa",

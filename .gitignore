@@ -11,7 +11,7 @@ venv/
 
 # Storage & logs
 chroma_memory/
-logs/
+/logs/
 projects/
 *.log
 *.db

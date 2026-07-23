@@ -45,6 +45,9 @@ export function ProjectWorkspacePage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chatLoadedRef = useRef<string | null>(null);
+
+  const chatStorageKey = (id: string) => `kyrozen-chat-${id}`;
 
   useEffect(() => {
     if (!projectId) return;
@@ -76,14 +79,29 @@ export function ProjectWorkspacePage() {
   }, []);
 
   useEffect(() => {
-    if (!project) return;
-    if (activeTab === 'chat' && messages.length === 0) {
-      const stageLabel = STAGES.find((s) => s.id === project.current_stage)?.label ?? project.current_stage;
-      setMessages([
-        { role: 'system', content: `我是 Kyrozen，你的 AI 产品开发伙伴。当前阶段：${stageLabel}。告诉我你想做什么。` },
-      ]);
+    if (!project || !projectId || chatLoadedRef.current === projectId) return;
+    chatLoadedRef.current = projectId;
+
+    const saved = localStorage.getItem(chatStorageKey(projectId));
+    if (saved) {
+      try {
+        setMessages(JSON.parse(saved));
+        return;
+      } catch {
+        // Fall through to default greeting
+      }
     }
-  }, [activeTab, project, messages.length]);
+
+    const stageLabel = STAGES.find((s) => s.id === project.current_stage)?.label ?? project.current_stage;
+    setMessages([
+      { role: 'system', content: `我是 Kyrozen，你的 AI 产品开发伙伴。当前阶段：${stageLabel}。告诉我你想做什么。` },
+    ]);
+  }, [project, projectId]);
+
+  useEffect(() => {
+    if (!projectId || messages.length === 0) return;
+    localStorage.setItem(chatStorageKey(projectId), JSON.stringify(messages));
+  }, [messages, projectId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -373,7 +391,7 @@ export function ProjectWorkspacePage() {
                 </div>
               </>
             ) : (
-              <div className="card min-h-[500px] flex flex-col">
+              <div className="card min-h-[500px] lg:h-[calc(100vh-10rem)] flex flex-col">
                 <div className="flex items-center gap-3 mb-6">
                   <ChatIcon className="w-5 h-5 text-sky-500" />
                   <h3 className="text-lg">AI 助手</h3>

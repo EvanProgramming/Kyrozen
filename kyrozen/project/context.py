@@ -126,6 +126,15 @@ class ProjectContextBuilder:
 
         lines.append("[Current Problem Brief]")
         brief_dict = brief.to_dict()
+        key_dimensions = [
+            "surface_problem",
+            "scenario",
+            "target_user",
+            "current_solution",
+            "deep_need",
+            "frequency",
+            "impact",
+        ]
         for key, value in brief_dict.items():
             if key == "unknown_assumptions":
                 if value:
@@ -139,6 +148,18 @@ class ProjectContextBuilder:
             else:
                 display_value = value if value else "(not set)"
                 lines.append(f"  {key}: {display_value}")
+
+        filled_count = sum(1 for dim in key_dimensions if brief_dict.get(dim))
+        if filled_count >= 4:
+            lines.append(
+                f"\n[Discovery Policy] Enough information collected ({filled_count}/{len(key_dimensions)} key dimensions). "
+                "Do NOT ask any more questions. Synthesize the Problem Brief and call save_problem_brief now."
+            )
+        else:
+            lines.append(
+                f"\n[Discovery Policy] Ask at most 1 focused follow-up question. "
+                f"Currently filled dimensions: {filled_count}/{len(key_dimensions)}."
+            )
 
         memories = memory_backend.query(
             category="discovery_qa",

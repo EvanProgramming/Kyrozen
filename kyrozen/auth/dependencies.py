@@ -17,6 +17,10 @@ security = HTTPBearer(auto_error=False)
 def _decode_supabase_token(token: str, config: KyrozenConfig) -> dict[str, Any]:
     """Verify a Supabase JWT using JWKS when possible, falling back to HS256."""
     errors: list[str] = []
+    # Allow clock skew between Supabase auth servers and the local machine.
+    # Some users experience larger drift, so use a generous window while still
+    # bounding token acceptance to a few minutes.
+    leeway = 300
 
     if config.supabase_url:
         try:
@@ -29,6 +33,7 @@ def _decode_supabase_token(token: str, config: KyrozenConfig) -> dict[str, Any]:
                 signing_key.key,
                 algorithms=[alg],
                 audience="authenticated",
+                leeway=leeway,
             )
         except Exception as exc:
             errors.append(f"JWKS verification failed: {exc}")
@@ -40,6 +45,7 @@ def _decode_supabase_token(token: str, config: KyrozenConfig) -> dict[str, Any]:
                 config.supabase_jwt_secret,
                 algorithms=["HS256"],
                 audience="authenticated",
+                leeway=leeway,
             )
         except Exception as exc:
             errors.append(f"HS256 verification failed: {exc}")

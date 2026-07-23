@@ -655,6 +655,52 @@ class SupabaseDatabase:
         return len(rows) > 0
 
     # ------------------------------------------------------------------
+    # Chat messages
+    # ------------------------------------------------------------------
+    def save_chat_message(self, message: dict[str, Any]) -> None:
+        data = {
+            "id": message["id"],
+            "user_id": message["user_id"],
+            "project_id": message["project_id"],
+            "role": message["role"],
+            "content": message["content"],
+            "metadata": message.get("metadata") or {},
+            "created_at": message.get("created_at"),
+        }
+        self.client.table("chat_messages").upsert(data).execute()
+
+    def list_chat_messages(
+        self,
+        project_id: str,
+        user_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        try:
+            query = self.client.table("chat_messages").select("*").eq("project_id", project_id)
+            if user_id:
+                query = query.eq("user_id", user_id)
+            response = query.order("created_at", desc=False).limit(limit).execute()
+        except Exception as exc:
+            if self._is_missing_table_error(exc):
+                raise
+            return []
+        return list(getattr(response, "data", []))
+
+    def delete_chat_messages(self, project_id: str, user_id: str) -> bool:
+        try:
+            response = (
+                self.client.table("chat_messages")
+                .delete()
+                .eq("project_id", project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+        except Exception:
+            return False
+        rows = getattr(response, "data", [])
+        return len(rows) > 0
+
+    # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
     def _user_id_for_project(self, project_id: str | None) -> str | None:

@@ -72,19 +72,23 @@ export interface ChatResponse {
   task_id: string;
   status: string;
   project_id?: string;
-  mode: string;
+  mode?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  user_id: string;
+  project_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface TaskStep {
   description: string;
   status: string;
-  result?: unknown;
-  error?: string;
-  metadata?: {
-    tool?: string;
-    action?: string;
-    parameters?: Record<string, unknown>;
-  };
+  metadata?: Record<string, unknown>;
 }
 
 export interface Task {
@@ -93,7 +97,7 @@ export interface Task {
   description: string;
   status: string;
   project_id?: string;
-  result?: { answer?: string } | string;
+  result?: unknown;
   errors: string[];
   steps: TaskStep[];
 }

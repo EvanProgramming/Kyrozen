@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { getProject, getProjectState } from '../api/projects';
-import { sendChatMessage, getTask, confirmTask } from '../api/chat';
+import { sendChatMessage, getTask, confirmTask, getChatHistory } from '../api/chat';
 import { handleApiError } from '../api/client';
-import type { Project, ProjectState } from '../types/api';
+import type { Project, ProjectState, Task } from '../types/api';
 import { ChatIcon, DocumentIcon, SendIcon, SparklesIcon } from '../components/Icons';
+import { QuestionModal, type QuestionData } from '../components/QuestionModal';
 
 const STAGES = [
   { id: 'problem_discovery', label: '问题发现', mode: 'discovery', hint: '澄清用户痛点，生成 Problem Brief' },
@@ -25,6 +26,33 @@ type Message = {
   taskId?: string;
 };
 
+function parseQuestionBlock(content: string): { question: QuestionData | null; displayContent: string } {
+  const regex = /```kyrozen-question\s*([\s\S]*?)\s*```/;
+  const match = content.match(regex);
+  if (!match) return { question: null, displayContent: content };
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (parsed.question && Array.isArray(parsed.options)) {
+      return {
+        question: parsed as QuestionData,
+        displayContent: content.replace(regex, '').trim(),
+      };
+    }
+  } catch {
+    // ignore malformed block
+  }
+  return { question: null, displayContent: content };
+}
+
+function getTaskAnswer(task: Task): string {
+  if (task.result === null || task.result === undefined) return '已完成';
+  if (typeof task.result === 'string') return task.result;
+  if (typeof task.result === 'object' && 'answer' in task.result) {
+    return String((task.result as { answer?: unknown }).answer ?? JSON.stringify(task.result));
+  }
+  return JSON.stringify(task.result);
+}
+
 export function ProjectWorkspacePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
@@ -35,6 +63,7 @@ export function ProjectWorkspacePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [pendingQuestion, setPendingQuestion] = useState<QuestionData | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     taskId: string;
     tool: string;
@@ -46,8 +75,6 @@ export function ProjectWorkspacePage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chatLoadedRef = useRef<string | null>(null);
-
-  const chatStorageKey = (id: string) => `kyrozen-chat-${id}`;
 
   useEffect(() => {
     if (!projectId) return;
@@ -81,31 +108,39 @@ export function ProjectWorkspacePage() {
   useEffect(() => {
     if (!project || !projectId || chatLoadedRef.current === projectId) return;
     chatLoadedRef.current = projectId;
+    const pid = projectId;
+    const stageLabel = STAGES.find((s) => s.id === project.current_stage)?.label ?? project.current_stage;
+    const greeting = { role: 'system' as const, content: `我是 Kyrozen，你的 AI 产品开发伙伴。当前阶段：${stageLabel}。告诉我你想做什么。` };
 
-    const saved = localStorage.getItem(chatStorageKey(projectId));
-    if (saved) {
+    async function loadChat() {
       try {
-        setMessages(JSON.parse(saved));
-        return;
-      } catch {
-        // Fall through to default greeting
+        const history = await getChatHistory(pid);
+        if (history.length === 0 || history[0].role !== 'system') {
+          setMessages([greeting, ...history.map((m) => ({ role: m.role, content: m.content }))]);
+        } else {
+          setMessages(history.map((m) => ({ role: m.role, content: m.content })));
+        }
+      } catch (err) {
+        console.error('Failed to load chat history', err);
+        setMessages([greeting]);
       }
     }
-
-    const stageLabel = STAGES.find((s) => s.id === project.current_stage)?.label ?? project.current_stage;
-    setMessages([
-      { role: 'system', content: `我是 Kyrozen，你的 AI 产品开发伙伴。当前阶段：${stageLabel}。告诉我你想做什么。` },
-    ]);
+    loadChat();
   }, [project, projectId]);
-
-  useEffect(() => {
-    if (!projectId || messages.length === 0) return;
-    localStorage.setItem(chatStorageKey(projectId), JSON.stringify(messages));
-  }, [messages, projectId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, pendingConfirmation]);
+
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.role === 'assistant') {
+      const parsed = parseQuestionBlock(lastMessage.content);
+      setPendingQuestion(parsed.question);
+    } else {
+      setPendingQuestion(null);
+    }
+  }, [messages]);
 
   function stopPolling() {
     if (pollRef.current) {
@@ -144,11 +179,7 @@ export function ProjectWorkspacePage() {
           updateMessageByTaskId(taskId, { content: progressText });
         } else if (task.status === 'completed') {
           stopPolling();
-          const answer =
-            typeof task.result === 'string'
-              ? task.result
-              : task.result?.answer ?? JSON.stringify(task.result) ?? '已完成';
-          updateMessageByTaskId(taskId, { content: answer, status: undefined });
+          updateMessageByTaskId(taskId, { content: getTaskAnswer(task), status: undefined });
           setIsSending(false);
           await refreshProjectState();
         } else if (task.status === 'failed') {
@@ -164,13 +195,13 @@ export function ProjectWorkspacePage() {
         } else if (task.status === 'waiting_confirmation') {
           stopPolling();
           const latestStep = [...task.steps].reverse().find((s) => s.status === 'waiting_confirmation');
-          const metadata = latestStep?.metadata;
+          const metadata = latestStep?.metadata as Record<string, unknown> | undefined;
           if (metadata) {
             setPendingConfirmation({
               taskId,
-              tool: metadata.tool ?? '',
-              action: metadata.action ?? '',
-              parameters: metadata.parameters ?? {},
+              tool: String(metadata.tool ?? ''),
+              action: String(metadata.action ?? ''),
+              parameters: (metadata.parameters as Record<string, unknown>) ?? {},
               reason: latestStep?.description,
             });
             updateMessageByTaskId(taskId, { content: latestStep?.description || '等待确认', status: undefined });
@@ -243,11 +274,7 @@ export function ProjectWorkspacePage() {
       const task = await confirmTask(taskId, confirmed);
       if (task.status === 'completed') {
         stopPolling();
-        const answer =
-          typeof task.result === 'string'
-            ? task.result
-            : task.result?.answer ?? JSON.stringify(task.result) ?? '已完成';
-        updateMessageByTaskId(taskId, { content: answer, status: undefined });
+        updateMessageByTaskId(taskId, { content: getTaskAnswer(task) });
         setIsSending(false);
         await refreshProjectState();
       } else if (task.status === 'failed') {
@@ -417,7 +444,11 @@ export function ProjectWorkspacePage() {
                             </div>
                           </div>
                         ) : (
-                          <div className="whitespace-pre-wrap">{message.content}</div>
+                          <div className="whitespace-pre-wrap">
+                            {message.role === 'assistant'
+                              ? parseQuestionBlock(message.content).displayContent || '(请从下方弹窗中选择回答)'
+                              : message.content}
+                          </div>
                         )}
                         {message.role === 'assistant' && message.status === 'error' && (
                           <button
@@ -488,6 +519,16 @@ export function ProjectWorkspacePage() {
           </div>
         </div>
       </div>
+
+      <QuestionModal
+        open={!!pendingQuestion}
+        question={pendingQuestion}
+        onAnswer={(value) => {
+          setPendingQuestion(null);
+          submitUserMessage(value);
+        }}
+        onClose={() => setPendingQuestion(null)}
+      />
     </Layout>
   );
 }

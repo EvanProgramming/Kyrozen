@@ -1,8 +1,13 @@
 import { apiClient } from './client';
-import type { ChatRequest, ChatResponse, Task } from '../types/api';
+import type { ChatMessage, ChatRequest, ChatResponse, Task } from '../types/api';
 
 export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
   const response = await apiClient.post<ChatResponse>('/chat', request);
+  return response.data;
+}
+
+export async function getChatHistory(projectId: string): Promise<ChatMessage[]> {
+  const response = await apiClient.get<ChatMessage[]>(`/projects/${projectId}/chat`);
   return response.data;
 }
 

@@ -189,6 +189,18 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 CREATE INDEX IF NOT EXISTS idx_suggestions_user ON suggestions(user_id);
 CREATE INDEX IF NOT EXISTS idx_suggestions_project ON suggestions(source_project_id);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_project ON chat_messages(project_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id);
 """
 
 
@@ -1007,6 +1019,68 @@ class KyrozenDatabase:
             "related_learning_ids": json.loads(row["related_learning_ids"] or "[]"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+        }
+
+    # ------------------------------------------------------------------
+    # Chat messages
+    # ------------------------------------------------------------------
+    def save_chat_message(self, message: dict[str, Any]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_messages (id, user_id, project_id, role, content, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    role=excluded.role,
+                    content=excluded.content,
+                    metadata=excluded.metadata
+                """,
+                (
+                    message["id"],
+                    message["user_id"],
+                    message["project_id"],
+                    message["role"],
+                    message["content"],
+                    json.dumps(message.get("metadata") or {}, ensure_ascii=False),
+                    message.get("created_at", now),
+                ),
+            )
+
+    def list_chat_messages(
+        self,
+        project_id: str,
+        user_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM chat_messages WHERE project_id = ?"
+        params: list[Any] = [project_id]
+        if user_id:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY created_at ASC LIMIT ?"
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._row_to_chat_message(row) for row in rows]
+
+    def delete_chat_messages(self, project_id: str, user_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM chat_messages WHERE project_id = ? AND user_id = ?",
+                (project_id, user_id),
+            )
+            return cur.rowcount > 0
+
+    def _row_to_chat_message(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "user_id": row["user_id"] or "",
+            "project_id": row["project_id"] or "",
+            "role": row["role"] or "",
+            "content": row["content"] or "",
+            "metadata": json.loads(row["metadata"] or "{}"),
+            "created_at": row["created_at"],
         }
 
     # ------------------------------------------------------------------

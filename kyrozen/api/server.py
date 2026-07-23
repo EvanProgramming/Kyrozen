@@ -667,6 +667,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(503, "Model provider not configured. Set DEEPSEEK_API_KEY or KYROZEN_API_KEY.")
 
         user_input = request.message
+        pm = _get_project_manager()
+        user_message: dict[str, Any] | None = None
         if request.project_id:
             project = _get_owned_project(request.project_id, current_user)
             builder = _get_context_builder()
@@ -694,11 +696,29 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 agent.memory = _learning_repository
             else:
                 agent.memory = _project_memory(request.project_id)
+
+            user_message = {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user.user_id,
+                "project_id": request.project_id,
+                "role": "user",
+                "content": request.message,
+                "metadata": {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            pm.save_chat_message(user_message)
         else:
             # Use a global in-memory fallback if no project
             from kyrozen.memory import InMemoryMemory
             if not isinstance(agent.memory, InMemoryMemory):
                 agent.memory = InMemoryMemory()
+
+        def _assistant_content(task: Any) -> str:
+            if not task.result:
+                return "(no response)"
+            if isinstance(task.result, dict):
+                return task.result.get("answer") or str(task.result)
+            return str(task.result)
 
         try:
             if request.stream:
@@ -712,9 +732,33 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                     media_type="text/event-stream",
                 )
             task = agent.run(user_input, confirmed=request.confirmed, project_id=request.project_id)
+            if request.project_id and user_message is not None:
+                pm.save_chat_message(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "user_id": current_user.user_id,
+                        "project_id": request.project_id,
+                        "role": "assistant",
+                        "content": _assistant_content(task),
+                        "metadata": {},
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
             return {"task_id": task.id, "status": task.status, "project_id": request.project_id, "mode": request.mode}
         except Exception as e:
-            raise HTTPException(500, f"Agent error: {e}")
+            if request.project_id and user_message is not None:
+                pm.save_chat_message(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "user_id": current_user.user_id,
+                        "project_id": request.project_id,
+                        "role": "assistant",
+                        "content": f"Error: {e}",
+                        "metadata": {},
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+            raise HTTPException(500, f"Agent error: {e}") from e
 
     @app.get("/api/tasks/{task_id}")
     async def api_get_task(
@@ -927,6 +971,18 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "blocked_reason": project.blocked_reason or None,
             "next_action": next_action,
         }
+
+    @app.get("/api/projects/{project_id}/chat")
+    async def api_get_project_chat(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        pm = _get_project_manager()
+        return pm.list_chat_messages(
+            project_id=project_id,
+            user_id=current_user.user_id,
+        )
 
     @app.post("/api/projects/{project_id}/advance")
     async def api_advance_project(

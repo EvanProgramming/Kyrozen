@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from kyrozen.core.task import Task, TaskManager
 
 
@@ -48,3 +50,20 @@ def test_task_manager_list(temp_dir: str):
     tasks = tm.list_tasks()
     assert len(tasks) == 2
     assert {t.id for t in tasks} == {t1.id, t2.id}
+
+
+def test_task_status_transition_validation():
+    task = Task(title="Transition test")
+    task.update_status("running")
+    with pytest.raises(ValueError):
+        task.update_status("pending")
+    task.update_status("completed")
+    with pytest.raises(ValueError):
+        task.update_status("running")
+
+
+def test_task_force_status_transition():
+    task = Task(title="Force transition")
+    task.update_status("completed")
+    task.update_status("running", force=True)
+    assert task.status == "running"

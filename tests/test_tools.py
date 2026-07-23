@@ -9,7 +9,14 @@ from kyrozen.tools.file_tools import FileReadTool, FileWriteTool, FindFilesTool,
 from kyrozen.tools.terminal_tools import TerminalTool
 
 
-def test_file_write_and_read(temp_dir: str):
+def _set_workspace(monkeypatch, workspace: str) -> None:
+    """Point the global configuration at a temporary workspace for isolation."""
+    monkeypatch.setenv("KYROZEN_WORKSPACE", workspace)
+    monkeypatch.setenv("KYROZEN_API_KEY", "test-key")
+
+
+def test_file_write_and_read(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
     tool = FileWriteTool()
     path = os.path.join(temp_dir, "hello.txt")
     result = tool.execute("write", {"path": path, "content": "Hello Kyrozen"})
@@ -22,14 +29,32 @@ def test_file_write_and_read(temp_dir: str):
     assert result.data["content"] == "Hello Kyrozen"
 
 
-def test_file_read_missing():
+def test_file_read_missing(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
     tool = FileReadTool()
-    result = tool.execute("read", {"path": "/tmp/nonexistent_kyrozen_file.txt"})
+    result = tool.execute("read", {"path": os.path.join(temp_dir, "nonexistent_kyrozen_file.txt")})
     assert not result.success
     assert "not found" in result.error.lower()
 
 
-def test_list_dir(temp_dir: str):
+def test_file_path_escape_blocked(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
+    tool = FileWriteTool()
+    result = tool.execute("write", {"path": "../outside_workspace.txt", "content": "x"})
+    assert not result.success
+    assert "outside the allowed workspace" in result.error.lower()
+
+
+def test_file_absolute_outside_workspace_blocked(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
+    tool = FileReadTool()
+    result = tool.execute("read", {"path": "/etc/passwd"})
+    assert not result.success
+    assert "outside the allowed workspace" in result.error.lower()
+
+
+def test_list_dir(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
     open(os.path.join(temp_dir, "a.txt"), "w").close()
     os.makedirs(os.path.join(temp_dir, "sub"))
     tool = ListDirTool()
@@ -40,7 +65,8 @@ def test_list_dir(temp_dir: str):
     assert "sub" in names
 
 
-def test_find_files(temp_dir: str):
+def test_find_files(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
     open(os.path.join(temp_dir, "foo.py"), "w").close()
     open(os.path.join(temp_dir, "bar.txt"), "w").close()
     tool = FindFilesTool()
@@ -50,7 +76,8 @@ def test_find_files(temp_dir: str):
     assert "foo.py" in result.data["matches"][0]
 
 
-def test_terminal_echo():
+def test_terminal_echo(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
     tool = TerminalTool()
     result = tool.execute("execute", {"command": "echo hello"})
     assert result.success
@@ -62,6 +89,22 @@ def test_terminal_blocked_command():
     result = tool.execute("execute", {"command": "rm -rf /some/path"})
     assert not result.success
     assert "blocked" in result.error.lower()
+
+
+def test_terminal_path_escape_blocked(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
+    tool = TerminalTool()
+    result = tool.execute("execute", {"command": "cat ../outside.txt"})
+    assert not result.success
+    assert "path escape" in result.error.lower()
+
+
+def test_terminal_cwd_outside_workspace_blocked(temp_dir: str, monkeypatch):
+    _set_workspace(monkeypatch, temp_dir)
+    tool = TerminalTool()
+    result = tool.execute("execute", {"command": "pwd", "cwd": "/etc"})
+    assert not result.success
+    assert "outside the allowed workspace" in result.error.lower()
 
 
 def test_registry_has_phase1_tools():

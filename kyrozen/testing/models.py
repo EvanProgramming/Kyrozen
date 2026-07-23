@@ -361,6 +361,8 @@ class ValidationReport:
 class TestingArtifactBundle:
     """Bundle of all Phase 8 artifacts for easy serialization."""
 
+    __test__ = False  # Not a pytest test class
+
     test_plan: TestPlan = field(default_factory=TestPlan)
     test_results: list[TestResult] = field(default_factory=list)
     validation_report: ValidationReport = field(default_factory=ValidationReport)

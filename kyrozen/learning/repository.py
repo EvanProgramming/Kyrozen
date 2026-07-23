@@ -27,7 +27,9 @@ class LearningRepository:
     def __init__(self, db: KyrozenDatabase | SupabaseDatabase) -> None:
         self.db = db
 
-    def _user_id(self) -> str:
+    def _user_id(self, explicit_user_id: str | None = None) -> str:
+        if explicit_user_id:
+            return explicit_user_id
         user_id = get_current_user_id()
         if not user_id:
             raise RuntimeError("LearningRepository requires an authenticated user context")
@@ -36,9 +38,9 @@ class LearningRepository:
     # ------------------------------------------------------------------
     # Learning records
     # ------------------------------------------------------------------
-    def save_record(self, record: LearningRecord) -> None:
+    def save_record(self, record: LearningRecord, user_id: str | None = None) -> None:
         data = record.to_dict()
-        data["user_id"] = self._user_id()
+        data["user_id"] = self._user_id(user_id)
         self.db.save_learning_record(data)
 
     def list_records(
@@ -46,88 +48,91 @@ class LearningRepository:
         source_project_id: str | None = None,
         memory_type: str | None = None,
         limit: int = 100,
+        user_id: str | None = None,
     ) -> list[LearningRecord]:
         rows = self.db.list_learning_records(
-            user_id=self._user_id(),
+            user_id=self._user_id(user_id),
             source_project_id=source_project_id,
             memory_type=memory_type,
             limit=limit,
         )
         return [LearningRecord.from_dict(r) for r in rows]
 
-    def get_record(self, record_id: str) -> LearningRecord | None:
-        row = self.db.get_learning_record(record_id, self._user_id())
+    def get_record(self, record_id: str, user_id: str | None = None) -> LearningRecord | None:
+        row = self.db.get_learning_record(record_id, self._user_id(user_id))
         if row is None:
             return None
         return LearningRecord.from_dict(row)
 
-    def delete_record(self, record_id: str) -> bool:
-        return self.db.delete_learning_record(record_id, self._user_id())
+    def delete_record(self, record_id: str, user_id: str | None = None) -> bool:
+        return self.db.delete_learning_record(record_id, self._user_id(user_id))
 
     # ------------------------------------------------------------------
     # Failure knowledge
     # ------------------------------------------------------------------
-    def save_failure(self, failure: FailureKnowledge) -> None:
+    def save_failure(self, failure: FailureKnowledge, user_id: str | None = None) -> None:
         data = failure.to_dict()
-        data["user_id"] = self._user_id()
+        data["user_id"] = self._user_id(user_id)
         self.db.save_failure_knowledge(data)
 
     def list_failures(
         self,
         source_project_id: str | None = None,
         limit: int = 100,
+        user_id: str | None = None,
     ) -> list[FailureKnowledge]:
         rows = self.db.list_failure_knowledge(
-            user_id=self._user_id(),
+            user_id=self._user_id(user_id),
             source_project_id=source_project_id,
             limit=limit,
         )
         return [FailureKnowledge.from_dict(r) for r in rows]
 
-    def get_failure(self, failure_id: str) -> FailureKnowledge | None:
-        row = self.db.get_failure_knowledge(failure_id, self._user_id())
+    def get_failure(self, failure_id: str, user_id: str | None = None) -> FailureKnowledge | None:
+        row = self.db.get_failure_knowledge(failure_id, self._user_id(user_id))
         if row is None:
             return None
         return FailureKnowledge.from_dict(row)
 
-    def delete_failure(self, failure_id: str) -> bool:
-        return self.db.delete_failure_knowledge(failure_id, self._user_id())
+    def delete_failure(self, failure_id: str, user_id: str | None = None) -> bool:
+        return self.db.delete_failure_knowledge(failure_id, self._user_id(user_id))
 
     # ------------------------------------------------------------------
     # Success knowledge
     # ------------------------------------------------------------------
-    def save_success(self, success: SuccessKnowledge) -> None:
+    def save_success(self, success: SuccessKnowledge, user_id: str | None = None) -> None:
         data = success.to_dict()
-        data["user_id"] = self._user_id()
+        data["user_id"] = self._user_id(user_id)
         self.db.save_success_knowledge(data)
 
     def list_successes(
         self,
         source_project_id: str | None = None,
         limit: int = 100,
+        user_id: str | None = None,
     ) -> list[SuccessKnowledge]:
         rows = self.db.list_success_knowledge(
-            user_id=self._user_id(),
+            user_id=self._user_id(user_id),
             source_project_id=source_project_id,
             limit=limit,
         )
         return [SuccessKnowledge.from_dict(r) for r in rows]
 
-    def get_success(self, success_id: str) -> SuccessKnowledge | None:
-        row = self.db.get_success_knowledge(success_id, self._user_id())
+    def get_success(self, success_id: str, user_id: str | None = None) -> SuccessKnowledge | None:
+        row = self.db.get_success_knowledge(success_id, self._user_id(user_id))
         if row is None:
             return None
         return SuccessKnowledge.from_dict(row)
 
-    def delete_success(self, success_id: str) -> bool:
-        return self.db.delete_success_knowledge(success_id, self._user_id())
+    def delete_success(self, success_id: str, user_id: str | None = None) -> bool:
+        return self.db.delete_success_knowledge(success_id, self._user_id(user_id))
 
     # ------------------------------------------------------------------
     # Suggestions
     # ------------------------------------------------------------------
-    def save_suggestion(self, suggestion: Suggestion) -> None:
+    def save_suggestion(self, suggestion: Suggestion, user_id: str | None = None) -> None:
         data = suggestion.to_dict()
-        data["user_id"] = self._user_id()
+        data["user_id"] = self._user_id(user_id)
         self.db.save_suggestion(data)
 
     def list_suggestions(
@@ -135,26 +140,27 @@ class LearningRepository:
         source_project_id: str | None = None,
         status: str | None = None,
         limit: int = 100,
+        user_id: str | None = None,
     ) -> list[Suggestion]:
         rows = self.db.list_suggestions(
-            user_id=self._user_id(),
+            user_id=self._user_id(user_id),
             source_project_id=source_project_id,
             status=status,
             limit=limit,
         )
         return [Suggestion.from_dict(r) for r in rows]
 
-    def get_suggestion(self, suggestion_id: str) -> Suggestion | None:
-        row = self.db.get_suggestion(suggestion_id, self._user_id())
+    def get_suggestion(self, suggestion_id: str, user_id: str | None = None) -> Suggestion | None:
+        row = self.db.get_suggestion(suggestion_id, self._user_id(user_id))
         if row is None:
             return None
         return Suggestion.from_dict(row)
 
-    def update_suggestion_status(self, suggestion_id: str, status: str) -> bool:
-        return self.db.update_suggestion_status(suggestion_id, self._user_id(), status)
+    def update_suggestion_status(self, suggestion_id: str, status: str, user_id: str | None = None) -> bool:
+        return self.db.update_suggestion_status(suggestion_id, self._user_id(user_id), status)
 
-    def delete_suggestion(self, suggestion_id: str) -> bool:
-        return self.db.delete_suggestion(suggestion_id, self._user_id())
+    def delete_suggestion(self, suggestion_id: str, user_id: str | None = None) -> bool:
+        return self.db.delete_suggestion(suggestion_id, self._user_id(user_id))
 
     # ------------------------------------------------------------------
     # Convenience queries used by the suggestion generator

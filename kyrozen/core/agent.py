@@ -192,13 +192,17 @@ class BaseAgent:
                 })
                 continue
 
-            result: ToolResult = self.tools.execute(tool_name, action, parameters)
+            tool_parameters = dict(parameters)
+            if task.project_id:
+                tool_parameters["project_id"] = task.project_id
+
+            result: ToolResult = self.tools.execute(tool_name, action, tool_parameters)
             self.logger.tool(
                 f"Executed {tool_name}.{action}",
                 task_id=task.id,
                 tool=tool_name,
                 action=action,
-                parameters=parameters,
+                parameters=tool_parameters,
                 success=result.success,
             )
             step.status = "completed" if result.success else "failed"
@@ -216,18 +220,10 @@ class BaseAgent:
             })
         return results
 
-    def run(self, user_input: str, confirmed: bool = False, project_id: str | None = None) -> Task:
-        """Run one user request through the agent loop."""
-        task = self.task_manager.create(
-            title=user_input[:60],
-            description=user_input,
-            project_id=project_id,
-        )
-        task.update_status("running")
-        self.task_manager.update(task)
-        self.logger.user(user_input, task_id=task.id)
-
+    def _run_loop(self, task: Task, user_input: str, confirmed: bool = False) -> None:
+        """Execute the agent loop for an already-created task."""
         start_time = time.time()
+        project_id = task.project_id
         messages: list[dict[str, str]] = [
             {"role": "system", "content": self._build_system_prompt()},
             {"role": "user", "content": user_input},
@@ -263,7 +259,7 @@ class BaseAgent:
                 results = self._execute_tool_calls(task, calls, confirmed=confirmed)
                 if task.status == "waiting_confirmation":
                     self.task_manager.update(task)
-                    return task
+                    return
 
                 tool_results_text = json.dumps(results, ensure_ascii=False, indent=2)
                 messages.append({"role": "assistant", "content": text})
@@ -287,4 +283,24 @@ class BaseAgent:
         elapsed = time.time() - start_time
         self.logger.perf(f"Task finished in {elapsed:.2f}s", task_id=task.id, elapsed_seconds=elapsed, project_id=project_id)
         self.task_manager.update(task)
+
+    def run(self, user_input: str, confirmed: bool = False, project_id: str | None = None) -> Task:
+        """Run one user request through the agent loop."""
+        task = self.task_manager.create(
+            title=user_input[:60],
+            description=user_input,
+            project_id=project_id,
+        )
+        task.update_status("running")
+        self.task_manager.update(task)
+        self.logger.user(user_input, task_id=task.id)
+        self._run_loop(task, user_input, confirmed=confirmed)
+        return task
+
+    def run_task(self, task: Task, user_input: str, confirmed: bool = False) -> Task:
+        """Run the agent loop for an externally created task."""
+        task.update_status("running")
+        self.task_manager.update(task)
+        self.logger.user(user_input, task_id=task.id)
+        self._run_loop(task, user_input, confirmed=confirmed)
         return task

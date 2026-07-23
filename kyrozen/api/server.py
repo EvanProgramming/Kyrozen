@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from contextlib import asynccontextmanager
 import traceback
 import uuid
 from pathlib import Path
 from typing import Any
 
+import asyncio
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from kyrozen.auth.context import current_user_ctx
@@ -37,14 +40,7 @@ from kyrozen.tools import get_default_registry
 
 
 # Global state managed via lifespan
-_agent: BaseAgent | None = None
-_discovery_agent: ProblemDiscoveryAgent | None = None
-_research_agent: MarketResearchAgent | None = None
-_planning_agent: ProductPlanningAgent | None = None
-_development_agent: SoftwareDevelopmentAgent | None = None
-_hardware_agent: HardwareDevelopmentAgent | None = None
-_testing_agent: TestingAgent | None = None
-_learning_agent: LearningAgent | None = None
+_agent_factory: "AgentFactory | None" = None
 _config: KyrozenConfig | None = None
 _db: KyrozenDatabase | SupabaseDatabase | None = None
 _project_manager: ProjectManager | None = None
@@ -52,46 +48,157 @@ _context_builder: ProjectContextBuilder | None = None
 _learning_repository: LearningRepository | None = None
 
 
+class AgentFactory:
+    """Create request-scoped agent instances with isolated in-memory state."""
+
+    def __init__(
+        self,
+        config: KyrozenConfig,
+        model: ModelInterface | None,
+        db: KyrozenDatabase | SupabaseDatabase,
+        project_manager: ProjectManager,
+        learning_repository: LearningRepository,
+        logger: Any,
+    ) -> None:
+        self.config = config
+        self.model = model
+        self.db = db
+        self.project_manager = project_manager
+        self.learning_repository = learning_repository
+        self.logger = logger
+        self.tools = get_default_registry(
+            project_manager,
+            memory=InMemoryMemory(),
+            learning_repository=learning_repository,
+            tavily_api_key=config.tavily_api_key,
+            serper_api_key=config.serper_api_key,
+            github_token=config.github_token,
+            semantic_scholar_api_key=config.semantic_scholar_api_key,
+        )
+
+    def _task_manager(self) -> TaskManager:
+        return TaskManager(db=self.db, logger=self.logger)
+
+    def create_base_agent(self) -> BaseAgent:
+        return BaseAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=InMemoryMemory(),
+            logger=self.logger,
+        )
+
+    def create_discovery_agent(self) -> ProblemDiscoveryAgent:
+        return ProblemDiscoveryAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=InMemoryMemory(),
+            logger=self.logger,
+            project_manager=self.project_manager,
+        )
+
+    def create_research_agent(self) -> MarketResearchAgent:
+        return MarketResearchAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=InMemoryMemory(),
+            logger=self.logger,
+            project_manager=self.project_manager,
+        )
+
+    def create_planning_agent(self) -> ProductPlanningAgent:
+        return ProductPlanningAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=InMemoryMemory(),
+            logger=self.logger,
+            project_manager=self.project_manager,
+        )
+
+    def create_development_agent(self) -> SoftwareDevelopmentAgent:
+        return SoftwareDevelopmentAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=InMemoryMemory(),
+            logger=self.logger,
+            project_manager=self.project_manager,
+        )
+
+    def create_hardware_agent(self) -> HardwareDevelopmentAgent:
+        return HardwareDevelopmentAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=InMemoryMemory(),
+            logger=self.logger,
+            project_manager=self.project_manager,
+        )
+
+    def create_testing_agent(self) -> TestingAgent:
+        return TestingAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=InMemoryMemory(),
+            logger=self.logger,
+            project_manager=self.project_manager,
+        )
+
+    def create_learning_agent(self) -> LearningAgent:
+        return LearningAgent(
+            config=self.config,
+            model=self.model,
+            tools=self.tools,
+            task_manager=self._task_manager(),
+            memory=self.learning_repository,
+            logger=self.logger,
+            project_manager=self.project_manager,
+        )
+
+
+def _get_agent_factory() -> AgentFactory:
+    if _agent_factory is None:
+        raise RuntimeError("Agent factory not initialized")
+    return _agent_factory
+
+
 def _get_discovery_agent() -> ProblemDiscoveryAgent:
-    if _discovery_agent is None:
-        raise RuntimeError("Discovery agent not initialized")
-    return _discovery_agent
+    return _get_agent_factory().create_discovery_agent()
 
 
 def _get_research_agent() -> MarketResearchAgent:
-    if _research_agent is None:
-        raise RuntimeError("Research agent not initialized")
-    return _research_agent
+    return _get_agent_factory().create_research_agent()
 
 
 def _get_planning_agent() -> ProductPlanningAgent:
-    if _planning_agent is None:
-        raise RuntimeError("Planning agent not initialized")
-    return _planning_agent
+    return _get_agent_factory().create_planning_agent()
 
 
 def _get_development_agent() -> SoftwareDevelopmentAgent:
-    if _development_agent is None:
-        raise RuntimeError("Development agent not initialized")
-    return _development_agent
+    return _get_agent_factory().create_development_agent()
 
 
 def _get_hardware_agent() -> HardwareDevelopmentAgent:
-    if _hardware_agent is None:
-        raise RuntimeError("Hardware agent not initialized")
-    return _hardware_agent
+    return _get_agent_factory().create_hardware_agent()
 
 
 def _get_testing_agent() -> TestingAgent:
-    if _testing_agent is None:
-        raise RuntimeError("Testing agent not initialized")
-    return _testing_agent
+    return _get_agent_factory().create_testing_agent()
 
 
 def _get_learning_agent() -> LearningAgent:
-    if _learning_agent is None:
-        raise RuntimeError("Learning agent not initialized")
-    return _learning_agent
+    return _get_agent_factory().create_learning_agent()
 
 
 class ChatRequest(BaseModel):
@@ -99,6 +206,7 @@ class ChatRequest(BaseModel):
     project_id: str | None = Field(None, description="Project ID to associate with this chat")
     confirmed: bool = Field(False, description="Whether to confirm high-risk actions")
     mode: str = Field("default", description="Chat mode: default, discovery, market_research, planning, development, hardware, testing, or learning")
+    stream: bool = Field(False, description="Stream task progress via Server-Sent Events")
 
 
 class ConfirmRequest(BaseModel):
@@ -155,6 +263,50 @@ class CreateEventRequest(BaseModel):
     session_id: str | None = None
 
 
+class CreateLearningRecordRequest(BaseModel):
+    memory: str = Field(..., min_length=1)
+    memory_type: str = Field(..., pattern="^(user_preference|user_capability|project_fact|product_decision|validated_success|validated_failure|external_knowledge)$")
+    source: str = ""
+    confidence: str = Field("low", pattern="^(low|medium|high)$")
+    verification_status: str = Field("unverified", pattern="^(unverified|user_provided|externally_verified|experiment_verified|repeatedly_verified)$")
+    scope: str = Field("private", pattern="^(private|user|public)$")
+    tags: list[str] = Field(default_factory=list)
+
+
+class CreateFailureKnowledgeRequest(BaseModel):
+    problem: str = Field(..., min_length=1)
+    cause: str = Field(..., min_length=1)
+    solution: str = Field(..., min_length=1)
+    affected_scope: str = ""
+    verification: str = ""
+    confidence: str = Field("low", pattern="^(low|medium|high)$")
+    verification_status: str = Field("unverified", pattern="^(unverified|user_provided|externally_verified|experiment_verified|repeatedly_verified)$")
+
+
+class CreateSuccessKnowledgeRequest(BaseModel):
+    goal: str = Field(..., min_length=1)
+    solution: str = Field(..., min_length=1)
+    conditions: list[str] = Field(default_factory=list)
+    result: str = ""
+    confidence: str = Field("low", pattern="^(low|medium|high)$")
+    verification_status: str = Field("unverified", pattern="^(unverified|user_provided|externally_verified|experiment_verified|repeatedly_verified)$")
+
+
+class CreateSuggestionRequest(BaseModel):
+    suggestion: str = Field(..., min_length=1)
+    reason: str = Field(..., min_length=1)
+    evidence: list[str] = Field(default_factory=list)
+    impact: str = ""
+    priority: str = Field("medium", pattern="^(low|medium|high|critical)$")
+    status: str = Field("new", pattern="^(new|accepted|rejected|later|ignored)$")
+    category: str = Field("", pattern="^(|scope_drift|unverified_assumption|cost_optimization|tech_risk|test_gap|new_opportunity)$")
+    related_learning_ids: list[str] = Field(default_factory=list)
+
+
+class UpdateSuggestionStatusRequest(BaseModel):
+    status: str = Field(..., pattern="^(new|accepted|rejected|later|ignored)$")
+
+
 class AnalyticsSummaryResponse(BaseModel):
     total_events: int
     events_by_type: dict[str, int]
@@ -164,9 +316,7 @@ class AnalyticsSummaryResponse(BaseModel):
 
 
 def _get_agent() -> BaseAgent:
-    if _agent is None:
-        raise RuntimeError("Agent not initialized")
-    return _agent
+    return _get_agent_factory().create_base_agent()
 
 
 def _get_project_manager() -> ProjectManager:
@@ -179,6 +329,12 @@ def _get_context_builder() -> ProjectContextBuilder:
     if _context_builder is None:
         raise RuntimeError("Context builder not initialized")
     return _context_builder
+
+
+def _get_learning_repository() -> LearningRepository:
+    if _learning_repository is None:
+        raise RuntimeError("Learning repository not initialized")
+    return _learning_repository
 
 
 def _project_memory(project_id: str) -> ProjectMemory:
@@ -251,7 +407,7 @@ def _recommend_next_action(project: Any) -> dict[str, str] | None:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent, _discovery_agent, _research_agent, _planning_agent, _development_agent, _hardware_agent, _testing_agent, _learning_agent, _config, _db, _project_manager, _context_builder, _learning_repository
+        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -270,87 +426,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         os.makedirs(_config.workspace_root, exist_ok=True)
         _learning_repository = LearningRepository(_db)
 
-        tools = get_default_registry(
-            _project_manager,
-            memory=InMemoryMemory(),
+        _agent_factory = AgentFactory(
+            config=_config,
+            model=active_model,
+            db=_db,
+            project_manager=_project_manager,
             learning_repository=_learning_repository,
-            tavily_api_key=_config.tavily_api_key,
-            serper_api_key=_config.serper_api_key,
-            github_token=_config.github_token,
-            semantic_scholar_api_key=_config.semantic_scholar_api_key,
-        )
-        task_manager = TaskManager(db=_db)
-        global _agent
-        _agent = BaseAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
             logger=logger,
-        )
-        global _discovery_agent
-        _discovery_agent = ProblemDiscoveryAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
-            logger=logger,
-            project_manager=_project_manager,
-        )
-        global _research_agent
-        _research_agent = MarketResearchAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
-            logger=logger,
-            project_manager=_project_manager,
-        )
-        global _planning_agent
-        _planning_agent = ProductPlanningAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
-            logger=logger,
-            project_manager=_project_manager,
-        )
-        global _development_agent
-        _development_agent = SoftwareDevelopmentAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
-            logger=logger,
-            project_manager=_project_manager,
-        )
-        global _hardware_agent
-        _hardware_agent = HardwareDevelopmentAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
-            logger=logger,
-            project_manager=_project_manager,
-        )
-        global _testing_agent
-        _testing_agent = TestingAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
-            logger=logger,
-            project_manager=_project_manager,
-        )
-        global _learning_agent
-        _learning_agent = LearningAgent(
-            config=_config,
-            model=active_model,
-            tools=tools,
-            task_manager=task_manager,
-            logger=logger,
-            project_manager=_project_manager,
-            memory=_learning_repository,
         )
         logger.agent("Kyrozen Core API started")
         yield
@@ -359,7 +441,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     app = FastAPI(title="Kyrozen Core API", version="0.2.0", lifespan=lifespan)
 
     resolved_config = config or get_config()
-    allow_origins = resolved_config.cors_origins if resolved_config.cors_origins else ["*"]
+    allow_origins = resolved_config.cors_origins or []
+    if not allow_origins:
+        logger = get_logger(resolved_config.log_level)
+        logger.warning(
+            "CORS origins not configured (KYROZEN_CORS_ORIGINS). "
+            "API will reject cross-origin requests."
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
@@ -388,11 +476,24 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             except Exception:
                 pass
 
+        user_id = ""
+        try:
+            credentials = await security(request)
+            if credentials:
+                current_user = await get_current_user(request, credentials)
+                user_id = current_user.user_id
+        except Exception:
+            pass
+
+        project_id = request.path_params.get("project_id") or ""
+        if not project_id and isinstance(payload, dict):
+            project_id = payload.get("project_id") or ""
+
         if _db is not None:
             try:
                 _db.save_error({
-                    "user_id": "",
-                    "project_id": "",
+                    "user_id": user_id,
+                    "project_id": project_id,
                     "endpoint": request.url.path,
                     "method": request.method,
                     "error_type": type(exc).__name__,
@@ -430,6 +531,47 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # ------------------------------------------------------------------
     # Chat
     # ------------------------------------------------------------------
+    async def _stream_task_progress(agent, task, user_input: str, confirmed: bool):
+        """Yield SSE events while an agent task runs in a background thread."""
+        run_future = asyncio.create_task(asyncio.to_thread(agent.run_task, task, user_input, confirmed))
+        last_status = None
+        last_step_count = 0
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                current = agent.task_manager.get(task.id)
+                if current is None:
+                    yield f"data: {json.dumps({'error': 'Task disappeared'}, ensure_ascii=False)}\n\n"
+                    break
+                status = current.status
+                step_count = len(current.steps)
+                if status != last_status or step_count != last_step_count:
+                    last_status = status
+                    last_step_count = step_count
+                    payload: dict[str, Any] = {
+                        "task_id": task.id,
+                        "status": status,
+                        "steps": [s.to_dict() for s in current.steps],
+                    }
+                    if status == "completed":
+                        payload["result"] = current.result
+                    elif status == "failed":
+                        payload["errors"] = current.errors
+                    elif status == "waiting_confirmation":
+                        step = next((s for s in reversed(current.steps) if s.status == "waiting_confirmation"), None)
+                        if step and step.metadata:
+                            payload["confirmation"] = step.metadata
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                if status in ("completed", "failed", "cancelled", "waiting_confirmation"):
+                    break
+        finally:
+            if not run_future.done():
+                run_future.cancel()
+                try:
+                    await run_future
+                except asyncio.CancelledError:
+                    pass
+
     @app.post("/api/chat")
     async def api_chat(
         request: ChatRequest,
@@ -489,6 +631,16 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 agent.memory = InMemoryMemory()
 
         try:
+            if request.stream:
+                task = agent.task_manager.create(
+                    title=user_input[:60],
+                    description=user_input,
+                    project_id=request.project_id,
+                )
+                return StreamingResponse(
+                    _stream_task_progress(agent, task, user_input, request.confirmed),
+                    media_type="text/event-stream",
+                )
             task = agent.run(user_input, confirmed=request.confirmed, project_id=request.project_id)
             return {"task_id": task.id, "status": task.status, "project_id": request.project_id, "mode": request.mode}
         except Exception as e:
@@ -568,8 +720,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
     @app.get("/api/health")
     async def api_health():
+        factory = _agent_factory
+        model_ready = factory is not None and factory.model is not None
         return {
-            "status": "ok" if _agent and _agent.model else "degraded",
+            "status": "ok" if model_ready else "degraded",
             "provider": _config.provider if _config else None,
             "model": _config.model_simple if _config else None,
             "permission_mode": _config.permission_mode if _config else None,
@@ -587,6 +741,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "workspace_root": _config.workspace_root,
             "db_path": _config.db_path,
             "projects_dir": _config.projects_dir,
+            "provider_costs": {k: list(v) for k, v in _config.provider_costs.items()},
         }
 
     # ------------------------------------------------------------------
@@ -643,7 +798,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(404, "Project not found")
         return project.to_dict()
 
-    @app.delete("/api/projects/{project_id}")
+    @app.post("/api/projects/{project_id}/archive")
     async def api_archive_project(
         project_id: str,
         current_user: CurrentUser = Depends(get_current_user),
@@ -654,6 +809,39 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if project is None:
             raise HTTPException(404, "Project not found")
         return project.to_dict()
+
+    @app.post("/api/projects/{project_id}/restore")
+    async def api_restore_project(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
+        project = pm.restore(project_id)
+        if project is None:
+            raise HTTPException(400, "Project is not archived or does not exist")
+        return project.to_dict()
+
+    @app.delete("/api/projects/{project_id}")
+    async def api_delete_project(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        pm = _get_project_manager()
+        _get_owned_project(project_id, current_user)
+        deleted = pm.delete(project_id)
+        if not deleted:
+            raise HTTPException(404, "Project not found")
+        # Clean up project workspace files after successful database deletion
+        if _config is not None:
+            project_dir = Path(_config.project_dir(project_id))
+            if project_dir.exists():
+                try:
+                    shutil.rmtree(project_dir)
+                except Exception as exc:
+                    logger = get_logger(_config.log_level)
+                    logger.warning(f"Failed to remove project directory {project_dir}: {exc}")
+        return {"status": "deleted", "project_id": project_id}
 
     @app.get("/api/projects/{project_id}/state")
     async def api_project_state(
@@ -1300,12 +1488,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         pm = _get_project_manager()
         _get_owned_project(project_id, current_user)
 
-        repo = _learning_repository
+        repo = _get_learning_repository()
         learning_records = []
         failure_knowledge = []
         success_knowledge = []
         if repo is not None:
-            for record in repo.list_records(source_project_id=project_id, limit=100):
+            for record in repo.list_records(source_project_id=project_id, limit=100, user_id=current_user.user_id):
                 if record.memory_type == "validated_failure":
                     failure_knowledge.append(record.to_dict())
                 elif record.memory_type == "validated_success":
@@ -1313,10 +1501,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 else:
                     learning_records.append(record.to_dict())
             failure_knowledge.extend(
-                f.to_dict() for f in repo.list_failures(source_project_id=project_id, limit=100)
+                f.to_dict() for f in repo.list_failures(source_project_id=project_id, limit=100, user_id=current_user.user_id)
             )
             success_knowledge.extend(
-                s.to_dict() for s in repo.list_successes(source_project_id=project_id, limit=100)
+                s.to_dict() for s in repo.list_successes(source_project_id=project_id, limit=100, user_id=current_user.user_id)
             )
 
         return {
@@ -1339,13 +1527,263 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if repo is not None:
             suggestions = [
                 s.to_dict()
-                for s in repo.list_suggestions(source_project_id=project_id, limit=100)
+                for s in repo.list_suggestions(source_project_id=project_id, limit=100, user_id=current_user.user_id)
             ]
 
         return {
             "project_id": project_id,
             "suggestions": suggestions,
         }
+
+    # ------------------------------------------------------------------
+    # Learning CRUD
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/learning/records")
+    async def api_list_learning_records(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        return [r.to_dict() for r in repo.list_records(source_project_id=project_id, user_id=current_user.user_id)]
+
+    @app.post("/api/projects/{project_id}/learning/records")
+    async def api_create_learning_record(
+        project_id: str,
+        request: CreateLearningRecordRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        from kyrozen.learning.models import LearningRecord
+        record = LearningRecord(
+            memory=request.memory,
+            memory_type=request.memory_type,
+            source=request.source,
+            source_project_id=project_id,
+            confidence=request.confidence,
+            verification_status=request.verification_status,
+            scope=request.scope,
+            tags=request.tags,
+        )
+        repo.save_record(record, user_id=current_user.user_id)
+        return record.to_dict()
+
+    @app.get("/api/projects/{project_id}/learning/records/{record_id}")
+    async def api_get_learning_record(
+        project_id: str,
+        record_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        record = repo.get_record(record_id, user_id=current_user.user_id)
+        if record is None or record.source_project_id != project_id:
+            raise HTTPException(404, "Record not found")
+        return record.to_dict()
+
+    @app.delete("/api/projects/{project_id}/learning/records/{record_id}")
+    async def api_delete_learning_record(
+        project_id: str,
+        record_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        record = repo.get_record(record_id, user_id=current_user.user_id)
+        if record is None or record.source_project_id != project_id:
+            raise HTTPException(404, "Record not found")
+        repo.delete_record(record_id, user_id=current_user.user_id)
+        return {"status": "deleted"}
+
+    @app.get("/api/projects/{project_id}/learning/failures")
+    async def api_list_failure_knowledge(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        return [f.to_dict() for f in repo.list_failures(source_project_id=project_id, user_id=current_user.user_id)]
+
+    @app.post("/api/projects/{project_id}/learning/failures")
+    async def api_create_failure_knowledge(
+        project_id: str,
+        request: CreateFailureKnowledgeRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        from kyrozen.learning.models import FailureKnowledge
+        failure = FailureKnowledge(
+            problem=request.problem,
+            cause=request.cause,
+            solution=request.solution,
+            affected_scope=request.affected_scope,
+            verification=request.verification,
+            source_project_id=project_id,
+            confidence=request.confidence,
+            verification_status=request.verification_status,
+        )
+        repo.save_failure(failure, user_id=current_user.user_id)
+        return failure.to_dict()
+
+    @app.get("/api/projects/{project_id}/learning/failures/{failure_id}")
+    async def api_get_failure_knowledge(
+        project_id: str,
+        failure_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        failure = repo.get_failure(failure_id, user_id=current_user.user_id)
+        if failure is None or failure.source_project_id != project_id:
+            raise HTTPException(404, "Failure knowledge not found")
+        return failure.to_dict()
+
+    @app.delete("/api/projects/{project_id}/learning/failures/{failure_id}")
+    async def api_delete_failure_knowledge(
+        project_id: str,
+        failure_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        failure = repo.get_failure(failure_id, user_id=current_user.user_id)
+        if failure is None or failure.source_project_id != project_id:
+            raise HTTPException(404, "Failure knowledge not found")
+        repo.delete_failure(failure_id, user_id=current_user.user_id)
+        return {"status": "deleted"}
+
+    @app.get("/api/projects/{project_id}/learning/successes")
+    async def api_list_success_knowledge(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        return [s.to_dict() for s in repo.list_successes(source_project_id=project_id, user_id=current_user.user_id)]
+
+    @app.post("/api/projects/{project_id}/learning/successes")
+    async def api_create_success_knowledge(
+        project_id: str,
+        request: CreateSuccessKnowledgeRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        from kyrozen.learning.models import SuccessKnowledge
+        success = SuccessKnowledge(
+            goal=request.goal,
+            solution=request.solution,
+            conditions=request.conditions,
+            result=request.result,
+            source_project_id=project_id,
+            confidence=request.confidence,
+            verification_status=request.verification_status,
+        )
+        repo.save_success(success, user_id=current_user.user_id)
+        return success.to_dict()
+
+    @app.get("/api/projects/{project_id}/learning/successes/{success_id}")
+    async def api_get_success_knowledge(
+        project_id: str,
+        success_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        success = repo.get_success(success_id, user_id=current_user.user_id)
+        if success is None or success.source_project_id != project_id:
+            raise HTTPException(404, "Success knowledge not found")
+        return success.to_dict()
+
+    @app.delete("/api/projects/{project_id}/learning/successes/{success_id}")
+    async def api_delete_success_knowledge(
+        project_id: str,
+        success_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        success = repo.get_success(success_id, user_id=current_user.user_id)
+        if success is None or success.source_project_id != project_id:
+            raise HTTPException(404, "Success knowledge not found")
+        repo.delete_success(success_id, user_id=current_user.user_id)
+        return {"status": "deleted"}
+
+    @app.get("/api/projects/{project_id}/learning/suggestions")
+    async def api_list_suggestions(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        return [s.to_dict() for s in repo.list_suggestions(source_project_id=project_id, user_id=current_user.user_id)]
+
+    @app.post("/api/projects/{project_id}/learning/suggestions")
+    async def api_create_suggestion(
+        project_id: str,
+        request: CreateSuggestionRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        from kyrozen.learning.models import Suggestion
+        suggestion = Suggestion(
+            suggestion=request.suggestion,
+            reason=request.reason,
+            source_project_id=project_id,
+            evidence=request.evidence,
+            impact=request.impact,
+            priority=request.priority,
+            status=request.status,
+            category=request.category,
+            related_learning_ids=request.related_learning_ids,
+        )
+        repo.save_suggestion(suggestion, user_id=current_user.user_id)
+        return suggestion.to_dict()
+
+    @app.get("/api/projects/{project_id}/learning/suggestions/{suggestion_id}")
+    async def api_get_suggestion(
+        project_id: str,
+        suggestion_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        suggestion = repo.get_suggestion(suggestion_id, user_id=current_user.user_id)
+        if suggestion is None or suggestion.source_project_id != project_id:
+            raise HTTPException(404, "Suggestion not found")
+        return suggestion.to_dict()
+
+    @app.patch("/api/projects/{project_id}/learning/suggestions/{suggestion_id}/status")
+    async def api_update_suggestion_status(
+        project_id: str,
+        suggestion_id: str,
+        request: UpdateSuggestionStatusRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        suggestion = repo.get_suggestion(suggestion_id, user_id=current_user.user_id)
+        if suggestion is None or suggestion.source_project_id != project_id:
+            raise HTTPException(404, "Suggestion not found")
+        repo.update_suggestion_status(suggestion_id, request.status, user_id=current_user.user_id)
+        return {"status": "updated"}
+
+    @app.delete("/api/projects/{project_id}/learning/suggestions/{suggestion_id}")
+    async def api_delete_suggestion(
+        project_id: str,
+        suggestion_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        repo = _get_learning_repository()
+        suggestion = repo.get_suggestion(suggestion_id, user_id=current_user.user_id)
+        if suggestion is None or suggestion.source_project_id != project_id:
+            raise HTTPException(404, "Suggestion not found")
+        repo.delete_suggestion(suggestion_id, user_id=current_user.user_id)
+        return {"status": "deleted"}
 
     return app
 

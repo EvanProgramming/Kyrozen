@@ -31,6 +31,8 @@ VALID_TESTING_STAGES = {
 class TestingSession:
     """Tracks the state of one testing and validation conversation."""
 
+    __test__ = False  # Not a pytest test class
+
     project_id: str
     stage: str = "understanding_inputs"
     test_plan: TestPlan = field(default_factory=TestPlan)

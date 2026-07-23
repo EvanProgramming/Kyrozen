@@ -46,6 +46,8 @@ class MarketResearchAgent(BaseAgent):
             "- When enough evidence is gathered, save the Market Research Report with save_market_research_report.\n"
             "- Finally, record the opportunity decision with record_opportunity_decision.\n"
             "- If existing solutions are good enough, recommend \"use_existing_solution\" or \"abandon\".\n"
+            "- After calling any tool, wait for the tool result and then summarize it in natural language. NEVER output raw JSON to the user.\n"
+            "- When a search returns no results or fails, say so clearly instead of fabricating sources.\n"
         )
 
     def build_research_context(

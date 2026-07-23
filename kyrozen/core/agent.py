@@ -151,6 +151,56 @@ class BaseAgent:
             i += 1
         return calls
 
+    def _strip_tool_calls_from_text(self, text: str) -> str:
+        """Remove code blocks and inline tool-call JSON, keeping only conversational text."""
+        # Remove fenced code blocks first.
+        clean = re.sub(r"```(?:json)?\s*[\s\S]*?\s*```", "", text)
+        # Scan for inline JSON objects/arrays and drop ones that look like tool calls.
+        result: list[str] = []
+        pairs = {"{": "}", "[": "]"}
+        i = 0
+        while i < len(clean):
+            char = clean[i]
+            if char in pairs:
+                close = pairs[char]
+                depth = 1
+                j = i + 1
+                in_string = False
+                escape = False
+                while j < len(clean) and depth > 0:
+                    c = clean[j]
+                    if escape:
+                        escape = False
+                    elif c == "\\":
+                        escape = True
+                    elif c == '"' and not in_string:
+                        in_string = True
+                    elif c == '"' and in_string:
+                        in_string = False
+                    elif not in_string:
+                        if c == char:
+                            depth += 1
+                        elif c == close:
+                            depth -= 1
+                    j += 1
+                if depth == 0:
+                    raw = clean[i:j]
+                    try:
+                        data = json.loads(raw)
+                        is_tool_call = False
+                        if isinstance(data, dict) and "tool" in data:
+                            is_tool_call = True
+                        elif isinstance(data, list) and data:
+                            is_tool_call = all(isinstance(item, dict) and "tool" in item for item in data)
+                        if is_tool_call:
+                            i = j
+                            continue
+                    except json.JSONDecodeError:
+                        pass
+            result.append(clean[i])
+            i += 1
+        return "".join(result).strip()
+
     def _execute_tool_calls(self, task: Task, calls: list[dict[str, Any]], confirmed: bool = False) -> list[dict[str, Any]]:
         """Execute tool calls and return their results."""
         results: list[dict[str, Any]] = []
@@ -251,8 +301,8 @@ class BaseAgent:
                     final_answer = text
                     break
 
-                # Strip JSON blocks to keep the conversational part clean
-                clean_text = re.sub(r"```(?:json)?\s*[\s\S]*?\s*```", "", text).strip()
+                # Strip code blocks and inline tool-call JSON to keep the conversational part clean.
+                clean_text = self._strip_tool_calls_from_text(text)
                 if clean_text:
                     final_answer = clean_text
 
@@ -269,7 +319,10 @@ class BaseAgent:
                 })
 
             if not final_answer:
-                final_answer = "I processed your request but did not produce a final answer."
+                if task.steps:
+                    final_answer = "我已经完成了相关操作，但没有生成最终总结。请告诉我是否需要我补充说明。"
+                else:
+                    final_answer = "I processed your request but did not produce a final answer."
 
             task.complete(result={"answer": final_answer})
             self.memory.save("user", user_input, task_id=task.id, project_id=project_id)

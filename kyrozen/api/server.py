@@ -50,6 +50,54 @@ _context_builder: ProjectContextBuilder | None = None
 _learning_repository: LearningRepository | None = None
 
 
+_KYROZEN_QUESTION_RE = __import__("re").compile(r"```kyrozen-question\s*[\s\S]*?\s*```")
+
+
+def _strip_question_block(content: str) -> str:
+    """Remove the kyrozen-question JSON block from an assistant message."""
+    return _KYROZEN_QUESTION_RE.sub("", content).strip()
+
+
+def _record_discovery_qa(
+    project_id: str,
+    user_id: str,
+    answer: str,
+    pm: ProjectManager,
+) -> None:
+    """Store the latest Q&A pair from chat history into project memory.
+
+    This lets the discovery agent see what has already been asked and answered
+    so it does not repeat questions.
+    """
+    try:
+        messages = pm.list_chat_messages(project_id=project_id, user_id=user_id, limit=20)
+        if not messages:
+            return
+        # messages are ordered oldest -> newest; find the assistant message
+        # immediately before the most recent user message.
+        last_user_index = None
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                last_user_index = i
+                break
+        if last_user_index is None or last_user_index == 0:
+            return
+        previous = messages[last_user_index - 1]
+        if previous["role"] != "assistant":
+            return
+        question = _strip_question_block(previous["content"]) or "Follow-up question"
+        memory = _project_memory(project_id)
+        memory.save(
+            category="discovery_qa",
+            content=answer,
+            question=question,
+            user_id=user_id,
+        )
+    except Exception:
+        # Memory saving must not break the chat flow.
+        get_logger(__name__).warning("Failed to record discovery Q&A", exc_info=True)
+
+
 class AgentFactory:
     """Create request-scoped agent instances with isolated in-memory state."""
 
@@ -707,6 +755,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             pm.save_chat_message(user_message)
+            if request.mode == "discovery":
+                _record_discovery_qa(
+                    request.project_id,
+                    current_user.user_id,
+                    request.message,
+                    pm,
+                )
         else:
             # Use a global in-memory fallback if no project
             from kyrozen.memory import InMemoryMemory

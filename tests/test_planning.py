@@ -159,7 +159,21 @@ def test_feature_priority_validation():
     feature = Feature(name="x", priority="Must Have")
     assert feature.priority in PRIORITY_LEVELS
     with pytest.raises(ValueError):
-        Feature(name="x", priority="Later")
+        Feature(name="x", priority="Unknown Priority")
+
+
+def test_feature_priority_normalization():
+    assert Feature(name="x", priority="P0").priority == "Must Have"
+    assert Feature(name="x", priority="must").priority == "Must Have"
+    assert Feature(name="x", priority="高").priority == "Must Have"
+    assert Feature(name="x", priority="P1").priority == "Should Have"
+    assert Feature(name="x", priority="medium").priority == "Should Have"
+    assert Feature(name="x", priority="P2").priority == "Could Have"
+    assert Feature(name="x", priority="low").priority == "Could Have"
+    assert Feature(name="x", priority="P3").priority == "Not Now"
+    assert Feature(name="x", priority="later").priority == "Not Now"
+    assert Feature.from_dict({"name": "x", "priority": "P0"}).priority == "Must Have"
+    assert Feature.from_dict({"name": "x", "priority": "invalid"}).priority == "Could Have"
 
 
 def test_mvp_serialization():
@@ -198,6 +212,51 @@ def test_product_brief_serialization(product_brief_data: dict[str, Any]):
     assert brief.core_features[0].priority == "Must Have"
     data = brief.to_dict()
     assert data["mvp_scope"]["mvp_features"] == ["cadence detection", "tempo-based playlist"]
+
+
+def test_product_brief_from_loose_agent_schema():
+    loose_data = {
+        "product_name": "LingBu",
+        "tagline": "Capture ideas without interrupting flow",
+        "target_user": "Busy office workers",
+        "problem": "Fleeting ideas are forgotten because note-taking is too slow",
+        "solution_concept": "AI voice/text task capture",
+        "core_value_proposition": "Fastest way to turn thoughts into tasks",
+        "key_features": [
+            "Instant voice/text input",
+            "AI natural-language parsing",
+            "Smart categorization",
+            "Minimalist inbox",
+        ],
+        "mvp_scope": [
+            "Web input interface",
+            "Voice input",
+            "AI parsing",
+            "Inbox view",
+        ],
+        "success_metrics": [
+            "Capture-to-save under 5 seconds",
+            "Parsing accuracy over 90%",
+        ],
+        "monetization_model": "Freemium personal plan",
+        "differentiation": "True LLM understanding vs rule-based NLP",
+    }
+    brief = ProductBrief.from_dict(loose_data)
+    assert brief.product_goal.product_goal == "LingBu"
+    assert brief.product_goal.core_problem == "Fleeting ideas are forgotten because note-taking is too slow"
+    assert brief.target_user.primary_user == "Busy office workers"
+    assert "Capture ideas without interrupting flow" in brief.value_proposition
+    assert len(brief.core_features) == 4
+    assert brief.core_features[0].priority == "Must Have"
+    assert brief.mvp_scope.mvp_features == [
+        "Web input interface",
+        "Voice input",
+        "AI parsing",
+        "Inbox view",
+    ]
+    assert brief.mvp_scope.success_metric == "Capture-to-save under 5 seconds"
+    assert any("Freemium" in r for r in brief.risks)
+    assert "Differentiation: True LLM understanding" in brief.value_proposition
 
 
 def test_prd_serialization(prd_data: dict[str, Any]):

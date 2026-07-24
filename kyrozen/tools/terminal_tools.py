@@ -103,7 +103,7 @@ class TerminalTool(Tool):
 
         allowed_root = _get_allowed_root(parameters)
         raw_cwd = parameters.get("cwd", ".") or "."
-        cwd_path, error = _resolve_safe_path(raw_cwd, allowed_root)
+        cwd_path, error = _resolve_safe_path(raw_cwd, allowed_root, parameters.get("project_id"))
         if cwd_path is None:
             return ToolResult(success=False, data=None, error=error)
         if not cwd_path.is_dir():

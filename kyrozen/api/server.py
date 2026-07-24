@@ -646,7 +646,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             active_model = None
 
         _db = create_database(_config)
-        _project_manager = ProjectManager(_db)
+        _project_manager = ProjectManager(_db, workspace_root=_config.workspace_root)
         _context_builder = ProjectContextBuilder(_project_manager, InMemoryMemory())
         os.makedirs(_config.workspace_root, exist_ok=True)
         _learning_repository = LearningRepository(_db)

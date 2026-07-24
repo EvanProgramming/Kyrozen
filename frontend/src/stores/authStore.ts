@@ -53,10 +53,12 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'kyrozen-auth',
-      // Tokens are kept in memory only and are not persisted to localStorage.
-      // Only non-sensitive user profile information is stored locally.
+      // Persist tokens so users stay logged in across page reloads and device sessions
+      // are recoverable after initial authentication.
       partialize: (state) => ({
         user: state.user,
+        accessToken: state.accessToken,
+        refreshToken: state.refreshToken,
       }),
     }
   )

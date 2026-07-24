@@ -229,18 +229,21 @@ class BaseAgent:
                         "reason": decision.reason,
                     })
                     continue
-                step.error = decision.reason
-                step.status = "failed"
-                step.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                self.task_manager.update(task)
-                results.append({
-                    "tool": tool_name,
-                    "action": action,
-                    "parameters": parameters,
-                    "success": False,
-                    "error": decision.reason,
-                })
-                continue
+                if decision.requires_confirmation and confirmed:
+                    decision = self.permission.confirm(tool_name, action, parameters)
+                else:
+                    step.error = decision.reason
+                    step.status = "failed"
+                    step.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    self.task_manager.update(task)
+                    results.append({
+                        "tool": tool_name,
+                        "action": action,
+                        "parameters": parameters,
+                        "success": False,
+                        "error": decision.reason,
+                    })
+                    continue
 
             tool_parameters = dict(parameters)
             if task.project_id:
@@ -279,7 +282,7 @@ class BaseAgent:
             {"role": "user", "content": user_input},
         ]
 
-        max_rounds = 8
+        max_rounds = getattr(self, "max_rounds", 8)
         final_answer = ""
         last_response_had_tools = False
 
@@ -326,14 +329,17 @@ class BaseAgent:
                         "content": f"Tool results:\n{tool_results_text}\n\nPlease continue or provide the final answer.",
                     })
 
-            # If we exhausted all rounds and the last response still requested tools,
-            # make one final synthesis call that is not allowed to invoke tools.
-            if last_response_had_tools and not final_answer:
+            # If the last response requested tools, make a final synthesis call that is
+            # not allowed to invoke tools. This prevents raw planning text from being shown.
+            if last_response_had_tools:
                 self.logger.model("Calling model (final synthesis)", task_id=task.id)
                 synthesis_messages = list(messages)
                 synthesis_messages.append({
                     "role": "user",
-                    "content": "You have reached the tool-call limit. Do NOT output any tool JSON. Provide a concise final answer in the same language as the user's original request, summarizing what was learned and what remains unknown.",
+                    "content": (
+                        "You have finished using tools. Do NOT output any tool JSON, code blocks, or internal planning text. "
+                        "Provide a concise final answer in the same language as the user's original request, summarizing what was learned and what remains unknown."
+                    ),
                 })
                 response = self.model.chat(synthesis_messages)
                 self.logger.model(
@@ -344,7 +350,9 @@ class BaseAgent:
                     prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
                     completion_tokens=response.usage.completion_tokens if response.usage else 0,
                 )
-                final_answer = self._strip_tool_calls_from_text(response.content) or final_answer
+                synthesized = self._strip_tool_calls_from_text(response.content).strip()
+                if synthesized:
+                    final_answer = synthesized
 
             if not final_answer:
                 if task.steps:

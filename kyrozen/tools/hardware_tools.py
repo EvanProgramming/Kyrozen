@@ -29,9 +29,11 @@ def _hardware_dir(project_manager: "ProjectManager | None", project_id: str) -> 
     """Return the hardware project directory for a project."""
     if project_manager is None:
         raise RuntimeError("Project manager not available")
-    db = project_manager.db
+    workspace_root = getattr(project_manager, "workspace_root", "")
+    if not workspace_root:
+        workspace_root = os.path.dirname(getattr(project_manager.db, "db_path", ""))
     # Match the layout used by the software project summary helper.
-    base = Path(os.path.dirname(db.db_path)) / "projects" / project_id / "hardware"
+    base = Path(workspace_root) / "projects" / project_id / "hardware"
     base.mkdir(parents=True, exist_ok=True)
     return base
 

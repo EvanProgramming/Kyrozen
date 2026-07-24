@@ -117,8 +117,45 @@ class Feature:
     priority: str = "Could Have"  # Must Have / Should Have / Could Have / Not Now
 
     def __post_init__(self) -> None:
-        if self.priority not in PRIORITY_LEVELS:
+        normalized = self._normalize_priority(self.priority)
+        if normalized is None:
             raise ValueError(f"Invalid priority '{self.priority}'")
+        object.__setattr__(self, "priority", normalized)
+
+    @staticmethod
+    def _normalize_priority(value: str) -> str | None:
+        value = (value or "").strip()
+        if value in PRIORITY_LEVELS:
+            return value
+        lower = value.lower()
+        mapping = {
+            "p0": "Must Have",
+            "must": "Must Have",
+            "must have": "Must Have",
+            "high": "Must Have",
+            "高": "Must Have",
+            "必须": "Must Have",
+            "p1": "Should Have",
+            "should": "Should Have",
+            "should have": "Should Have",
+            "medium": "Should Have",
+            "中": "Should Have",
+            "建议": "Should Have",
+            "p2": "Could Have",
+            "could": "Could Have",
+            "could have": "Could Have",
+            "low": "Could Have",
+            "低": "Could Have",
+            "可选": "Could Have",
+            "p3": "Not Now",
+            "not now": "Not Now",
+            "won't": "Not Now",
+            "wont": "Not Now",
+            "later": "Not Now",
+            "延后": "Not Now",
+            "暂不": "Not Now",
+        }
+        return mapping.get(lower)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,11 +167,13 @@ class Feature:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Feature":
+        priority = data.get("priority", "Could Have")
+        normalized = cls._normalize_priority(priority)
         return cls(
             name=data.get("name", ""),
             description=data.get("description", ""),
             user_problem=data.get("user_problem", ""),
-            priority=data.get("priority", "Could Have"),
+            priority=normalized if normalized is not None else "Could Have",
         )
 
 
@@ -269,18 +308,65 @@ class ProductBrief:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProductBrief":
+        # Support both the canonical schema and the looser schema often produced
+        # by the agent (e.g. product_name, tagline, key_features, mvp_scope as
+        # plain strings).
+        product_goal = ProductGoal.from_dict(data.get("product_goal") or {})
+        if not product_goal.product_goal:
+            product_goal.product_goal = data.get("product_name", data.get("title", ""))
+        if not product_goal.target_user:
+            product_goal.target_user = data.get("target_user", "") if isinstance(data.get("target_user"), str) else ""
+        if not product_goal.core_problem:
+            product_goal.core_problem = data.get("problem", data.get("core_problem", ""))
+        if not product_goal.value_proposition:
+            product_goal.value_proposition = data.get("core_value_proposition", "")
+
+        if isinstance(data.get("target_user"), str):
+            target_user = TargetUser(primary_user=data["target_user"])
+        else:
+            target_user = TargetUser.from_dict(data.get("target_user") or {})
+
+        value_proposition = data.get("value_proposition", "")
+        if not value_proposition:
+            value_proposition = data.get("tagline", data.get("slogan", ""))
+
+        core_features: list[Feature] = []
+        for f in data.get("core_features") or []:
+            if isinstance(f, str):
+                core_features.append(Feature(name=f, description=f, priority="Must Have"))
+            elif isinstance(f, dict):
+                core_features.append(Feature.from_dict(f))
+        if not core_features:
+            for i, name in enumerate(data.get("key_features") or []):
+                priority = "Must Have" if i < 3 else "Should Have"
+                core_features.append(Feature(name=name, description=name, priority=priority))
+
+        if isinstance(data.get("mvp_scope"), list):
+            mvp_scope = MVP(mvp_features=[str(x) for x in data["mvp_scope"]])
+        else:
+            mvp_scope = MVP.from_dict(data.get("mvp_scope") or {})
+        if not mvp_scope.success_metric and data.get("success_metrics"):
+            mvp_scope.success_metric = str(data["success_metrics"][0])
+
+        success_metrics = list(data.get("success_metrics") or [])
+        risks = list(data.get("risks") or [])
+        if data.get("monetization_model"):
+            risks.append(f"Monetization: {data['monetization_model']}")
+        if data.get("differentiation"):
+            value_proposition = f"{value_proposition}\nDifferentiation: {data['differentiation']}".strip()
+
         return cls(
-            product_goal=ProductGoal.from_dict(data.get("product_goal") or {}),
-            target_user=TargetUser.from_dict(data.get("target_user") or {}),
+            product_goal=product_goal,
+            target_user=target_user,
             user_journey=UserJourney.from_dict(data.get("user_journey") or {}),
-            value_proposition=data.get("value_proposition", ""),
+            value_proposition=value_proposition,
             user_stories=list(data.get("user_stories") or []),
-            core_features=[Feature.from_dict(f) for f in data.get("core_features") or []],
-            mvp_scope=MVP.from_dict(data.get("mvp_scope") or {}),
+            core_features=core_features,
+            mvp_scope=mvp_scope,
             non_goals=list(data.get("non_goals") or []),
-            success_metrics=list(data.get("success_metrics") or []),
+            success_metrics=success_metrics,
             constraints=list(data.get("constraints") or []),
-            risks=list(data.get("risks") or []),
+            risks=risks,
         )
 
 

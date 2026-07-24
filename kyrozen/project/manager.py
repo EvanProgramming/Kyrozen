@@ -11,8 +11,9 @@ from .project import Artifact, Decision, Project
 class ProjectManager:
     """High-level manager for project workspaces."""
 
-    def __init__(self, db: KyrozenDatabase) -> None:
+    def __init__(self, db: KyrozenDatabase, workspace_root: str = "") -> None:
         self.db = db
+        self.workspace_root = workspace_root
 
     # ------------------------------------------------------------------
     # Projects

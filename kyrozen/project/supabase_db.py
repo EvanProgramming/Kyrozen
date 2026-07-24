@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from supabase import create_client
@@ -9,6 +10,9 @@ from supabase import create_client
 from kyrozen.config import KyrozenConfig
 
 from .project import Artifact, Decision, Project
+
+
+logger = logging.getLogger(__name__)
 
 
 class SupabaseDatabase:
@@ -19,6 +23,34 @@ class SupabaseDatabase:
             raise ValueError("Supabase URL and service role key are required")
         self.config = config
         self.client = create_client(config.supabase_url, config.supabase_service_role_key)
+
+    def _execute_upsert(self, table: str, data: dict[str, Any]) -> None:
+        """Run an upsert and tolerate transient network errors."""
+        try:
+            self.client.table(table).upsert(data).execute()
+        except Exception as exc:
+            if self._is_missing_table_error(exc):
+                raise
+            if self._is_network_error(exc):
+                logger.warning(
+                    "Failed to upsert %s to Supabase due to network error: %s", table, exc
+                )
+                return
+            raise
+
+    def _execute_insert(self, table: str, data: dict[str, Any]) -> None:
+        """Run an insert and tolerate transient network errors."""
+        try:
+            self.client.table(table).insert(data).execute()
+        except Exception as exc:
+            if self._is_missing_table_error(exc):
+                raise
+            if self._is_network_error(exc):
+                logger.warning(
+                    "Failed to insert %s to Supabase due to network error: %s", table, exc
+                )
+                return
+            raise
 
     # ------------------------------------------------------------------
     # Projects
@@ -39,7 +71,7 @@ class SupabaseDatabase:
             "created_at": project.created_at,
             "updated_at": project.updated_at,
         }
-        self.client.table("projects").upsert(data).execute()
+        self._execute_upsert("projects", data)
 
     def get_project(self, project_id: str) -> Project | None:
         try:
@@ -113,7 +145,7 @@ class SupabaseDatabase:
             "created_at": task.created_at,
             "updated_at": task.updated_at,
         }
-        self.client.table("tasks").upsert(data).execute()
+        self._execute_upsert("tasks", data)
 
     def get_task(self, task_id: str) -> Any | None:
         from kyrozen.core.task import Task
@@ -178,7 +210,7 @@ class SupabaseDatabase:
             "source": decision.source,
             "timestamp": decision.timestamp,
         }
-        self.client.table("decisions").upsert(data).execute()
+        self._execute_upsert("decisions", data)
 
     def get_decision(self, decision_id: str) -> Decision | None:
         try:
@@ -237,7 +269,7 @@ class SupabaseDatabase:
             "created_at": artifact.created_at,
             "updated_at": artifact.updated_at,
         }
-        self.client.table("artifacts").upsert(data).execute()
+        self._execute_upsert("artifacts", data)
 
     def get_artifact(self, artifact_id: str) -> Artifact | None:
         try:
@@ -296,7 +328,7 @@ class SupabaseDatabase:
             "created_at": feedback.get("created_at"),
             "updated_at": feedback.get("updated_at"),
         }
-        self.client.table("user_feedback").upsert(data).execute()
+        self._execute_upsert("user_feedback", data)
 
     def list_feedback(self, user_id: str | None = None) -> list[dict[str, Any]]:
         try:
@@ -322,7 +354,7 @@ class SupabaseDatabase:
             "session_id": event.get("session_id"),
             "created_at": event.get("created_at"),
         }
-        self.client.table("events").insert(data).execute()
+        self._execute_insert("events", data)
 
     def list_events(
         self,
@@ -358,7 +390,7 @@ class SupabaseDatabase:
             "payload": error.get("payload"),
             "created_at": error.get("created_at"),
         }
-        self.client.table("error_logs").insert(data).execute()
+        self._execute_insert("error_logs", data)
 
     def list_errors(self, limit: int = 100) -> list[dict[str, Any]]:
         try:
@@ -393,7 +425,7 @@ class SupabaseDatabase:
             "created_at": record.get("created_at"),
             "updated_at": record.get("updated_at"),
         }
-        self.client.table("learning_records").upsert(data).execute()
+        self._execute_upsert("learning_records", data)
 
     def list_learning_records(
         self,
@@ -460,7 +492,7 @@ class SupabaseDatabase:
             "created_at": failure.get("created_at"),
             "updated_at": failure.get("updated_at"),
         }
-        self.client.table("failure_knowledge").upsert(data).execute()
+        self._execute_upsert("failure_knowledge", data)
 
     def list_failure_knowledge(
         self,
@@ -523,7 +555,7 @@ class SupabaseDatabase:
             "created_at": success.get("created_at"),
             "updated_at": success.get("updated_at"),
         }
-        self.client.table("success_knowledge").upsert(data).execute()
+        self._execute_upsert("success_knowledge", data)
 
     def list_success_knowledge(
         self,
@@ -588,7 +620,7 @@ class SupabaseDatabase:
             "created_at": suggestion.get("created_at"),
             "updated_at": suggestion.get("updated_at"),
         }
-        self.client.table("suggestions").upsert(data).execute()
+        self._execute_upsert("suggestions", data)
 
     def list_suggestions(
         self,
@@ -670,11 +702,20 @@ class SupabaseDatabase:
         try:
             self.client.table("chat_messages").upsert(data).execute()
         except Exception as exc:
+            import logging
+            logger = logging.getLogger(__name__)
             if self._is_missing_table_error(exc):
-                import logging
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     "chat_messages table does not exist in Supabase; chat history will not be persisted. "
                     "Run the provided migration to enable cloud chat history."
+                )
+                return
+            # Network/SSL errors should not break the chat endpoint.
+            if self._is_network_error(exc):
+                logger.warning(
+                    "Failed to persist chat message to Supabase due to network error: %s. "
+                    "Chat history will not be saved for this message.",
+                    exc,
                 )
                 return
             raise
@@ -732,6 +773,18 @@ class SupabaseDatabase:
             or "relation" in message
             or "could not find the table" in message
             or "schema cache" in message
+        )
+
+    def _is_network_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "ssl" in message
+            or "connecterror" in message
+            or "timeout" in message
+            or "network" in message
+            or "unreachable" in message
+            or "connection" in message
+            or "disconnected" in message
         )
 
     def close(self) -> None:

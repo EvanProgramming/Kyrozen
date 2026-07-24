@@ -117,6 +117,10 @@ function App() {
       setPreviewUrl(url);
     });
 
+    window.kyrozen.onFullTrustChange((status) => {
+      setFullTrust(status.enabled);
+    });
+
     window.kyrozen.requestInitialToken();
   }, []);
 

@@ -526,6 +526,42 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
   return response.json();
 }
 
+interface AuditEvent {
+  projectId?: string;
+  taskId?: string;
+  tool: string;
+  action: string;
+  parameters?: Record<string, unknown>;
+  confirmed: boolean;
+  fullTrust: boolean;
+}
+
+async function logAuditEvent(event: AuditEvent): Promise<void> {
+  if (!accessToken) return;
+  try {
+    await apiPost(
+      '/api/events',
+      {
+        event_type: 'desktop.audit',
+        project_id: event.projectId || currentProjectId,
+        payload: {
+          task_id: event.taskId,
+          tool: event.tool,
+          action: event.action,
+          parameters: event.parameters,
+          confirmed: event.confirmed,
+          full_trust: event.fullTrust,
+          source: 'desktop',
+        },
+        session_id: accessToken.slice(-16),
+      },
+      true,
+    );
+  } catch (err: any) {
+    logError(`Audit log failed: ${err.message || String(err)}`);
+  }
+}
+
 /** Download the latest cloud artifacts for a project into <workspace>/.kyrozen/context/. */
 async function syncProjectArtifacts(projectId: string): Promise<void> {
   const root = workspaceMap[projectId];
@@ -834,6 +870,7 @@ ipcMain.handle('kyrozen:get-full-trust', () => {
 ipcMain.handle('kyrozen:set-full-trust', (_event, enabled: boolean) => {
   fullTrustMode = Boolean(enabled);
   logWarn(`Full-trust mode ${fullTrustMode ? 'enabled' : 'disabled'} by user`);
+  mainWindow?.webContents.send('kyrozen:full-trust-change', { enabled: fullTrustMode });
   if (fullTrustMode) {
     showNotification(
       '已开启完全信任模式',
@@ -1430,10 +1467,20 @@ ipcMain.handle('kyrozen:open-preview', async (_event, url: string, mode: 'embedd
 });
 
 async function showConfirmationDialog(params: Record<string, unknown>) {
+  const auditBase: AuditEvent = {
+    taskId: String(params.task_id || ''),
+    tool: String(params.tool || ''),
+    action: String(params.action || ''),
+    parameters: (params.parameters as Record<string, unknown>) || {},
+    confirmed: false,
+    fullTrust: fullTrustMode,
+  };
+
   // When the user has explicitly enabled full-trust mode for this session,
   // skip the dialog and tell the local agent to trust all confirmations.
   if (fullTrustMode) {
     logWarn(`Auto-confirming ${params.tool}.${params.action} because full-trust mode is enabled`);
+    await logAuditEvent({ ...auditBase, confirmed: true, fullTrust: true });
     sendToPythonAgent({
       jsonrpc: '2.0',
       method: 'confirmation_response',
@@ -1458,6 +1505,12 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
   });
   const confirmed = result.response === 0 || result.response === 1;
   const trustForSession = result.response === 0;
+  if (trustForSession) {
+    fullTrustMode = true;
+    mainWindow?.webContents.send('kyrozen:full-trust-change', { enabled: true });
+    showNotification('已开启完全信任模式', '本次会话内高危工具将自动执行，不再弹出确认对话框。');
+  }
+  await logAuditEvent({ ...auditBase, confirmed, fullTrust: fullTrustMode });
   sendToPythonAgent({
     jsonrpc: '2.0',
     method: 'confirmation_response',

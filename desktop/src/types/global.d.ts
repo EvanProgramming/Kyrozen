@@ -69,6 +69,7 @@ export interface KyrozenAPI {
   setAutoCommit: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   getAutoCommit: () => Promise<{ enabled: boolean }>;
   onGitHubStatus: (callback: (status: { connected: boolean; scope?: string }) => void) => () => void;
+  onFullTrustChange: (callback: (status: { enabled: boolean }) => void) => () => void;
 
   getOnboardingStatus: () => Promise<{ completed: boolean; language: 'zh' | 'en'; completedAt?: string }>;
   saveOnboardingLanguage: (language: 'zh' | 'en') => Promise<{ language: 'zh' | 'en' }>;

@@ -66,6 +66,12 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:github-status', handler);
   },
 
+  onFullTrustChange: (callback: (status: { enabled: boolean }) => void) => {
+    const handler = (_event: unknown, status: { enabled: boolean }) => callback(status);
+    ipcRenderer.on('kyrozen:full-trust-change', handler);
+    return () => ipcRenderer.removeListener('kyrozen:full-trust-change', handler);
+  },
+
   ensureHardwareToolchain: () => ipcRenderer.invoke('kyrozen:ensure-hardware-toolchain'),
   installCommonCores: () => ipcRenderer.invoke('kyrozen:install-common-cores'),
   connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),

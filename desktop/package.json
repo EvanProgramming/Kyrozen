@@ -6,6 +6,8 @@
   "main": "dist-electron/main.js",
   "homepage": ".",
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "fix-electron": "node scripts/postinstall.js",
     "dev": "vite",
     "build": "tsc && vite build && electron-builder",
     "build:renderer": "tsc && vite build",
@@ -25,7 +27,7 @@
     "@types/ws": "^8.5.10",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
-    "electron": "^31.2.1",
+    "electron": "^31.7.7",
     "electron-builder": "^24.13.3",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.6",

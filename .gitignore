@@ -30,3 +30,4 @@ kyrozen_tasks.json
 *.kyrozen_config.json
 .kyrozen_config.json
 .kyrozen_jwks_cache.json
+.secrets/

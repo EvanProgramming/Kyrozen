@@ -14,7 +14,7 @@ import {
   setPythonExe,
 } from './hardwareToolchain';
 import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
-import { checkForUpdates, initAutoUpdater, stopUpdateChecks } from './updater';
+import { checkForUpdates, initAutoUpdater, setUpdateApiBaseUrl, stopUpdateChecks } from './updater';
 
 interface WorkspaceMap {
   [projectId: string]: string;
@@ -408,6 +408,7 @@ app.whenReady().then(async () => {
     const credentials = await loadCredentials();
     if (credentials) {
       serverUrl = credentials.serverUrl;
+      setUpdateApiBaseUrl(serverUrl);
       wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
       accessToken = credentials.accessToken;
       connectWebSocket(credentials.wsToken);
@@ -602,6 +603,7 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
   logInfo(`Login requested for ${email} at ${url}`);
   try {
     serverUrl = url.replace(/\/$/, '');
+    setUpdateApiBaseUrl(serverUrl);
     wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
     logInfo(`Signing in via ${serverUrl}`);
     const data = await apiPost('/api/auth/signin', { email, password });
@@ -638,6 +640,7 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
     });
     accessToken = data.access_token || null;
     logInfo(`Open token verified, wsToken acquired`);
+    setUpdateApiBaseUrl(serverUrl);
     await saveCredentials(data.ws_token, data.refresh_token, accessToken || undefined);
     await saveOnboardingConfig({ completed: true, completedAt: new Date().toISOString() });
     connectWebSocket(data.ws_token);

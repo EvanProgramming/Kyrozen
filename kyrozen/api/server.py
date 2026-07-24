@@ -1116,6 +1116,69 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "desktop": is_desktop,
         }
 
+    # ------------------------------------------------------------------
+    # Desktop update signatures
+    # ------------------------------------------------------------------
+    _UPDATE_SIGNATURES_PATH = Path(__file__).resolve().parents[2] / "releases" / "signatures.json"
+
+    def _load_update_signatures() -> dict[str, Any]:
+        try:
+            with open(_UPDATE_SIGNATURES_PATH, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            return {}
+        except json.JSONDecodeError as exc:
+            get_logger(__name__).warning("Invalid update signatures file: %s", exc)
+            return {}
+
+    @app.get("/api/desktop/updates/signatures")
+    async def api_desktop_update_signatures(version: str, filename: str | None = None):
+        """Return update package signatures for the requested version.
+
+        The desktop client verifies the downloaded installer against these
+        signatures before allowing installation. This endpoint is intentionally
+        public so the updater can query it before the user logs in.
+        """
+        signatures = _load_update_signatures()
+        version_data = signatures.get(version)
+        if not version_data:
+            raise HTTPException(status_code=404, detail="Version not found")
+
+        files = version_data.get("files", {})
+        if filename:
+            file_data = files.get(filename)
+            if not file_data:
+                raise HTTPException(status_code=404, detail="File not found")
+            return {
+                "version": version,
+                "filename": filename,
+                "sha512": file_data.get("sha512"),
+                "signature": file_data.get("signature"),
+                "release_date": version_data.get("releaseDate"),
+            }
+
+        return {
+            "version": version,
+            "release_date": version_data.get("releaseDate"),
+            "files": files,
+        }
+
+    @app.get("/api/desktop/updates/latest")
+    async def api_desktop_update_latest():
+        """Return the latest available desktop update version metadata."""
+        signatures = _load_update_signatures()
+        if not signatures:
+            raise HTTPException(status_code=404, detail="No update signatures available")
+
+        # Versions are expected to follow semantic versioning.
+        latest_version = max(signatures.keys(), key=lambda v: tuple(int(x) for x in v.split(".") if x.isdigit()))
+        latest = signatures[latest_version]
+        return {
+            "version": latest_version,
+            "release_date": latest.get("releaseDate"),
+            "files": list(latest.get("files", {}).keys()),
+        }
+
     @app.get("/api/user/github-status")
     async def api_user_github_status(current_user: CurrentUser = Depends(get_current_user)):
         metadata = current_user.raw_claims.get("user_metadata", {}) or {}

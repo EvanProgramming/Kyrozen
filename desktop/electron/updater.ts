@@ -8,10 +8,15 @@
  */
 
 import { dialog, shell } from 'electron';
-import { autoUpdater, UpdateInfo } from 'electron-updater';
+import { autoUpdater, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import { UPDATE_PUBLIC_KEY } from './updatePublicKey';
 
 let updateCheckTimer: NodeJS.Timeout | null = null;
 let mainWindowReference: Electron.BrowserWindow | null = null;
+let updateApiBaseUrl: string | null = null;
 
 const UPDATE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -21,6 +26,72 @@ function sendUpdateStatus(status: string, message: string, payload?: Record<stri
     message,
     ...payload,
   });
+}
+
+function sha512File(filePath: string): string {
+  const hash = crypto.createHash('sha512');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('base64');
+}
+
+async function fetchSignature(version: string, filename: string): Promise<{ sha512: string; signature: string } | null> {
+  if (!updateApiBaseUrl) return null;
+  const url = new URL('/api/desktop/updates/signatures', updateApiBaseUrl);
+  url.searchParams.set('version', version);
+  url.searchParams.set('filename', filename);
+  try {
+    const response = await fetch(url.toString());
+    if (!response.ok) return null;
+    const data = (await response.json()) as { sha512?: string; signature?: string };
+    if (!data.sha512 || !data.signature) return null;
+    return { sha512: data.sha512, signature: data.signature };
+  } catch {
+    return null;
+  }
+}
+
+function verifySignature(fileHash: string, signatureBase64: string): boolean {
+  try {
+    const verifier = crypto.createVerify('RSA-SHA512');
+    verifier.update(fileHash);
+    verifier.end();
+    return verifier.verify(UPDATE_PUBLIC_KEY, signatureBase64, 'base64');
+  } catch {
+    return false;
+  }
+}
+
+async function verifyDownloadedUpdate(event: UpdateDownloadedEvent): Promise<boolean> {
+  if (!updateApiBaseUrl) {
+    // Without an API base URL we cannot verify the signature; allow the update
+    // but log a warning. This keeps standalone/offline builds functional.
+    sendUpdateStatus('warning', '未配置更新签名服务器，跳过签名验证');
+    return true;
+  }
+
+  const filename = path.basename(event.downloadedFile);
+  sendUpdateStatus('verifying', `正在验证 ${filename} 的签名...`, { version: event.version });
+
+  const fileHash = sha512File(event.downloadedFile);
+  const signatureInfo = await fetchSignature(event.version, filename);
+
+  if (!signatureInfo) {
+    sendUpdateStatus('error', '无法获取更新包签名信息，安装已中止', { version: event.version });
+    return false;
+  }
+
+  if (fileHash !== signatureInfo.sha512) {
+    sendUpdateStatus('error', '更新包哈希校验失败，安装已中止', { version: event.version });
+    return false;
+  }
+
+  if (!verifySignature(fileHash, signatureInfo.signature)) {
+    sendUpdateStatus('error', '更新包签名验证失败，安装已中止', { version: event.version });
+    return false;
+  }
+
+  sendUpdateStatus('verified', '更新包签名验证通过', { version: event.version });
+  return true;
 }
 
 export function initAutoUpdater(mainWindow: Electron.BrowserWindow): void {
@@ -81,8 +152,32 @@ export function initAutoUpdater(mainWindow: Electron.BrowserWindow): void {
     });
   });
 
-  autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
-    sendUpdateStatus('downloaded', `更新 ${info.version} 已下载，将在退出时安装`, { version: info.version });
+  autoUpdater.on('update-downloaded', async (event: UpdateDownloadedEvent) => {
+    const verified = await verifyDownloadedUpdate(event);
+    if (!verified) {
+      // Prevent silent installation on quit if verification failed.
+      autoUpdater.autoInstallOnAppQuit = false;
+      try {
+        fs.unlinkSync(event.downloadedFile);
+      } catch {
+        // ignore cleanup errors
+      }
+      dialog
+        .showMessageBox(mainWindow, {
+          type: 'warning',
+          buttons: ['确定'],
+          defaultId: 0,
+          title: 'Kyrozen 更新',
+          message: `更新 ${event.version} 签名验证失败`,
+          detail: '已中止安装，请稍后再试或访问官网手动下载。',
+        })
+        .catch(() => {
+          // ignore
+        });
+      return;
+    }
+
+    sendUpdateStatus('downloaded', `更新 ${event.version} 已下载并验证，将在退出时安装`, { version: event.version });
     dialog
       .showMessageBox(mainWindow, {
         type: 'info',
@@ -90,7 +185,7 @@ export function initAutoUpdater(mainWindow: Electron.BrowserWindow): void {
         defaultId: 0,
         cancelId: 1,
         title: 'Kyrozen 更新',
-        message: `新版本 ${info.version} 已下载`,
+        message: `新版本 ${event.version} 已下载`,
         detail: '立即重启以应用更新，或稍后手动重启。',
       })
       .then((result) => {
@@ -139,6 +234,15 @@ export function stopUpdateChecks(): void {
  */
 export function setUpdateFeedURL(feedUrl: string): void {
   autoUpdater.setFeedURL(feedUrl);
+}
+
+/**
+ * Set the API base URL used to fetch update signatures.
+ * This is separate from the updater feed URL so GitHub releases can still be
+ * used for downloads while the Kyrozen backend provides signatures.
+ */
+export function setUpdateApiBaseUrl(baseUrl: string): void {
+  updateApiBaseUrl = baseUrl.replace(/\/$/, '');
 }
 
 /**

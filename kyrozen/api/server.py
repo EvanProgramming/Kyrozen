@@ -32,7 +32,7 @@ from kyrozen.auth.dependencies import (
 from kyrozen.config import KyrozenConfig, get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
-from kyrozen.desktop import DesktopClientManager, DesktopTokenManager
+from kyrozen.desktop import DesktopClientManager, DesktopTokenManager, QuotaManager
 from kyrozen.development.agent import SoftwareDevelopmentAgent
 from kyrozen.discovery import ProblemDiscoveryAgent
 from kyrozen.hardware.agent import HardwareDevelopmentAgent
@@ -57,6 +57,7 @@ _project_manager: ProjectManager | None = None
 _context_builder: ProjectContextBuilder | None = None
 _learning_repository: LearningRepository | None = None
 _desktop_manager: DesktopClientManager | None = None
+_quota_manager: QuotaManager | None = None
 
 
 _KYROZEN_QUESTION_RE = re.compile(r"```kyrozen-question\s*([\s\S]*?)\s*```")
@@ -574,6 +575,12 @@ def _get_desktop_manager() -> DesktopClientManager:
     return _desktop_manager
 
 
+def _get_quota_manager() -> QuotaManager:
+    if _quota_manager is None:
+        raise RuntimeError("Quota manager not initialized")
+    return _quota_manager
+
+
 def _get_project_manager() -> ProjectManager:
     if _project_manager is None:
         raise RuntimeError("Project manager not initialized")
@@ -662,20 +669,19 @@ async def _handle_model_request(
 ) -> None:
     """Proxy a model request from a desktop client to the configured cloud model.
 
-    Sends chunks back as model_stream_chunk messages. Performs a basic
-    subscription/quota check (currently a placeholder that always allows).
+    Sends chunks back as model_stream_chunk messages. Enforces the per-user
+    token quota before executing the request and records actual usage after.
     """
     request_id = message.get("request_id")
     messages = message.get("messages", [])
     stream = message.get("stream", True)
 
-    # TODO: integrate real subscription/quota service
-    quota_ok = True
-    if not quota_ok:
+    quota = _get_quota_manager().check_quota(user_id)
+    if not quota.allowed:
         await websocket.send_json({
             "type": "model_error",
             "request_id": request_id,
-            "error": "Quota exceeded. Please upgrade your plan.",
+            "error": quota.reason,
         })
         return
 
@@ -689,9 +695,16 @@ async def _handle_model_request(
         })
         return
 
+    def _estimate_tokens(text: str) -> int:
+        """Rough token estimator for usage tracking when the provider does not report tokens."""
+        return max(1, len(text) // 4)
+
     try:
         if not stream:
             response = await asyncio.to_thread(model.chat, messages)
+            prompt_tokens = response.usage.prompt_tokens if response.usage else _estimate_tokens("".join(m.get("content", "") for m in messages))
+            completion_tokens = response.usage.completion_tokens if response.usage else _estimate_tokens(response.content)
+            _get_quota_manager().record_usage(user_id, prompt_tokens, completion_tokens)
             await websocket.send_json({
                 "type": "model_stream_chunk",
                 "request_id": request_id,
@@ -699,9 +712,9 @@ async def _handle_model_request(
                 "finished": True,
                 "full_content": response.content,
                 "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-                    "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-                } if response.usage else None,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                },
             })
             return
 
@@ -716,12 +729,19 @@ async def _handle_model_request(
             })
 
         full_content = "".join(full_content_parts)
+        prompt_tokens = _estimate_tokens("".join(m.get("content", "") for m in messages))
+        completion_tokens = _estimate_tokens(full_content)
+        _get_quota_manager().record_usage(user_id, prompt_tokens, completion_tokens)
         await websocket.send_json({
             "type": "model_stream_chunk",
             "request_id": request_id,
             "chunk": "",
             "finished": True,
             "full_content": full_content,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            },
         })
     except Exception as exc:
         logger.warning(f"Model proxy error for request {request_id}: {exc}")
@@ -777,7 +797,7 @@ def _recommend_next_action(project: Any) -> dict[str, str] | None:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository, _desktop_manager
+        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository, _desktop_manager, _quota_manager
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -805,6 +825,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             logger=logger,
         )
         _desktop_manager = DesktopClientManager()
+        _quota_manager = QuotaManager(default_limit=_config.desktop_quota_default_limit)
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")

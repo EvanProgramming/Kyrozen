@@ -129,6 +129,7 @@ class KyrozenConfig:
     beta_invite_only: bool = False
     cors_origins: list[str] = field(default_factory=list)
     provider_costs: dict[str, tuple[float, float]] = field(default_factory=dict)
+    desktop_quota_default_limit: int = 0  # 0 means unlimited; positive value enforces token quota
 
     def __post_init__(self) -> None:
         if not self.model_simple:
@@ -249,4 +250,9 @@ def get_config(
             or file_data.get("beta_invite_only", "false")
         ),
         cors_origins=[o.strip() for o in (os.environ.get("KYROZEN_CORS_ORIGINS", "") or file_data.get("cors_origins", "")).split(",") if o.strip()],
+        desktop_quota_default_limit=int(
+            os.environ.get("KYROZEN_DESKTOP_QUOTA_DEFAULT_LIMIT", "")
+            or file_data.get("desktop_quota_default_limit", 0)
+            or 0
+        ),
     )

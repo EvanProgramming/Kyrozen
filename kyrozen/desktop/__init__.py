@@ -8,11 +8,14 @@ from .auth import DesktopTokenManager, verify_desktop_token
 from .cloud_proxy import CloudProxyModelProvider
 from .manager import DesktopClientManager
 from .models import DesktopClient
+from .quota import QuotaManager, QuotaStatus
 
 __all__ = [
     "CloudProxyModelProvider",
     "DesktopClient",
     "DesktopClientManager",
     "DesktopTokenManager",
+    "QuotaManager",
+    "QuotaStatus",
     "verify_desktop_token",
 ]

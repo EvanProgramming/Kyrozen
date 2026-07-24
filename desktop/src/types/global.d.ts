@@ -76,6 +76,9 @@ export interface KyrozenAPI {
   completeOnboarding: (language?: 'zh' | 'en') => Promise<{ completed: boolean; language: 'zh' | 'en' }>;
   checkPythonRuntime: () => Promise<{ ready: boolean; path: string | null; error?: string }>;
   ensurePythonRuntime: () => Promise<{ success: boolean; path: string | null; error?: string }>;
+  ensureProjectVenv: () => Promise<{ success: boolean; pythonPath: string | null; created?: boolean; error?: string }>;
+  installProjectDeps: (packages?: string[]) => Promise<{ success: boolean; installed: string[]; error?: string }>;
+  getProjectVenv: () => Promise<{ ready: boolean; pythonPath: string | null }>;
   pickOnboardingWorkspace: () => Promise<{ workspaceRoot: string | null }>;
 
   onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) => void;

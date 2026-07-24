@@ -87,6 +87,9 @@ contextBridge.exposeInMainWorld('kyrozen', {
   completeOnboarding: (language?: 'zh' | 'en') => ipcRenderer.invoke('kyrozen:complete-onboarding', language),
   checkPythonRuntime: () => ipcRenderer.invoke('kyrozen:check-python-runtime'),
   ensurePythonRuntime: () => ipcRenderer.invoke('kyrozen:ensure-python-runtime'),
+  ensureProjectVenv: () => ipcRenderer.invoke('kyrozen:ensure-project-venv'),
+  installProjectDeps: (packages?: string[]) => ipcRenderer.invoke('kyrozen:install-project-deps', packages),
+  getProjectVenv: () => ipcRenderer.invoke('kyrozen:get-project-venv'),
   pickOnboardingWorkspace: () => ipcRenderer.invoke('kyrozen:pick-onboarding-workspace'),
 
   onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) =>

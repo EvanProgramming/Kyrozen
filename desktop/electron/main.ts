@@ -15,6 +15,11 @@ import {
 } from './hardwareToolchain';
 import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
 import {
+  ensureProjectVenv,
+  getProjectVenv,
+  installProjectDependencies,
+} from './pythonVenv';
+import {
   checkForUpdates,
   initAutoUpdater,
   setUpdateApiBaseUrl,
@@ -982,6 +987,35 @@ ipcMain.handle('kyrozen:get-auto-commit', async () => {
     return { enabled: false };
   }
   return getAutoCommit(root);
+});
+
+ipcMain.handle('kyrozen:ensure-project-venv', async () => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { success: false, pythonPath: null, error: '未选择项目工作区' };
+  }
+  const basePython = pythonRuntimePath || (await getCachedPythonRuntime()) || 'python3';
+  const result = await ensureProjectVenv(root, basePython, (msg) => sendChatMessage({ role: 'system', content: msg }));
+  if (result.error) {
+    return { success: false, pythonPath: result.pythonPath, error: result.error };
+  }
+  return { success: true, pythonPath: result.pythonPath, created: result.created };
+});
+
+ipcMain.handle('kyrozen:install-project-deps', async (_event, packages?: string[]) => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { success: false, installed: [], error: '未选择项目工作区' };
+  }
+  return installProjectDependencies(root, packages, (msg) => sendChatMessage({ role: 'system', content: msg }));
+});
+
+ipcMain.handle('kyrozen:get-project-venv', async () => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { ready: false, pythonPath: null };
+  }
+  return getProjectVenv(root);
 });
 
 ipcMain.handle('kyrozen:get-onboarding-status', async () => {

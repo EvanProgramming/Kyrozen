@@ -6,6 +6,7 @@ will inherit from BaseAgent.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -43,6 +44,7 @@ class BaseAgent:
         self.permission = permission_manager or PermissionManager(mode=config.permission_mode)
         self.logger = logger or get_logger(config.log_level)
         self.confirmation_callback = confirmation_callback
+        self._cancelled = False
 
     def _build_system_prompt(self) -> str:
         schemas = self.tools.list_schemas()
@@ -356,6 +358,7 @@ class BaseAgent:
 
         try:
             for round_num in range(max_rounds):
+                self._check_cancelled(task)
                 self.logger.model(f"Calling model (round {round_num + 1})", task_id=task.id)
                 response = self.model.chat(messages)
                 self.logger.model(
@@ -380,6 +383,7 @@ class BaseAgent:
                     final_answer = clean_text
 
                 results = self._execute_tool_calls(task, calls, confirmed=confirmed)
+                self._check_cancelled(task)
                 if task.status == "waiting_confirmation":
                     self.task_manager.update(task)
                     return
@@ -432,6 +436,11 @@ class BaseAgent:
             self.memory.save("user", user_input, task_id=task.id, project_id=project_id)
             self.memory.save("agent", final_answer, task_id=task.id, project_id=project_id)
             self.logger.agent("Task completed", task_id=task.id, answer=final_answer, project_id=project_id)
+        except asyncio.CancelledError as e:
+            error_msg = f"Cancelled: {e}"
+            task.update_status("cancelled")
+            task.result = {"answer": error_msg}
+            self.logger.warning(error_msg, task_id=task.id, project_id=project_id)
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
             task.fail(error_msg)
@@ -440,6 +449,15 @@ class BaseAgent:
         elapsed = time.time() - start_time
         self.logger.perf(f"Task finished in {elapsed:.2f}s", task_id=task.id, elapsed_seconds=elapsed, project_id=project_id)
         self.task_manager.update(task)
+
+    def cancel(self) -> None:
+        """Request cancellation of the currently running agent loop."""
+        self._cancelled = True
+
+    def _check_cancelled(self, task: Task) -> None:
+        """Raise CancelledError if cancellation has been requested."""
+        if self._cancelled:
+            raise asyncio.CancelledError("Task cancelled by user")
 
     def run(self, user_input: str, confirmed: bool = False, project_id: str | None = None) -> Task:
         """Run one user request through the agent loop."""

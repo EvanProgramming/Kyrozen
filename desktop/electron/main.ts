@@ -17,6 +17,8 @@ let serverUrl = 'http://localhost:8000';
 let wsUrl = 'ws://localhost:8000/ws/desktop';
 let reconnectTimer: NodeJS.Timeout | null = null;
 let workspaceMap: WorkspaceMap = {};
+let currentTaskId: string | null = null;
+let currentTaskRunning = false;
 
 const PROTOCOL_SCHEME = 'kyrozen';
 
@@ -228,6 +230,16 @@ ipcMain.on('kyrozen:send-chat', (_event, message: string) => {
   );
 });
 
+ipcMain.on('kyrozen:cancel-task', () => {
+  if (currentTaskId && currentTaskRunning) {
+    sendToPythonAgent({
+      jsonrpc: '2.0',
+      method: 'cancel_task',
+      params: { task_id: currentTaskId },
+    });
+  }
+});
+
 function connectWebSocket(token: string) {
   disconnectWebSocket();
   updateConnection('connecting', '正在连接云端...');
@@ -297,6 +309,8 @@ async function handleServerMessage(message: Record<string, unknown>) {
   const type = message.type as string;
 
   if (type === 'assign_task') {
+    currentTaskId = String(message.task_id);
+    currentTaskRunning = true;
     const payload = {
       jsonrpc: '2.0',
       id: Date.now(),
@@ -388,6 +402,7 @@ function handlePythonAgentLine(line: string) {
     } else if (message.method === 'model_request') {
       wsClient?.send(JSON.stringify(message.params));
     } else if (message.method === 'task_result') {
+      currentTaskRunning = false;
       wsClient?.send(
         JSON.stringify({
           type: 'task_result',

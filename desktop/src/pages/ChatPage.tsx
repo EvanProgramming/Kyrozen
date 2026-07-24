@@ -10,6 +10,7 @@ export function ChatPage() {
     { role: 'assistant', content: '已连接到 Kyrozen 云端。你可以让我帮你生成代码、操作本地文件或启动预览。' },
   ]);
   const [input, setInput] = useState('');
+  const [isRunning, setIsRunning] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -20,6 +21,9 @@ export function ChatPage() {
         content: msg.content,
       };
       setMessages((prev) => [...prev, item]);
+      if (msg.role === 'assistant' || msg.role === 'system') {
+        setIsRunning(false);
+      }
     });
   }, []);
 
@@ -32,6 +36,14 @@ export function ChatPage() {
     setMessages((prev) => [...prev, { role: 'user', content: input }]);
     window.kyrozen.sendChat(input);
     setInput('');
+    setIsRunning(true);
+  };
+
+  const handleCancel = () => {
+    if (!window.kyrozen) return;
+    window.kyrozen.cancelTask();
+    setIsRunning(false);
+    setMessages((prev) => [...prev, { role: 'system', content: '已请求取消当前任务' }]);
   };
 
   return (
@@ -60,12 +72,21 @@ export function ChatPage() {
           placeholder="输入消息..."
           className="flex-1 px-4 py-2 bg-slate-900 border border-slate-600 rounded-full focus:outline-none focus:border-blue-500"
         />
-        <button
-          onClick={handleSend}
-          className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full font-medium transition-colors"
-        >
-          发送
-        </button>
+        {isRunning ? (
+          <button
+            onClick={handleCancel}
+            className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-full font-medium transition-colors"
+          >
+            停止
+          </button>
+        ) : (
+          <button
+            onClick={handleSend}
+            className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full font-medium transition-colors"
+          >
+            发送
+          </button>
+        )}
       </div>
     </div>
   );

@@ -170,7 +170,19 @@ function createWindow() {
   });
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    const devPort = process.env.VITE_DESKTOP_PORT || '5173';
+    const devUrl = `http://localhost:${devPort}`;
+    mainWindow.loadURL(devUrl);
+    // If the configured/default port is unavailable, fall back to other common Vite ports.
+    mainWindow.webContents.on('did-fail-load', () => {
+      const fallbackPorts = ['5173', '5174', '5175', '5176', '5177', '5178'];
+      const currentPort = new URL(mainWindow.webContents.getURL()).port || devPort;
+      const remaining = fallbackPorts.filter((p) => p !== currentPort);
+      if (remaining.length === 0) return;
+      const nextPort = remaining[0];
+      console.log(`[Kyrozen] Dev server not found on ${currentPort}, trying ${nextPort}`);
+      mainWindow.loadURL(`http://localhost:${nextPort}`);
+    });
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }

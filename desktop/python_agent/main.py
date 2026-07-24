@@ -89,8 +89,22 @@ class DesktopAgentRuntime:
         workspace_root = str(params.get("workspace_root", "."))
         message = str(params.get("message", ""))
 
+        # Enforce that the workspace root is an absolute path inside the user's
+        # home directory. This is a second layer of defense on top of the path
+        # checks in kyrozen/tools/_paths.py.
+        root_path = Path(workspace_root).resolve()
+        home_path = Path.home().resolve()
+        if not root_path.is_absolute() or not str(root_path).startswith(str(home_path)):
+            self._notify("task_result", {
+                "task_id": self.current_task_id,
+                "status": "failed",
+                "result": {"answer": f"Invalid workspace root: {workspace_root}. It must be an absolute path under {home_path}."},
+            })
+            self._send_response(req_id, result={"status": "ok"})
+            return
+
         # Override workspace root for this task so file tools operate locally.
-        self.config.workspace_root = workspace_root
+        self.config.workspace_root = str(root_path)
 
         self._notify("task_step", {
             "task_id": self.current_task_id,

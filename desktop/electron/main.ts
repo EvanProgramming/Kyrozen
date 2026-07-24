@@ -763,6 +763,48 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
   }
 });
 
+ipcMain.handle('kyrozen:start-pairing', async (_event, url: string) => {
+  try {
+    const baseUrl = url.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/api/desktop/pairing-code`, { method: 'POST' });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return { success: true, code: data.code, expiresIn: data.expires_in };
+  } catch (err: any) {
+    return { success: false, error: err.message || '获取配对码失败' };
+  }
+});
+
+ipcMain.handle('kyrozen:poll-pairing', async (_event, url: string, code: string) => {
+  try {
+    const baseUrl = url.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/api/desktop/poll-pairing`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    if (data.ready && data.ws_token) {
+      serverUrl = baseUrl;
+      setUpdateApiBaseUrl(serverUrl);
+      wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
+      await saveCredentials(data.ws_token);
+      connectWebSocket(data.ws_token);
+      return { success: true, wsToken: data.ws_token };
+    }
+    return { success: true, ready: false };
+  } catch (err: any) {
+    return { success: false, error: err.message || '轮询配对失败' };
+  }
+});
+
 ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
   logInfo('Verifying open token from URL scheme');
   try {
@@ -859,17 +901,65 @@ ipcMain.handle('kyrozen:read-file', async (_event, projectId: string, relativePa
   }
 });
 
+const SENSITIVE_PLACEHOLDER_RE = /\b(API_KEY|API_SECRET|API_TOKEN|SECRET_KEY|PRIVATE_KEY|PASSWORD|DB_PASSWORD|DATABASE_URL|TOKEN)\b\s*[=:]/i;
+
+function hasSensitivePlaceholder(content: string): boolean {
+  return SENSITIVE_PLACEHOLDER_RE.test(content);
+}
+
+async function ensureGitignoreEnv(root: string): Promise<void> {
+  const gitignorePath = path.join(root, '.gitignore');
+  let existing = '';
+  try {
+    existing = await fs.readFile(gitignorePath, 'utf-8');
+  } catch {
+    // file may not exist
+  }
+  if (/^\.env$/m.test(existing)) return;
+  const updated = existing ? `${existing.trim()}\n.env\n` : '.env\n';
+  await fs.writeFile(gitignorePath, updated, 'utf-8');
+}
+
+async function showEnvWarning(): Promise<void> {
+  await dialog.showMessageBox(mainWindow!, {
+    type: 'warning',
+    buttons: ['我知道了'],
+    defaultId: 0,
+    title: '敏感信息提醒',
+    message: '检测到配置文件包含敏感占位符',
+    detail: '已为你生成 .env.example，请将 .env.example 复制为 .env 并填入真实值。.env 已自动加入 .gitignore，不会被提交。',
+  });
+}
+
 ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePath: string, content: string) => {
   try {
     const root = workspaceMap[projectId];
     if (!root) return { success: false, error: 'No workspace mapped' };
-    const target = path.resolve(root, relativePath);
+
+    let targetRelative = relativePath;
+    let shouldWarn = false;
+
+    // Prevent direct writes to .env; redirect to .env.example when sensitive placeholders are present.
+    if (path.basename(relativePath) === '.env' && hasSensitivePlaceholder(content)) {
+      targetRelative = '.env.example';
+      shouldWarn = true;
+    } else if (path.basename(relativePath).endsWith('.env.example') && hasSensitivePlaceholder(content)) {
+      shouldWarn = true;
+    }
+
+    const target = path.resolve(root, targetRelative);
     if (!isPathInside(root, target)) {
       return { success: false, error: 'Path outside workspace' };
     }
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, content, 'utf-8');
-    return { success: true };
+
+    if (shouldWarn) {
+      await ensureGitignoreEnv(root);
+      void showEnvWarning();
+    }
+
+    return { success: true, savedPath: targetRelative };
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
   }
@@ -1551,7 +1641,85 @@ ipcMain.handle('kyrozen:open-preview', async (_event, url: string, mode: 'embedd
   return { success: true };
 });
 
+const DANGEROUS_PATTERNS = [
+  /rm\s+-rf\s+\//,
+  /sudo\b/,
+  /\bssh\b/,
+  />\s*\/dev\/[sh]d[a-z]/,
+  /mkfs\.\w+/,
+  /dd\s+if=/,
+  /:\(\)\{\s*:\|:\|/,
+  /curl\s+.*\|\s*(bash|sh|zsh)\b/,
+  /wget\s+.*\|\s*(bash|sh|zsh)\b/,
+];
+
+function isDangerousCommand(command: string): boolean {
+  return DANGEROUS_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+function extractPackages(command: string): string[] {
+  const installMatch = command.match(/\b(?:npm|yarn|pnpm)\s+(?:install|add)\s+(.+)/i);
+  if (installMatch) {
+    return installMatch[1]
+      .split(/\s+/)
+      .filter((arg) => arg && !arg.startsWith('-'));
+  }
+  const pipMatch = command.match(/\bpip\s+(?:install)\s+(.+)/i);
+  if (pipMatch) {
+    return pipMatch[1]
+      .split(/\s+/)
+      .filter((arg) => arg && !arg.startsWith('-'));
+  }
+  return [];
+}
+
+function buildConfirmationDetail(params: Record<string, unknown>): string {
+  const parameters = (params.parameters as Record<string, unknown>) || {};
+  const command = String(parameters.command || '');
+  const filePath = String(parameters.path || parameters.file_path || '');
+  let detail = `参数：${JSON.stringify(parameters, null, 2)}\n原因：${params.reason || '无'}`;
+
+  if (String(params.tool) === 'terminal' && String(params.action) === 'execute' && command) {
+    const packages = extractPackages(command);
+    if (packages.length > 0) {
+      detail += `\n\n将安装以下依赖，请确认来源可信：\n${packages.map((p) => `- ${p}`).join('\n')}`;
+    }
+  }
+
+  if (String(params.tool) === 'file_write' && /(^|\/)\.env$/.test(filePath)) {
+    detail += '\n\n注意：写入 .env 会包含敏感信息。建议生成 .env.example，让用户手动复制为 .env 并填入真实值。';
+  }
+  return detail;
+}
+
 async function showConfirmationDialog(params: Record<string, unknown>) {
+  const command = String((params.parameters as Record<string, unknown>)?.command || '');
+  if (String(params.tool) === 'terminal' && String(params.action) === 'execute' && isDangerousCommand(command)) {
+    const reason = '检测到高危命令模式，已被客户端自动拒绝。';
+    logError(`Rejected dangerous command: ${command}`);
+    await logAuditEvent({
+      taskId: String(params.task_id || ''),
+      tool: String(params.tool || ''),
+      action: String(params.action || ''),
+      parameters: (params.parameters as Record<string, unknown>) || {},
+      confirmed: false,
+      fullTrust: fullTrustMode,
+    });
+    sendToPythonAgent({
+      jsonrpc: '2.0',
+      method: 'confirmation_response',
+      params: {
+        confirmation_id: params.confirmation_id,
+        confirmed: false,
+        trust_for_session: false,
+        task_id: params.task_id,
+        error: reason,
+      },
+    });
+    sendChatMessage({ role: 'system', content: reason });
+    return;
+  }
+
   const auditBase: AuditEvent = {
     taskId: String(params.task_id || ''),
     tool: String(params.tool || ''),
@@ -1586,7 +1754,7 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
     cancelId: 2,
     title: '高危操作确认',
     message: `${params.tool}.${params.action}`,
-    detail: `参数：${JSON.stringify(params.parameters, null, 2)}\n原因：${params.reason || '无'}`,
+    detail: buildConfirmationDetail(params),
   });
   const confirmed = result.response === 0 || result.response === 1;
   const trustForSession = result.response === 0;

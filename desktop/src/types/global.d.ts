@@ -38,6 +38,8 @@ export interface KyrozenAPI {
   onSessionResumed: (callback: (token: string, serverUrl: string) => void) => void;
   sendChat: (message: string) => void;
   cancelTask: () => void;
+  startPairing: (serverUrl: string) => Promise<{ success: boolean; code?: string; expiresIn?: number; error?: string }>;
+  pollPairing: (serverUrl: string, code: string) => Promise<{ success: boolean; ready?: boolean; wsToken?: string; error?: string }>;
   onChatMessage: (callback: (message: { role: string; content: string }) => void) => void;
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => void;
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;

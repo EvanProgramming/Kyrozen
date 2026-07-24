@@ -134,19 +134,12 @@ function App() {
     await loadFullTrust();
   };
 
-  const handleLogin = async (email: string, password: string, serverUrl: string) => {
-    setStatusMessage('正在登录...');
-    const result = await window.kyrozen!.login(email, password, serverUrl);
-    if (result.success && result.wsToken) {
-      setToken(result.wsToken);
-      setStatusMessage('登录成功');
-      await loadProjects();
-      await loadQuota();
-      await loadFullTrust();
-    } else {
-      setConnection('error');
-      setStatusMessage(result.error || '登录失败');
-    }
+  const handleLogin = async (wsToken: string, _serverUrl: string) => {
+    setStatusMessage('登录成功');
+    setToken(wsToken);
+    await loadProjects();
+    await loadQuota();
+    await loadFullTrust();
   };
 
   const handleToggleFullTrust = async () => {

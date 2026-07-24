@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell, Tray } from 'electron';
 import path from 'path';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs/promises';
@@ -16,15 +16,21 @@ let currentProjectId: string | null = null;
 let serverUrl = 'http://localhost:8000';
 let wsUrl = 'ws://localhost:8000/ws/desktop';
 let reconnectTimer: NodeJS.Timeout | null = null;
+let heartbeatTimer: NodeJS.Timeout | null = null;
 let workspaceMap: WorkspaceMap = {};
 let currentTaskId: string | null = null;
 let currentTaskRunning = false;
 let previewWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let pythonAgentRestartCount = 0;
+const PYTHON_AGENT_MAX_RESTARTS = 5;
+let pythonAgentStopping = false;
 
 const PROTOCOL_SCHEME = 'kyrozen';
+const HEARTBEAT_INTERVAL_MS = 30_000;
 
 const WORKSPACE_CONFIG_PATH = path.join(app.getPath('userData'), 'workspaces.json');
+const TOKEN_STORE_PATH = path.join(app.getPath('userData'), 'credentials.json');
 
 async function loadWorkspaceMap(): Promise<void> {
   try {
@@ -38,6 +44,41 @@ async function loadWorkspaceMap(): Promise<void> {
 async function saveWorkspaceMap(): Promise<void> {
   await fs.mkdir(path.dirname(WORKSPACE_CONFIG_PATH), { recursive: true });
   await fs.writeFile(WORKSPACE_CONFIG_PATH, JSON.stringify(workspaceMap, null, 2));
+}
+
+async function saveCredentials(wsToken: string, refreshToken?: string): Promise<void> {
+  const payload = JSON.stringify({ wsToken, refreshToken: refreshToken || null, serverUrl });
+  const encrypted = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(payload) : Buffer.from(payload);
+  await fs.mkdir(path.dirname(TOKEN_STORE_PATH), { recursive: true });
+  await fs.writeFile(TOKEN_STORE_PATH, encrypted);
+}
+
+async function loadCredentials(): Promise<{ wsToken: string; refreshToken: string | null; serverUrl: string } | null> {
+  try {
+    const raw = await fs.readFile(TOKEN_STORE_PATH);
+    const decrypted = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString();
+    const data = JSON.parse(decrypted);
+    if (data.wsToken) {
+      return { wsToken: data.wsToken, refreshToken: data.refreshToken || null, serverUrl: data.serverUrl || 'http://localhost:8000' };
+    }
+  } catch {
+    // ignore missing or corrupt credential store
+  }
+  return null;
+}
+
+async function clearCredentials(): Promise<void> {
+  try {
+    await fs.unlink(TOKEN_STORE_PATH);
+  } catch {
+    // ignore
+  }
+}
+
+function showNotification(title: string, body: string) {
+  if (Notification.isSupported()) {
+    new Notification({ title, body }).show();
+  }
 }
 
 async function pickWorkspaceRoot(projectId: string): Promise<string | null> {
@@ -147,8 +188,9 @@ function createTray() {
     },
     { type: 'separator' },
     {
-      label: '退出',
-      click: () => {
+      label: '退出并清除登录状态',
+      click: async () => {
+        await clearCredentials();
         disconnectWebSocket();
         stopPythonAgent();
         app.quit();
@@ -188,6 +230,14 @@ app.whenReady().then(async () => {
     mainWindow.webContents.once('did-finish-load', () => {
       mainWindow?.webContents.send('kyrozen:protocol-url', protocolUrl);
     });
+  } else {
+    // No protocol URL: try to resume the previous session from encrypted storage.
+    const credentials = await loadCredentials();
+    if (credentials) {
+      serverUrl = credentials.serverUrl;
+      wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
+      connectWebSocket(credentials.wsToken);
+    }
   }
 
   app.on('activate', () => {
@@ -239,6 +289,7 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
       client_version: app.getVersion(),
       platform: process.platform,
     });
+    await saveCredentials(verify.ws_token, verify.refresh_token);
     connectWebSocket(verify.ws_token);
     return { success: true, wsToken: verify.ws_token };
   } catch (err: any) {
@@ -254,6 +305,7 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
       client_version: app.getVersion(),
       platform: process.platform,
     });
+    await saveCredentials(data.ws_token, data.refresh_token);
     connectWebSocket(data.ws_token);
     return { wsToken: data.ws_token, refreshToken: data.refresh_token };
   } catch (err: any) {
@@ -329,6 +381,8 @@ function connectWebSocket(token: string) {
         })
       );
       updateConnection('connected', '已连接云端');
+      pythonAgentRestartCount = 0;
+      startHeartbeat();
       startPythonAgent();
     });
 
@@ -360,10 +414,32 @@ function disconnectWebSocket() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  stopHeartbeat();
   if (wsClient) {
     wsClient.removeAllListeners();
     wsClient.close();
     wsClient = null;
+  }
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (wsClient?.readyState === WebSocket.OPEN) {
+      wsClient.send(
+        JSON.stringify({
+          type: 'heartbeat',
+          current_project_id: currentProjectId,
+        })
+      );
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
 }
 
@@ -447,11 +523,28 @@ function startPythonAgent() {
   pythonAgent.on('exit', (code) => {
     sendChatMessage({ role: 'system', content: `Python Agent 已退出 (code ${code ?? 'unknown'})` });
     pythonAgent = null;
+    if (!pythonAgentStopping && code !== 0) {
+      if (pythonAgentRestartCount < PYTHON_AGENT_MAX_RESTARTS) {
+        pythonAgentRestartCount += 1;
+        const delay = Math.min(5000 * pythonAgentRestartCount, 30000);
+        sendChatMessage({ role: 'system', content: `Python Agent 异常退出，${delay / 1000} 秒后尝试重启 (${pythonAgentRestartCount}/${PYTHON_AGENT_MAX_RESTARTS})...` });
+        setTimeout(() => {
+          if (wsClient?.readyState === WebSocket.OPEN) {
+            startPythonAgent();
+          }
+        }, delay);
+      } else {
+        sendChatMessage({ role: 'system', content: 'Python Agent 连续异常退出超过最大重试次数，请检查环境后手动重启客户端。' });
+        showNotification('Kyrozen', '本地 Agent 无法启动，请检查 Python 环境');
+      }
+    }
+    pythonAgentStopping = false;
   });
 }
 
 function stopPythonAgent() {
   if (pythonAgent) {
+    pythonAgentStopping = true;
     pythonAgent.kill();
     pythonAgent = null;
   }
@@ -472,6 +565,7 @@ function handlePythonAgentLine(line: string) {
       sendChatMessage({ role: 'assistant', content: `[${step.status}] ${step.description}` });
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
+      showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);
     } else if (message.method === 'model_request') {
       wsClient?.send(JSON.stringify(message.params));
     } else if (message.method === 'open_preview') {
@@ -491,7 +585,16 @@ function handlePythonAgentLine(line: string) {
           steps: message.params.steps,
         })
       );
-      sendChatMessage({ role: 'assistant', content: message.params.result?.answer || '任务完成' });
+      const status = message.params.status;
+      const answer = message.params.result?.answer || '任务完成';
+      sendChatMessage({ role: 'assistant', content: answer });
+      if (status === 'failed') {
+        showNotification('Kyrozen', '任务执行失败');
+      } else if (status === 'cancelled') {
+        showNotification('Kyrozen', '任务已取消');
+      } else if (status === 'completed') {
+        showNotification('Kyrozen', '任务已完成');
+      }
     }
   } catch {
     sendChatMessage({ role: 'system', content: line });

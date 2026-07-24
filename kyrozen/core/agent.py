@@ -270,12 +270,14 @@ class BaseAgent:
                         )
                         if user_confirmed:
                             decision = self.permission.confirm(tool_name, action, parameters)
+                            task.update_status("running")
                             step.status = "running"
                             self.task_manager.update(task)
                         else:
                             step.error = decision.reason
                             step.status = "failed"
                             step.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            task.update_status("running")
                             self.task_manager.update(task)
                             results.append({
                                 "tool": tool_name,

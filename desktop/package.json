@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Kyrozen desktop client for local agent execution",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/main/main.js",
   "homepage": ".",
   "scripts": {
     "postinstall": "node scripts/postinstall.js",

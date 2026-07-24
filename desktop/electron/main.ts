@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, Tray } from 'electron';
 import path from 'path';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs/promises';
@@ -20,6 +20,7 @@ let workspaceMap: WorkspaceMap = {};
 let currentTaskId: string | null = null;
 let currentTaskRunning = false;
 let previewWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 
 const PROTOCOL_SCHEME = 'kyrozen';
 
@@ -102,6 +103,72 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  mainWindow.on('close', (event) => {
+    if (process.platform === 'darwin') return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
+}
+
+function createTray() {
+  const { nativeImage } = require('electron');
+  const iconPath = path.join(__dirname, '../../public/tray-icon.png');
+  let trayIcon: Electron.NativeImage | undefined;
+  try {
+    if (process.platform === 'darwin') {
+      // On macOS, use a 16x16 template image if available; otherwise fall back to text title.
+      const loaded = nativeImage.createFromPath(iconPath);
+      trayIcon = loaded.resize({ width: 16, height: 16 });
+    } else {
+      trayIcon = nativeImage.createFromPath(iconPath);
+    }
+  } catch {
+    trayIcon = undefined;
+  }
+
+  tray = new Tray(trayIcon || nativeImage.createEmpty());
+  if (!trayIcon && process.platform === 'darwin') {
+    tray.setTitle('K');
+  }
+  tray.setToolTip('Kyrozen Desktop');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '显示主窗口',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        } else {
+          createWindow();
+        }
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        disconnectWebSocket();
+        stopPythonAgent();
+        app.quit();
+      },
+    },
+  ]);
+
+  tray.setContextMenu(contextMenu);
+  tray.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    } else {
+      createWindow();
+    }
+  });
 }
 
 function getProtocolUrl() {
@@ -114,6 +181,7 @@ app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
 app.whenReady().then(async () => {
   await loadWorkspaceMap();
   createWindow();
+  createTray();
 
   const protocolUrl = getProtocolUrl();
   if (protocolUrl && mainWindow) {

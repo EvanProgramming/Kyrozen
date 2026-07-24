@@ -643,6 +643,84 @@ async def _route_task_to_desktop(task: Any, user_id: str) -> bool:
     return dispatched
 
 
+async def _handle_model_request(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    user_id: str,
+    logger: Any,
+) -> None:
+    """Proxy a model request from a desktop client to the configured cloud model.
+
+    Sends chunks back as model_stream_chunk messages. Performs a basic
+    subscription/quota check (currently a placeholder that always allows).
+    """
+    request_id = message.get("request_id")
+    messages = message.get("messages", [])
+    stream = message.get("stream", True)
+
+    # TODO: integrate real subscription/quota service
+    quota_ok = True
+    if not quota_ok:
+        await websocket.send_json({
+            "type": "model_error",
+            "request_id": request_id,
+            "error": "Quota exceeded. Please upgrade your plan.",
+        })
+        return
+
+    factory = _get_agent_factory()
+    model = factory.model
+    if model is None:
+        await websocket.send_json({
+            "type": "model_error",
+            "request_id": request_id,
+            "error": "Model provider not configured on the server.",
+        })
+        return
+
+    try:
+        if not stream:
+            response = await asyncio.to_thread(model.chat, messages)
+            await websocket.send_json({
+                "type": "model_stream_chunk",
+                "request_id": request_id,
+                "chunk": "",
+                "finished": True,
+                "full_content": response.content,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
+                    "completion_tokens": response.usage.completion_tokens if response.usage else 0,
+                } if response.usage else None,
+            })
+            return
+
+        full_content_parts: list[str] = []
+        for chunk in await asyncio.to_thread(lambda: list(model.chat_stream(messages))):
+            full_content_parts.append(chunk)
+            await websocket.send_json({
+                "type": "model_stream_chunk",
+                "request_id": request_id,
+                "chunk": chunk,
+                "finished": False,
+            })
+
+        full_content = "".join(full_content_parts)
+        await websocket.send_json({
+            "type": "model_stream_chunk",
+            "request_id": request_id,
+            "chunk": "",
+            "finished": True,
+            "full_content": full_content,
+        })
+    except Exception as exc:
+        logger.warning(f"Model proxy error for request {request_id}: {exc}")
+        await websocket.send_json({
+            "type": "model_error",
+            "request_id": request_id,
+            "error": f"Model request failed: {exc}",
+        })
+
+
 def _recommend_next_action(project: Any) -> dict[str, str] | None:
     """Recommend the next action based on the project's current stage."""
     mapping = {
@@ -2403,6 +2481,9 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 elif msg_type == "confirmation_response":
                     # TODO: wire into running agent confirmation queue
                     logger.info(f"Confirmation response for task {message.get('task_id')}: {message.get('confirmed')}")
+
+                elif msg_type == "model_request":
+                    asyncio.create_task(_handle_model_request(websocket, message, user_id, logger))
 
                 else:
                     logger.warning(f"Unknown desktop websocket message type: {msg_type}")

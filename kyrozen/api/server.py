@@ -463,6 +463,14 @@ class DesktopVerifyTokenRequest(BaseModel):
             raise ValueError("Either token or access_token must be provided")
 
 
+class DesktopPollPairingRequest(BaseModel):
+    code: str = Field(..., min_length=1)
+
+
+class DesktopConfirmPairingRequest(BaseModel):
+    code: str = Field(..., min_length=1)
+
+
 class ToolExecuteRequest(BaseModel):
     tool: str
     action: str
@@ -2739,6 +2747,37 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "limit": status.limit,
             "remaining": status.remaining,
         }
+
+    @app.post("/api/desktop/pairing-code")
+    async def api_create_pairing_code():
+        """Desktop client requests a pairing code to display to the user."""
+        code = DesktopPairingManager.create_code()
+        return {
+            "code": code,
+            "expires_in": 600,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=600)).isoformat(),
+        }
+
+    @app.post("/api/desktop/poll-pairing")
+    async def api_poll_pairing(request: DesktopPollPairingRequest):
+        """Desktop client polls for pairing confirmation."""
+        result = DesktopPairingManager.poll_code(request.code)
+        if result is None:
+            raise HTTPException(404, "Pairing code not found or expired")
+        if result.get("pending"):
+            return {"ready": False}
+        return {"ready": True, "ws_token": result["ws_token"], "user_id": result["user_id"]}
+
+    @app.post("/api/auth/confirm-pairing")
+    async def api_confirm_pairing(
+        request: DesktopConfirmPairingRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Browser session confirms a desktop pairing code."""
+        success = DesktopPairingManager.confirm_code(request.code, current_user.user_id)
+        if not success:
+            raise HTTPException(400, "Invalid or expired pairing code")
+        return {"success": True}
 
     @app.get("/api/desktop/clients")
     async def api_list_desktop_clients(

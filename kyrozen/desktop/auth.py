@@ -24,6 +24,10 @@ _WS_TOKENS: dict[str, dict[str, Any]] = {}
 _OPEN_TOKEN_TTL_SECONDS = 5 * 60  # 5 minutes
 _REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 _WS_TOKEN_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+_PAIRING_CODE_TTL_SECONDS = 10 * 60  # 10 minutes
+_PAIRING_POLL_TTL_SECONDS = 10 * 60  # 10 minutes
+
+_PAIRING_CODES: dict[str, dict[str, Any]] = {}
 
 
 def _now() -> int:
@@ -99,6 +103,52 @@ class DesktopTokenManager:
         _purge_expired(_WS_TOKENS)
         data = _WS_TOKENS.get(token)
         return data["user_id"] if data else None
+
+
+class DesktopPairingManager:
+    """Generate and confirm pairing codes for browser-to-desktop login."""
+
+    @staticmethod
+    def create_code() -> str:
+        """Create a short pairing code for the desktop client to display."""
+        _purge_expired(_PAIRING_CODES)
+        # Use a short human-friendly code (6 alphanumeric characters).
+        code = secrets.token_hex(3).upper()
+        _PAIRING_CODES[code] = {
+            "exp": _now() + _PAIRING_CODE_TTL_SECONDS,
+            "confirmed": False,
+            "user_id": None,
+            "ws_token": None,
+        }
+        return code
+
+    @staticmethod
+    def confirm_code(code: str, user_id: str) -> bool:
+        """Confirm a pairing code from an authenticated browser session."""
+        _purge_expired(_PAIRING_CODES)
+        data = _PAIRING_CODES.get(code)
+        if data is None or data.get("confirmed"):
+            return False
+        ws_token = secrets.token_urlsafe(32)
+        _WS_TOKENS[ws_token] = {
+            "user_id": user_id,
+            "exp": _now() + _WS_TOKEN_TTL_SECONDS,
+        }
+        data["confirmed"] = True
+        data["user_id"] = user_id
+        data["ws_token"] = ws_token
+        return True
+
+    @staticmethod
+    def poll_code(code: str) -> dict[str, Any] | None:
+        """Poll for a confirmed pairing code from the desktop client."""
+        _purge_expired(_PAIRING_CODES)
+        data = _PAIRING_CODES.get(code)
+        if data is None:
+            return None
+        if data.get("confirmed") and data.get("ws_token"):
+            return {"user_id": data["user_id"], "ws_token": data["ws_token"]}
+        return {"pending": True}
 
 
 def verify_desktop_token(token: str) -> dict[str, Any] | None:

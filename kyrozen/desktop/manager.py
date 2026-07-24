@@ -40,7 +40,7 @@ class DesktopClientManager:
             # Mark any existing clients for this user as offline when a new one
             # connects from the same device name, but keep them in the registry.
             self._clients[client.client_id] = client
-        self._logger.info(f"Desktop client registered: {client.client_id} for user {user_id}")
+        self._logger.log("info", f"Desktop client registered: {client.client_id} for user {user_id}")
         return client
 
     def unregister(self, client_id: str) -> None:
@@ -49,7 +49,7 @@ class DesktopClientManager:
             client = self._clients.get(client_id)
             if client:
                 client.online = False
-        self._logger.info(f"Desktop client unregistered: {client_id}")
+        self._logger.log("info", f"Desktop client unregistered: {client_id}")
 
     def get(self, client_id: str) -> DesktopClient | None:
         with self._lock:

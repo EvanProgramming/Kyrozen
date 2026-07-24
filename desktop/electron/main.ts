@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell, Tray } from 'electron';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs/promises';
 import { watch, FSWatcher } from 'fs';
@@ -19,6 +20,7 @@ interface WorkspaceMap {
 }
 
 const isDev = process.env.NODE_ENV === 'development';
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let wsClient: WebSocket | null = null;
 let pythonAgent: ChildProcessWithoutNullStreams | null = null;
@@ -163,7 +165,7 @@ function createWindow() {
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
     webPreferences: {
-      preload: path.join(__dirname, '../preload/preload.js'),
+      preload: path.join(currentDir, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -184,7 +186,7 @@ function createWindow() {
       mainWindow.loadURL(`http://localhost:${nextPort}`);
     });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(path.join(currentDir, '../dist/index.html'));
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -207,7 +209,7 @@ function createWindow() {
 
 function createTray() {
   const { nativeImage } = require('electron');
-  const iconPath = path.join(__dirname, '../../public/tray-icon.png');
+  const iconPath = path.join(currentDir, '../../public/tray-icon.png');
   let trayIcon: Electron.NativeImage | undefined;
   try {
     if (process.platform === 'darwin') {
@@ -753,7 +755,7 @@ async function chooseWorkspaceRoot(projectId: string | null): Promise<string> {
 
 function getRepoRoot(): string {
   // main.js is inside dist-electron/main/, which is under desktop/; repo root is one level above desktop.
-  return path.resolve(__dirname, '../../../');
+  return path.resolve(currentDir, '../../../');
 }
 
 /** Spawn the local Python Agent process and wire stdio JSON-RPC to the UI/cloud. */
@@ -808,7 +810,7 @@ async function startPythonAgent() {
     }
   }
 
-  const agentScript = process.env.KYROZEN_AGENT_SCRIPT || path.join(__dirname, '../../python_agent/main.py');
+  const agentScript = process.env.KYROZEN_AGENT_SCRIPT || path.join(currentDir, '../../python_agent/main.py');
 
   pythonAgent = spawn(pythonPath, [agentScript], {
     cwd: process.cwd(),

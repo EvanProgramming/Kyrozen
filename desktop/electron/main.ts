@@ -1,7 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'path';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import fs from 'fs/promises';
 import WebSocket from 'ws';
+
+interface WorkspaceMap {
+  [projectId: string]: string;
+}
 
 const isDev = process.env.NODE_ENV === 'development';
 let mainWindow: BrowserWindow | null = null;
@@ -11,8 +16,52 @@ let currentProjectId: string | null = null;
 let serverUrl = 'http://localhost:8000';
 let wsUrl = 'ws://localhost:8000/ws/desktop';
 let reconnectTimer: NodeJS.Timeout | null = null;
+let workspaceMap: WorkspaceMap = {};
 
 const PROTOCOL_SCHEME = 'kyrozen';
+
+const WORKSPACE_CONFIG_PATH = path.join(app.getPath('userData'), 'workspaces.json');
+
+async function loadWorkspaceMap(): Promise<void> {
+  try {
+    const raw = await fs.readFile(WORKSPACE_CONFIG_PATH, 'utf-8');
+    workspaceMap = JSON.parse(raw);
+  } catch {
+    workspaceMap = {};
+  }
+}
+
+async function saveWorkspaceMap(): Promise<void> {
+  await fs.mkdir(path.dirname(WORKSPACE_CONFIG_PATH), { recursive: true });
+  await fs.writeFile(WORKSPACE_CONFIG_PATH, JSON.stringify(workspaceMap, null, 2));
+}
+
+async function pickWorkspaceRoot(projectId: string): Promise<string | null> {
+  const defaultPath = path.join(app.getPath('home'), 'KyrozenProjects', projectId);
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    title: `选择项目 ${projectId} 的本地工作目录`,
+    defaultPath,
+    properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    buttonLabel: '选择此文件夹',
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  const selected = result.filePaths[0];
+  await fs.mkdir(selected, { recursive: true });
+  workspaceMap[projectId] = selected;
+  await saveWorkspaceMap();
+  return selected;
+}
+
+async function getWorkspaceRoot(projectId: string | null): Promise<string | null> {
+  if (!projectId) return null;
+  if (workspaceMap[projectId]) {
+    await fs.mkdir(workspaceMap[projectId], { recursive: true });
+    return workspaceMap[projectId];
+  }
+  return pickWorkspaceRoot(projectId);
+}
 
 function updateConnection(state: 'disconnected' | 'connecting' | 'connected' | 'error', message: string) {
   mainWindow?.webContents.send('kyrozen:connection-change', state, message);
@@ -59,7 +108,8 @@ function getProtocolUrl() {
 
 app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await loadWorkspaceMap();
   createWindow();
 
   const protocolUrl = getProtocolUrl();
@@ -141,9 +191,23 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
   }
 });
 
-ipcMain.on('kyrozen:set-current-project', (_event, projectId: string) => {
+ipcMain.handle('kyrozen:set-current-project', async (_event, projectId: string) => {
   currentProjectId = projectId;
+  const root = await getWorkspaceRoot(projectId);
+  if (root) {
+    sendChatMessage({ role: 'system', content: `项目工作目录：${root}` });
+  }
   wsClient?.send(JSON.stringify({ type: 'heartbeat', active_project_id: projectId }));
+  return { workspaceRoot: root };
+});
+
+ipcMain.handle('kyrozen:pick-workspace', async (_event, projectId: string) => {
+  const root = await pickWorkspaceRoot(projectId);
+  return { workspaceRoot: root };
+});
+
+ipcMain.handle('kyrozen:get-workspace-root', async (_event, projectId: string) => {
+  return { workspaceRoot: await getWorkspaceRoot(projectId) };
 });
 
 ipcMain.on('kyrozen:request-initial-token', () => {
@@ -260,10 +324,13 @@ async function handleServerMessage(message: Record<string, unknown>) {
 }
 
 async function chooseWorkspaceRoot(projectId: string | null): Promise<string> {
-  if (!projectId) return path.join(require('os').homedir(), 'KyrozenProjects');
-  const root = path.join(require('os').homedir(), 'KyrozenProjects', projectId);
-  await require('fs/promises').mkdir(root, { recursive: true });
-  return root;
+  if (!projectId) return path.join(app.getPath('home'), 'KyrozenProjects');
+  const root = await getWorkspaceRoot(projectId);
+  if (root) return root;
+  // Fallback if user cancels the picker.
+  const fallback = path.join(app.getPath('home'), 'KyrozenProjects', projectId);
+  await fs.mkdir(fallback, { recursive: true });
+  return fallback;
 }
 
 function startPythonAgent() {

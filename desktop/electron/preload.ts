@@ -8,7 +8,9 @@ contextBridge.exposeInMainWorld('kyrozen', {
 
   verifyOpenToken: (token: string) => ipcRenderer.invoke('kyrozen:verify-open-token', token),
 
-  setCurrentProject: (projectId: string) => ipcRenderer.send('kyrozen:set-current-project', projectId),
+  setCurrentProject: (projectId: string) => ipcRenderer.invoke('kyrozen:set-current-project', projectId),
+  pickWorkspace: (projectId: string) => ipcRenderer.invoke('kyrozen:pick-workspace', projectId),
+  getWorkspaceRoot: (projectId: string) => ipcRenderer.invoke('kyrozen:get-workspace-root', projectId),
 
   requestInitialToken: () => ipcRenderer.send('kyrozen:request-initial-token'),
 

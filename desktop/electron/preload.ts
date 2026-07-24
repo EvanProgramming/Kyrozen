@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('kyrozen', {
   setCurrentProject: (projectId: string) => ipcRenderer.invoke('kyrozen:set-current-project', projectId),
   pickWorkspace: (projectId: string) => ipcRenderer.invoke('kyrozen:pick-workspace', projectId),
   getWorkspaceRoot: (projectId: string) => ipcRenderer.invoke('kyrozen:get-workspace-root', projectId),
+  getProjects: () => ipcRenderer.invoke('kyrozen:get-projects'),
 
   requestInitialToken: () => ipcRenderer.send('kyrozen:request-initial-token'),
 
@@ -32,4 +33,16 @@ contextBridge.exposeInMainWorld('kyrozen', {
 
   onChatMessage: (callback: (message: { role: string; content: string }) => void) =>
     ipcRenderer.on('kyrozen:chat-message', (_event, message) => callback(message)),
+
+  onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) =>
+    ipcRenderer.on('kyrozen:execution-plan', (_event, plan) => callback(plan)),
+
+  checkForUpdates: () => ipcRenderer.invoke('kyrozen:check-for-updates'),
+
+  onUpdateStatus: (callback: (status: { status: string; message: string }) => void) =>
+    ipcRenderer.on('kyrozen:update-status', (_event, status) => callback(status)),
+
+  ensureHardwareToolchain: () => ipcRenderer.invoke('kyrozen:ensure-hardware-toolchain'),
+  installCommonCores: () => ipcRenderer.invoke('kyrozen:install-common-cores'),
+  connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),
 });

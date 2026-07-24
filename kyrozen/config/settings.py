@@ -127,6 +127,9 @@ class KyrozenConfig:
     supabase_jwt_secret: str = ""
     db_backend: str = "sqlite"  # "sqlite" or "supabase"
     beta_invite_only: bool = False
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_oauth_redirect_uri: str = ""
     cors_origins: list[str] = field(default_factory=list)
     provider_costs: dict[str, tuple[float, float]] = field(default_factory=dict)
     desktop_quota_default_limit: int = 0  # 0 means unlimited; positive value enforces token quota
@@ -249,6 +252,9 @@ def get_config(
             os.environ.get("KYROZEN_BETA_INVITE_ONLY", "")
             or file_data.get("beta_invite_only", "false")
         ),
+        github_oauth_client_id=os.environ.get("GITHUB_OAUTH_CLIENT_ID", "") or file_data.get("github_oauth_client_id", ""),
+        github_oauth_client_secret=os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "") or file_data.get("github_oauth_client_secret", ""),
+        github_oauth_redirect_uri=os.environ.get("GITHUB_OAUTH_REDIRECT_URI", "") or file_data.get("github_oauth_redirect_uri", ""),
         cors_origins=[o.strip() for o in (os.environ.get("KYROZEN_CORS_ORIGINS", "") or file_data.get("cors_origins", "")).split(",") if o.strip()],
         desktop_quota_default_limit=int(
             os.environ.get("KYROZEN_DESKTOP_QUOTA_DEFAULT_LIMIT", "")

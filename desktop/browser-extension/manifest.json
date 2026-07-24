@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Kyrozen Web Capture",
+  "version": "0.1.0",
+  "description": "Capture web pages and test local web apps for Kyrozen projects.",
+  "permissions": ["activeTab", "storage", "scripting", "notifications", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Capture page for Kyrozen"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "commands": {
+    "capture-page": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
+      "description": "Capture the current page to Kyrozen"
+    },
+    "test-local-app": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+T",
+        "mac": "Command+Shift+T"
+      },
+      "description": "Smoke-test the current local app with Kyrozen"
+    }
+  }
+}

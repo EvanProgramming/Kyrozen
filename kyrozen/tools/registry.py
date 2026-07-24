@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from .file_tools import FileReadTool, FileWriteTool, ListDirTool, FindFilesTool
 from .terminal_tools import TerminalTool
 from .git_tools import GitTool
+from .web_tools import WebCaptureTool, WebTestTool
 
 if TYPE_CHECKING:
     from kyrozen.project.manager import ProjectManager
@@ -118,6 +119,8 @@ def get_default_registry(
     registry.register(FindFilesTool())
     registry.register(TerminalTool())
     registry.register(GitTool())
+    registry.register(WebTestTool())
+    registry.register(WebCaptureTool(project_manager))
     registry.register(UpdateProjectTool(project_manager))
     registry.register(RecordDecisionTool(project_manager))
     registry.register(SaveProblemBriefTool(project_manager))

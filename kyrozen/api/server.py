@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -500,6 +500,25 @@ class CreateArtifactRequest(BaseModel):
     change_reason: str = ""
 
 
+class CreateFileSummaryRequest(BaseModel):
+    file_path: str = Field(..., min_length=1)
+    event: str = Field(..., pattern="^(changed|created|deleted|renamed)$")
+    summary: str = ""
+    content_snippet: str = ""
+
+
+class CreateWebCaptureRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+    title: str = ""
+    content: str = ""
+
+
+class WebTestRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+    title: str = ""
+    expected_text: str = ""
+
+
 class CreateFeedbackRequest(BaseModel):
     type: str = Field(..., pattern="^(bug|feature_request|experience|ai_suggestion)$")
     description: str = Field(..., min_length=1)
@@ -976,6 +995,135 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             }
         except Exception as exc:
             raise HTTPException(status_code=401, detail=f"Invalid credentials: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # GitHub OAuth
+    # ------------------------------------------------------------------
+    _github_oauth_states: dict[str, dict[str, Any]] = {}
+
+    class GitHubAuthorizeRequest(BaseModel):
+        redirect_uri: str | None = None
+        desktop: bool = False
+
+    def _cleanup_github_oauth_states() -> None:
+        now = datetime.now(timezone.utc).timestamp()
+        expired = [k for k, v in _github_oauth_states.items() if v.get("expires_at", 0) < now]
+        for k in expired:
+            _github_oauth_states.pop(k, None)
+
+    @app.get("/api/auth/github/authorize")
+    async def api_github_authorize(
+        request: Request,
+        redirect_uri: str | None = None,
+        desktop: bool = False,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        config = get_config()
+        if not config.github_oauth_client_id or not config.github_oauth_client_secret:
+            raise HTTPException(status_code=503, detail="GitHub OAuth is not configured on the server")
+
+        _cleanup_github_oauth_states()
+        state = uuid.uuid4().hex
+        callback_uri = redirect_uri or config.github_oauth_redirect_uri or str(request.base_url).rstrip("/") + "/api/auth/github/callback"
+        _github_oauth_states[state] = {
+            "user_id": current_user.user_id,
+            "desktop": desktop,
+            "redirect_uri": callback_uri,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp(),
+        }
+
+        params = {
+            "client_id": config.github_oauth_client_id,
+            "redirect_uri": callback_uri,
+            "state": state,
+            "scope": "repo read:user",
+        }
+        authorize_url = "https://github.com/login/oauth/authorize?" + "&".join(f"{k}={v}" for k, v in params.items())
+        return {"authorize_url": authorize_url}
+
+    @app.get("/api/auth/github/callback")
+    async def api_github_callback(
+        code: str,
+        state: str,
+    ):
+        _cleanup_github_oauth_states()
+        state_data = _github_oauth_states.pop(state, None)
+        if not state_data:
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
+        user_id = state_data.get("user_id")
+
+        config = get_config()
+        if not config.github_oauth_client_id or not config.github_oauth_client_secret:
+            raise HTTPException(status_code=503, detail="GitHub OAuth is not configured on the server")
+
+        try:
+            import requests
+        except ImportError as exc:
+            raise HTTPException(status_code=500, detail=f"requests is not installed: {exc}") from exc
+
+        token_response = requests.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": config.github_oauth_client_id,
+                "client_secret": config.github_oauth_client_secret,
+                "code": code,
+                "redirect_uri": state_data["redirect_uri"],
+            },
+            timeout=30,
+        )
+        if token_response.status_code != 200:
+            raise HTTPException(status_code=502, detail="GitHub token exchange failed")
+
+        token_data = token_response.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=502, detail=f"GitHub did not return an access token: {token_data}")
+
+        # Persist the GitHub token in Supabase user metadata so it can be used
+        # by the agent for repository operations.
+        try:
+            if config.supabase_url and config.supabase_service_role_key:
+                admin_client = create_client(config.supabase_url, config.supabase_service_role_key)
+                admin_client.auth.admin.update_user_by_id(
+                    user_id,
+                    {
+                        "user_metadata": {
+                            "github_access_token": access_token,
+                            "github_token_scopes": token_data.get("scope", ""),
+                        }
+                    },
+                )
+        except Exception as exc:
+            get_logger(__name__).warning("Failed to persist GitHub token to Supabase: %s", exc, exc_info=True)
+
+        scope = token_data.get("scope", "")
+        is_desktop = state_data.get("desktop", False)
+        if is_desktop:
+            return HTMLResponse(
+                content=(
+                    "<html><body style='font-family:system-ui,sans-serif;text-align:center;padding:48px;'>"
+                    "<h1>GitHub 授权成功</h1>"
+                    "<p>请回到 Kyrozen 桌面客户端继续操作。</p>"
+                    "<script>setTimeout(() => window.close(), 3000);</script>"
+                    "</body></html>"
+                )
+            )
+        return {
+            "success": True,
+            "scope": scope,
+            "desktop": is_desktop,
+        }
+
+    @app.get("/api/user/github-status")
+    async def api_user_github_status(current_user: CurrentUser = Depends(get_current_user)):
+        metadata = current_user.raw_claims.get("user_metadata", {}) or {}
+        token = metadata.get("github_access_token")
+        return {
+            "connected": bool(token),
+            "scope": metadata.get("github_token_scopes", ""),
+        }
 
     # ------------------------------------------------------------------
     # Chat
@@ -1552,6 +1700,74 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if artifact is None:
             raise HTTPException(404, "Artifact not found")
         return artifact.to_dict()
+
+    @app.post("/api/projects/{project_id}/file-summaries")
+    async def api_create_file_summary(
+        project_id: str,
+        request: CreateFileSummaryRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        try:
+            memory = _project_memory(project_id)
+            record = memory.save(
+                category="local_file_summary",
+                content=request.summary or f"{request.event}: {request.file_path}",
+                file_path=request.file_path,
+                event=request.event,
+                content_snippet=request.content_snippet,
+            )
+            return record.to_dict()
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to save file summary: {exc}") from exc
+
+    @app.post("/api/projects/{project_id}/web-captures")
+    async def api_create_web_capture(
+        project_id: str,
+        request: CreateWebCaptureRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        try:
+            memory = _project_memory(project_id)
+            record = memory.save(
+                category="web_capture",
+                content=request.content or request.title or request.url,
+                url=request.url,
+                title=request.title,
+            )
+            return record.to_dict()
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to save web capture: {exc}") from exc
+
+    @app.post("/api/projects/{project_id}/web-test")
+    async def api_web_test(
+        project_id: str,
+        request: WebTestRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        try:
+            factory = _get_agent_factory()
+            result = factory.tools.execute(
+                "web_test",
+                "test_local_app",
+                {"url": request.url, "expected_text": request.expected_text},
+            )
+            # Also store a snapshot of the tested page in project memory.
+            try:
+                memory = _project_memory(project_id)
+                memory.save(
+                    category="web_capture",
+                    content=request.title or request.url,
+                    url=request.url,
+                    title=request.title,
+                )
+            except Exception:
+                get_logger(__name__).warning("Failed to save web-test snapshot", exc_info=True)
+            return result.to_dict()
+        except Exception as exc:
+            raise HTTPException(500, f"Web test failed: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Feedback, Analytics & Error Monitoring
@@ -2427,6 +2643,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "client_id": client.client_id,
             "refresh_token": credentials["refresh_token"],
             "ws_token": credentials["ws_token"],
+            "access_token": request.access_token,
             "project_id": project_id,
             "user_id": user_id,
         }

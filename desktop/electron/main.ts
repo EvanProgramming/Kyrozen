@@ -2,7 +2,17 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, s
 import path from 'path';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs/promises';
+import { watch, FSWatcher } from 'fs';
 import WebSocket from 'ws';
+import {
+  ensureArduinoCLI,
+  ensurePlatformIO,
+  installCommonCores,
+  resolveHardwareCommand,
+  setPythonExe,
+} from './hardwareToolchain';
+import { ensurePythonRuntime } from './pythonRuntime';
+import { checkForUpdates, initAutoUpdater, stopUpdateChecks } from './updater';
 
 interface WorkspaceMap {
   [projectId: string]: string;
@@ -26,6 +36,11 @@ let pythonAgentRestartCount = 0;
 const PYTHON_AGENT_MAX_RESTARTS = 5;
 let pythonAgentStopping = false;
 let pendingCloudMessages: string[] = [];
+let accessToken: string | null = null;
+let projectFileWatchers = new Map<string, FSWatcher>();
+let pendingFileChanges = new Map<string, NodeJS.Timeout>();
+let pythonRuntimePath: string | null = null;
+let pythonRuntimeReady = false;
 
 const PROTOCOL_SCHEME = 'kyrozen';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -47,20 +62,39 @@ async function saveWorkspaceMap(): Promise<void> {
   await fs.writeFile(WORKSPACE_CONFIG_PATH, JSON.stringify(workspaceMap, null, 2));
 }
 
-async function saveCredentials(wsToken: string, refreshToken?: string): Promise<void> {
-  const payload = JSON.stringify({ wsToken, refreshToken: refreshToken || null, serverUrl });
+async function saveCredentials(
+  wsToken: string,
+  refreshToken?: string,
+  accessToken?: string,
+): Promise<void> {
+  const payload = JSON.stringify({
+    wsToken,
+    refreshToken: refreshToken || null,
+    accessToken: accessToken || null,
+    serverUrl,
+  });
   const encrypted = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(payload) : Buffer.from(payload);
   await fs.mkdir(path.dirname(TOKEN_STORE_PATH), { recursive: true });
   await fs.writeFile(TOKEN_STORE_PATH, encrypted);
 }
 
-async function loadCredentials(): Promise<{ wsToken: string; refreshToken: string | null; serverUrl: string } | null> {
+async function loadCredentials(): Promise<{
+  wsToken: string;
+  refreshToken: string | null;
+  accessToken: string | null;
+  serverUrl: string;
+} | null> {
   try {
     const raw = await fs.readFile(TOKEN_STORE_PATH);
     const decrypted = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString();
     const data = JSON.parse(decrypted);
     if (data.wsToken) {
-      return { wsToken: data.wsToken, refreshToken: data.refreshToken || null, serverUrl: data.serverUrl || 'http://localhost:8000' };
+      return {
+        wsToken: data.wsToken,
+        refreshToken: data.refreshToken || null,
+        accessToken: data.accessToken || null,
+        serverUrl: data.serverUrl || 'http://localhost:8000',
+      };
     }
   } catch {
     // ignore missing or corrupt credential store
@@ -117,6 +151,10 @@ function sendChatMessage(message: { role: string; content: string }) {
   mainWindow?.webContents.send('kyrozen:chat-message', message);
 }
 
+function sendExecutionPlan(plan: { task_id: string; steps: string[] }) {
+  mainWindow?.webContents.send('kyrozen:execution-plan', plan);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -145,6 +183,8 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  initAutoUpdater(mainWindow);
 
   mainWindow.on('close', (event) => {
     if (process.platform === 'darwin') return;
@@ -259,13 +299,31 @@ app.on('open-url', (_event, url) => {
 app.on('window-all-closed', () => {
   disconnectWebSocket();
   stopPythonAgent();
+  stopUpdateChecks();
   if (process.platform !== 'darwin') app.quit();
 });
 
-async function apiPost(endpoint: string, body: unknown) {
+async function apiGet(endpoint: string) {
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  const response = await fetch(`${serverUrl}${endpoint}`, { headers });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function apiPost(endpoint: string, body: unknown, auth = false) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (auth && accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
   const response = await fetch(`${serverUrl}${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -273,6 +331,128 @@ async function apiPost(endpoint: string, body: unknown) {
     throw new Error(text || `HTTP ${response.status}`);
   }
   return response.json();
+}
+
+/** Download the latest cloud artifacts for a project into <workspace>/.kyrozen/context/. */
+async function syncProjectArtifacts(projectId: string): Promise<void> {
+  const root = workspaceMap[projectId];
+  if (!root || !accessToken) return;
+
+  try {
+    const artifacts: Array<{ id: string; type: string; title: string; version: number; updated_at: string }> =
+      await apiGet(`/api/projects/${projectId}/artifacts`);
+    const contextDir = path.join(root, '.kyrozen', 'context');
+    await fs.mkdir(contextDir, { recursive: true });
+
+    const manifest: Array<Record<string, unknown>> = [];
+    for (const summary of artifacts) {
+      const full: { id: string; type: string; title: string; content: string; version: number; updated_at: string } =
+        await apiGet(`/api/projects/${projectId}/artifacts/${summary.id}`);
+      const safeTitle = String(full.title || full.type).replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]/g, '_');
+      const fileName = `${safeTitle}.md`;
+      const filePath = path.join(contextDir, fileName);
+      await fs.writeFile(filePath, full.content || '', 'utf-8');
+      manifest.push({
+        id: full.id,
+        type: full.type,
+        title: full.title,
+        version: full.version,
+        local_path: filePath,
+        updated_at: full.updated_at,
+      });
+    }
+
+    await fs.writeFile(path.join(contextDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    sendChatMessage({
+      role: 'system',
+      content: `已同步 ${artifacts.length} 个云端 Artifact 到本地 .kyrozen/context`,
+    });
+  } catch (err: any) {
+    sendChatMessage({ role: 'system', content: `Artifact 同步失败: ${err.message || err}` });
+  }
+}
+
+const KEY_FILE_RE = /(^|\/)(package\.json|readme[^/]*|\.env[^/]*|tsconfig\.json|vite\.config\.[jt]s|tailwind\.config\.[jt]s)$/i;
+const SOURCE_FILE_RE = /\.(js|jsx|ts|tsx|py|html|css|vue|svelte)$/i;
+const IGNORED_PATH_RE = /[\\/](\.kyrozen|node_modules|\.git|dist|build)[\\/]/;
+
+function shouldUploadFileSummary(relativePath: string): boolean {
+  if (IGNORED_PATH_RE.test(relativePath)) return false;
+  const lower = relativePath.toLowerCase();
+  if (KEY_FILE_RE.test(lower)) return true;
+  if (SOURCE_FILE_RE.test(lower)) return true;
+  return false;
+}
+
+async function uploadFileSummary(
+  projectId: string,
+  absolutePath: string,
+  eventType: string,
+): Promise<void> {
+  if (!accessToken) return;
+  const root = workspaceMap[projectId];
+  if (!root) return;
+
+  let event: string = eventType === 'rename' ? 'created' : 'changed';
+  let summary = '';
+  let snippet = '';
+  try {
+    const stats = await fs.stat(absolutePath);
+    if (!stats.isFile()) return;
+    const content = await fs.readFile(absolutePath, 'utf-8');
+    summary = `File ${event}: ${path.relative(root, absolutePath)}`;
+    snippet = content.length > 4000 ? content.slice(0, 4000) + '\n...' : content;
+  } catch {
+    event = 'deleted';
+    summary = `File deleted: ${path.relative(root, absolutePath)}`;
+  }
+
+  try {
+    await apiPost(
+      `/api/projects/${projectId}/file-summaries`,
+      { file_path: absolutePath, event, summary, content_snippet: snippet },
+      true,
+    );
+  } catch (err: any) {
+    sendChatMessage({ role: 'system', content: `文件摘要同步失败: ${err.message || err}` });
+  }
+}
+
+function startWatchingProjectFiles(projectId: string, root: string): void {
+  stopWatchingProjectFiles(projectId);
+  try {
+    const watcher = watch(
+      root,
+      { recursive: true },
+      (eventType, filename) => {
+        if (!filename) return;
+        const absolute = path.join(root, filename);
+        const relative = path.relative(root, absolute);
+        if (!shouldUploadFileSummary(relative)) return;
+        const key = `${projectId}:${absolute}`;
+        const existing = pendingFileChanges.get(key);
+        if (existing) clearTimeout(existing);
+        pendingFileChanges.set(
+          key,
+          setTimeout(() => {
+            pendingFileChanges.delete(key);
+            void uploadFileSummary(projectId, absolute, String(eventType));
+          }, 1500),
+        );
+      },
+    );
+    projectFileWatchers.set(projectId, watcher);
+  } catch (err: any) {
+    sendChatMessage({ role: 'system', content: `无法监听项目文件: ${err.message || err}` });
+  }
+}
+
+function stopWatchingProjectFiles(projectId: string): void {
+  const watcher = projectFileWatchers.get(projectId);
+  if (watcher) {
+    watcher.close();
+    projectFileWatchers.delete(projectId);
+  }
 }
 
 ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, url: string) => {
@@ -290,7 +470,8 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
       client_version: app.getVersion(),
       platform: process.platform,
     });
-    await saveCredentials(verify.ws_token, verify.refresh_token);
+    accessToken = data.access_token || null;
+    await saveCredentials(verify.ws_token, verify.refresh_token, accessToken || undefined);
     connectWebSocket(verify.ws_token);
     return { success: true, wsToken: verify.ws_token };
   } catch (err: any) {
@@ -306,7 +487,8 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
       client_version: app.getVersion(),
       platform: process.platform,
     });
-    await saveCredentials(data.ws_token, data.refresh_token);
+    accessToken = data.access_token || null;
+    await saveCredentials(data.ws_token, data.refresh_token, accessToken || undefined);
     connectWebSocket(data.ws_token);
     return { wsToken: data.ws_token, refreshToken: data.refresh_token };
   } catch (err: any) {
@@ -316,10 +498,15 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
 });
 
 ipcMain.handle('kyrozen:set-current-project', async (_event, projectId: string) => {
+  if (currentProjectId && currentProjectId !== projectId) {
+    stopWatchingProjectFiles(currentProjectId);
+  }
   currentProjectId = projectId;
   const root = await getWorkspaceRoot(projectId);
   if (root) {
     sendChatMessage({ role: 'system', content: `项目工作目录：${root}` });
+    await syncProjectArtifacts(projectId);
+    startWatchingProjectFiles(projectId, root);
   }
   wsClient?.send(JSON.stringify({ type: 'heartbeat', active_project_id: projectId }));
   return { workspaceRoot: root };
@@ -332,6 +519,64 @@ ipcMain.handle('kyrozen:pick-workspace', async (_event, projectId: string) => {
 
 ipcMain.handle('kyrozen:get-workspace-root', async (_event, projectId: string) => {
   return { workspaceRoot: await getWorkspaceRoot(projectId) };
+});
+
+ipcMain.handle('kyrozen:get-projects', async () => {
+  if (!accessToken) return [];
+  try {
+    return await apiGet('/api/projects');
+  } catch (err: any) {
+    sendChatMessage({ role: 'system', content: `获取项目列表失败: ${err.message || err}` });
+    return [];
+  }
+});
+
+ipcMain.handle('kyrozen:check-for-updates', async () => {
+  try {
+    await checkForUpdates();
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:ensure-hardware-toolchain', async () => {
+  try {
+    const arduino = await ensureArduinoCLI((msg) => sendChatMessage({ role: 'system', content: msg }));
+    const pio = await ensurePlatformIO((msg) => sendChatMessage({ role: 'system', content: msg }));
+    return {
+      success: true,
+      arduino: { path: arduino.path, version: arduino.version },
+      pio: { path: pio.path, version: pio.version },
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:install-common-cores', async () => {
+  try {
+    await installCommonCores((msg) => sendChatMessage({ role: 'system', content: msg }));
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:connect-github', async () => {
+  if (!accessToken) {
+    return { success: false, error: 'Not logged in' };
+  }
+  try {
+    const data = await apiGet('/api/auth/github/authorize?desktop=1');
+    if (data.authorize_url) {
+      shell.openExternal(data.authorize_url);
+      return { success: true };
+    }
+    return { success: false, error: 'No authorize URL returned' };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
 });
 
 ipcMain.on('kyrozen:request-initial-token', () => {
@@ -368,7 +613,7 @@ function connectWebSocket(token: string) {
   try {
     wsClient = new WebSocket(wsUrl);
 
-    wsClient.on('open', () => {
+    wsClient.on('open', async () => {
       wsClient?.send(
         JSON.stringify({
           type: 'auth',
@@ -383,7 +628,7 @@ function connectWebSocket(token: string) {
       pythonAgentRestartCount = 0;
       startHeartbeat();
       flushPendingCloudMessages();
-      startPythonAgent();
+      await startPythonAgent();
     });
 
     wsClient.on('message', async (data) => {
@@ -494,18 +739,70 @@ async function chooseWorkspaceRoot(projectId: string | null): Promise<string> {
   return fallback;
 }
 
+function getRepoRoot(): string {
+  // main.js is inside dist-electron/main/, which is under desktop/; repo root is one level above desktop.
+  return path.resolve(__dirname, '../../../');
+}
+
 /** Spawn the local Python Agent process and wire stdio JSON-RPC to the UI/cloud. */
-function startPythonAgent() {
+async function startPythonAgent() {
   stopPythonAgent();
-  const pythonPath = process.env.KYROZEN_PYTHON_PATH || 'python3';
+
+  let pythonPath = process.env.KYROZEN_PYTHON_PATH;
+  if (!pythonPath) {
+    if (!pythonRuntimeReady) {
+      sendChatMessage({ role: 'system', content: '正在准备本地 Python 运行时...' });
+      try {
+        pythonRuntimePath = await ensurePythonRuntime(getRepoRoot(), (msg) => {
+          sendChatMessage({ role: 'system', content: msg });
+        });
+        pythonRuntimeReady = true;
+        if (pythonRuntimePath) {
+          sendChatMessage({ role: 'system', content: `使用内置 Python 运行时: ${pythonRuntimePath}` });
+        }
+      } catch (err: any) {
+        sendChatMessage({ role: 'system', content: `内置 Python 运行时准备失败，将尝试系统 python3: ${err.message || err}` });
+        pythonRuntimePath = null;
+        pythonRuntimeReady = true;
+      }
+    }
+    pythonPath = pythonRuntimePath || 'python3';
+  }
+
+  const extraEnv: Record<string, string> = {
+    KYROZEN_WS_URL: wsUrl,
+    KYROZEN_DESKTOP_MODE: '1',
+  };
+
+  if (pythonRuntimePath) {
+    setPythonExe(pythonRuntimePath);
+    // Resolve hardware toolchain paths before spawning the Agent so that the
+    // bundled tools are discoverable by HardwareBridge via environment vars.
+    try {
+      const arduino = await ensureArduinoCLI((msg) => sendChatMessage({ role: 'system', content: msg }));
+      if (arduino.path) {
+        extraEnv.KYROZEN_ARDUINO_CLI_PATH = arduino.path;
+      }
+    } catch (err: any) {
+      sendChatMessage({ role: 'system', content: `Arduino CLI 准备失败: ${err.message || err}` });
+    }
+    try {
+      const pio = await ensurePlatformIO((msg) => sendChatMessage({ role: 'system', content: msg }));
+      if (pio.path) {
+        extraEnv.KYROZEN_PIO_PATH = pio.path;
+      }
+    } catch (err: any) {
+      sendChatMessage({ role: 'system', content: `PlatformIO 准备失败: ${err.message || err}` });
+    }
+  }
+
   const agentScript = process.env.KYROZEN_AGENT_SCRIPT || path.join(__dirname, '../../python_agent/main.py');
 
   pythonAgent = spawn(pythonPath, [agentScript], {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      KYROZEN_WS_URL: wsUrl,
-      KYROZEN_DESKTOP_MODE: '1',
+      ...extraEnv,
     },
   });
 
@@ -585,12 +882,35 @@ function handlePythonAgentLine(line: string) {
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);
     } else if (message.method === 'model_request') {
       sendToCloud(message.params);
+    } else if (message.method === 'hardware_tool_request') {
+      const command = String(message.params?.command || '');
+      const reqId = message.id;
+      resolveHardwareCommand(command)
+        .then((resolvedPath) => {
+          sendToPythonAgent({
+            jsonrpc: '2.0',
+            id: reqId,
+            result: { path: resolvedPath, command },
+          });
+        })
+        .catch((err: any) => {
+          sendToPythonAgent({
+            jsonrpc: '2.0',
+            id: reqId,
+            error: { message: err.message || String(err), code: -32000 },
+          });
+        });
     } else if (message.method === 'open_preview') {
       const url = String(message.params.url || '');
       if (url) {
         openPreviewWindow(url);
         sendChatMessage({ role: 'system', content: `已打开预览：${url}` });
       }
+    } else if (message.method === 'execution_plan') {
+      sendExecutionPlan({
+        task_id: String(message.params.task_id || currentTaskId || ''),
+        steps: Array.isArray(message.params.steps) ? message.params.steps : [],
+      });
     } else if (message.method === 'task_result') {
       currentTaskRunning = false;
       sendToCloud({

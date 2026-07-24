@@ -52,6 +52,21 @@ export interface KyrozenAPI {
     error?: string;
   }>;
   installCommonCores: () => Promise<{ success: boolean; error?: string }>;
+  checkHardwareUpdates: () => Promise<{
+    success: boolean;
+    results?: Array<{
+      tool: string;
+      currentVersion: string | null;
+      latestVersion: string | null;
+      updated: boolean;
+      error?: string;
+    }>;
+    error?: string;
+  }>;
+  getHardwareToolStatus: () => Promise<{
+    success: boolean;
+    tools: Record<string, { command: string; path: string | null; bundled: boolean; version: string | null }>;
+  }>;
   connectGitHub: () => Promise<{ success: boolean; error?: string }>;
   getGitHubStatus: () => Promise<{ connected: boolean; scope?: string }>;
   initGitRepo: (remoteUrl?: string) => Promise<{ success: boolean; error?: string }>;

@@ -284,3 +284,270 @@ export async function resolveHardwareCommand(command: string): Promise<string | 
 export function getToolStatus(): Record<string, ToolInfo> {
   return Object.fromEntries(tools.entries());
 }
+
+interface ReleaseAsset {
+  name: string;
+  browser_download_url: string;
+}
+
+interface GitHubRelease {
+  tag_name: string;
+  assets: ReleaseAsset[];
+}
+
+interface PyPIInfo {
+  info: { version: string };
+}
+
+function normalizeVersion(version: string): string {
+  return version.replace(/^v/i, '').trim();
+}
+
+async function httpsGetJson<T>(url: string): Promise<T> {
+  const data = await httpsGet(url);
+  return JSON.parse(data.toString('utf-8')) as T;
+}
+
+async function getInstalledArduinoVersion(): Promise<{ path: string; version: string } | null> {
+  const info = tools.get('arduino-cli');
+  if (info?.path && info.version) {
+    return { path: info.path, version: normalizeVersion(info.version) };
+  }
+
+  try {
+    const fresh = await ensureArduinoCLI();
+    if (fresh.path && fresh.version) {
+      return { path: fresh.path, version: normalizeVersion(fresh.version) };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+async function getInstalledPlatformIOVersion(): Promise<{ path: string; version: string } | null> {
+  const info = tools.get('pio');
+  if (info?.path && info.version) {
+    return { path: info.path, version: normalizeVersion(info.version) };
+  }
+
+  try {
+    const fresh = await ensurePlatformIO();
+    if (fresh.path && fresh.version) {
+      return { path: fresh.path, version: normalizeVersion(fresh.version) };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export async function fetchLatestArduinoVersion(): Promise<string | null> {
+  try {
+    const release = await httpsGetJson<GitHubRelease>('https://api.github.com/repos/arduino/arduino-cli/releases/latest');
+    return normalizeVersion(release.tag_name);
+  } catch (err: any) {
+    console.error('Failed to fetch latest Arduino CLI version:', err.message || err);
+    return null;
+  }
+}
+
+function getArduinoAssetUrl(version: string): { url: string; filename: string; extractedName: string } | null {
+  const platform = process.platform;
+  const arch = process.arch;
+  const base = `https://github.com/arduino/arduino-cli/releases/download/v${version}`;
+  if (platform === 'win32') {
+    return {
+      url: `${base}/arduino-cli_${version}_Windows_64bit.zip`,
+      filename: 'arduino-cli.zip',
+      extractedName: 'arduino-cli.exe',
+    };
+  }
+  if (platform === 'darwin') {
+    const macArch = arch === 'arm64' ? 'ARM64' : '64bit';
+    return {
+      url: `${base}/arduino-cli_${version}_macOS_${macArch}.tar.gz`,
+      filename: 'arduino-cli.tar.gz',
+      extractedName: 'arduino-cli',
+    };
+  }
+  if (platform === 'linux') {
+    const linuxArch = arch === 'arm64' ? 'ARM64' : '64bit';
+    return {
+      url: `${base}/arduino-cli_${version}_Linux_${linuxArch}.tar.gz`,
+      filename: 'arduino-cli.tar.gz',
+      extractedName: 'arduino-cli',
+    };
+  }
+  return null;
+}
+
+export async function updateArduinoCLI(
+  targetVersion: string,
+  onProgress?: (message: string) => void,
+): Promise<ToolInfo> {
+  const release = getArduinoAssetUrl(targetVersion);
+  if (!release) {
+    throw new Error(`Unsupported platform ${process.platform} for Arduino CLI ${targetVersion}`);
+  }
+
+  const baseDir = path.join(getToolchainBaseDir(), 'arduino-cli');
+  const archivePath = path.join(baseDir, release.filename);
+  const exePath = path.join(baseDir, release.extractedName);
+
+  await fs.mkdir(baseDir, { recursive: true });
+  onProgress?.(`Updating Arduino CLI to ${targetVersion}...`);
+  const data = await httpsGet(release.url);
+  await fs.writeFile(archivePath, data);
+
+  // Remove old binary so extraction does not keep a stale executable around.
+  try {
+    await fs.unlink(exePath);
+  } catch {
+    // ignore missing old binary
+  }
+
+  onProgress?.('Extracting updated Arduino CLI...');
+  await extractArchive(archivePath, baseDir);
+
+  if (process.platform !== 'win32') {
+    await fs.chmod(exePath, 0o755);
+  }
+
+  const info: ToolInfo = { command: 'arduino-cli', path: exePath, bundled: true, version: null };
+  const versionResult = await runCommand(exePath, ['version']);
+  info.version = versionResult.stdout.split('\n')[0].trim();
+  tools.set('arduino-cli', info);
+  onProgress?.(`Arduino CLI updated: ${info.version}`);
+  return info;
+}
+
+export async function fetchLatestPlatformIOVersion(): Promise<string | null> {
+  try {
+    const data = await httpsGetJson<PyPIInfo>('https://pypi.org/pypi/platformio/json');
+    return normalizeVersion(data.info.version);
+  } catch (err: any) {
+    console.error('Failed to fetch latest PlatformIO version:', err.message || err);
+    return null;
+  }
+}
+
+export async function updatePlatformIO(onProgress?: (message: string) => void): Promise<ToolInfo> {
+  if (!pythonExePath) {
+    throw new Error('Bundled Python runtime is required to update PlatformIO');
+  }
+
+  onProgress?.('Updating PlatformIO...');
+  const result = await runCommand(pythonExePath, ['-m', 'pip', 'install', '--upgrade', '-q', 'platformio']);
+  if (result.code !== 0) {
+    throw new Error(`Failed to update PlatformIO: ${result.stderr}`);
+  }
+
+  // Refresh cached path and version.
+  tools.delete('pio');
+  const info = await ensurePlatformIO(onProgress);
+  return info;
+}
+
+export interface ToolUpdateResult {
+  tool: string;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  updated: boolean;
+  error?: string;
+}
+
+export async function checkAndUpdateHardwareToolchain(
+  onProgress?: (message: string) => void,
+): Promise<ToolUpdateResult[]> {
+  const results: ToolUpdateResult[] = [];
+
+  const arduinoCurrent = await getInstalledArduinoVersion();
+  const arduinoLatest = await fetchLatestArduinoVersion();
+  if (arduinoLatest) {
+    if (!arduinoCurrent || arduinoCurrent.version !== arduinoLatest) {
+      try {
+        await updateArduinoCLI(arduinoLatest, onProgress);
+        results.push({
+          tool: 'arduino-cli',
+          currentVersion: arduinoCurrent?.version || null,
+          latestVersion: arduinoLatest,
+          updated: true,
+        });
+      } catch (err: any) {
+        results.push({
+          tool: 'arduino-cli',
+          currentVersion: arduinoCurrent?.version || null,
+          latestVersion: arduinoLatest,
+          updated: false,
+          error: err.message || String(err),
+        });
+      }
+    } else {
+      results.push({
+        tool: 'arduino-cli',
+        currentVersion: arduinoCurrent.version,
+        latestVersion: arduinoLatest,
+        updated: false,
+      });
+    }
+  }
+
+  const pioCurrent = await getInstalledPlatformIOVersion();
+  const pioLatest = await fetchLatestPlatformIOVersion();
+  if (pioLatest) {
+    if (!pioCurrent || pioCurrent.version !== pioLatest) {
+      try {
+        await updatePlatformIO(onProgress);
+        results.push({
+          tool: 'pio',
+          currentVersion: pioCurrent?.version || null,
+          latestVersion: pioLatest,
+          updated: true,
+        });
+      } catch (err: any) {
+        results.push({
+          tool: 'pio',
+          currentVersion: pioCurrent?.version || null,
+          latestVersion: pioLatest,
+          updated: false,
+          error: err.message || String(err),
+        });
+      }
+    } else {
+      results.push({
+        tool: 'pio',
+        currentVersion: pioCurrent.version,
+        latestVersion: pioLatest,
+        updated: false,
+      });
+    }
+  }
+
+  return results;
+}
+
+let autoUpdateTimer: NodeJS.Timeout | null = null;
+const AUTO_UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000; // daily
+
+export function startHardwareToolchainAutoUpdate(
+  onProgress?: (message: string) => void,
+): void {
+  if (autoUpdateTimer) return;
+
+  // Run once shortly after startup, then daily.
+  setTimeout(() => {
+    void checkAndUpdateHardwareToolchain(onProgress);
+  }, 30_000);
+
+  autoUpdateTimer = setInterval(() => {
+    void checkAndUpdateHardwareToolchain(onProgress);
+  }, AUTO_UPDATE_INTERVAL_MS);
+}
+
+export function stopHardwareToolchainAutoUpdate(): void {
+  if (autoUpdateTimer) {
+    clearInterval(autoUpdateTimer);
+    autoUpdateTimer = null;
+  }
+}

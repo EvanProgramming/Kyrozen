@@ -7,11 +7,15 @@ import fs from 'fs/promises';
 import { watch, FSWatcher } from 'fs';
 import WebSocket from 'ws';
 import {
+  checkAndUpdateHardwareToolchain,
   ensureArduinoCLI,
   ensurePlatformIO,
+  getToolStatus,
   installCommonCores,
   resolveHardwareCommand,
   setPythonExe,
+  startHardwareToolchainAutoUpdate,
+  stopHardwareToolchainAutoUpdate,
 } from './hardwareToolchain';
 import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
 import {
@@ -498,6 +502,7 @@ app.on('window-all-closed', () => {
   disconnectWebSocket();
   stopPythonAgent();
   stopUpdateChecks();
+  stopHardwareToolchainAutoUpdate();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -917,6 +922,22 @@ ipcMain.handle('kyrozen:install-common-cores', async () => {
   }
 });
 
+ipcMain.handle('kyrozen:check-hardware-updates', async () => {
+  try {
+    const results = await checkAndUpdateHardwareToolchain((msg) => sendChatMessage({ role: 'system', content: msg }));
+    return { success: true, results };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:get-hardware-tool-status', async () => {
+  return {
+    success: true,
+    tools: getToolStatus(),
+  };
+});
+
 ipcMain.handle('kyrozen:connect-github', async () => {
   if (!accessToken) {
     return { success: false, error: 'Not logged in' };
@@ -1289,6 +1310,8 @@ async function startPythonAgent() {
 
   if (pythonRuntimePath) {
     setPythonExe(pythonRuntimePath);
+    // Start daily auto-update checks for hardware tools once a Python runtime is available.
+    startHardwareToolchainAutoUpdate((msg) => sendChatMessage({ role: 'system', content: msg }));
     // Resolve hardware toolchain paths before spawning the Agent so that the
     // bundled tools are discoverable by HardwareBridge via environment vars.
     try {

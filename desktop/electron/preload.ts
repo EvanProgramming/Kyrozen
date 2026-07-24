@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
 
   ensureHardwareToolchain: () => ipcRenderer.invoke('kyrozen:ensure-hardware-toolchain'),
   installCommonCores: () => ipcRenderer.invoke('kyrozen:install-common-cores'),
+  checkHardwareUpdates: () => ipcRenderer.invoke('kyrozen:check-hardware-updates'),
+  getHardwareToolStatus: () => ipcRenderer.invoke('kyrozen:get-hardware-tool-status'),
   connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),
   getGitHubStatus: () => ipcRenderer.invoke('kyrozen:get-github-status'),
   initGitRepo: (remoteUrl?: string) => ipcRenderer.invoke('kyrozen:init-git-repo', remoteUrl),

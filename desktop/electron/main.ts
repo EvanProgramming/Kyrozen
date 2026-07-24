@@ -630,20 +630,22 @@ function openPreviewWindow(url: string) {
 async function showConfirmationDialog(params: Record<string, unknown>) {
   const result = await dialog.showMessageBox(mainWindow!, {
     type: 'warning',
-    buttons: ['确认', '取消'],
-    defaultId: 1,
-    cancelId: 1,
+    buttons: ['确认并信任本次会话', '确认', '取消'],
+    defaultId: 2,
+    cancelId: 2,
     title: '高危操作确认',
     message: `${params.tool}.${params.action}`,
     detail: `参数：${JSON.stringify(params.parameters, null, 2)}\n原因：${params.reason || '无'}`,
   });
-  const confirmed = result.response === 0;
+  const confirmed = result.response === 0 || result.response === 1;
+  const trustForSession = result.response === 0;
   sendToPythonAgent({
     jsonrpc: '2.0',
     method: 'confirmation_response',
     params: {
       confirmation_id: params.confirmation_id,
       confirmed,
+      trust_for_session: trustForSession,
       task_id: params.task_id,
     },
   });

@@ -34,6 +34,7 @@ class PendingConfirmation:
     def __init__(self) -> None:
         self.event = threading.Event()
         self.result: bool = False
+        self.trust_for_session: bool = False
 
 
 class DesktopAgentRuntime:
@@ -204,16 +205,20 @@ class DesktopAgentRuntime:
 
         with self._lock:
             self._pending_confirmations.pop(confirmation_id, None)
+        if pending.trust_for_session:
+            return {"confirmed": pending.result, "trust_for_session": True}
         return pending.result
 
     def _handle_confirmation_response(self, params: dict[str, object]) -> None:
         confirmation_id = str(params.get("confirmation_id", ""))
         confirmed = bool(params.get("confirmed", False))
+        trust_for_session = bool(params.get("trust_for_session", False))
         with self._lock:
             pending = self._pending_confirmations.get(confirmation_id)
             if pending is None:
                 return
             pending.result = confirmed
+            pending.trust_for_session = trust_for_session
             pending.event.set()
 
     def _handle_cloud_model_response(self, params: dict[str, object]) -> None:

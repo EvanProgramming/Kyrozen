@@ -198,6 +198,24 @@ def test_agent_confirmation_callback_denies_tool(test_config):
     assert "Declined" in task.result["answer"]
 
 
+def test_agent_confirmation_callback_trusts_session(test_config):
+    """When a confirmation callback returns trust_for_session, the second high-risk tool should skip confirmation."""
+    test_config.permission_mode = "strict"
+    tool_call1 = '{"tool": "file_write", "action": "write", "parameters": {"path": "test.txt", "content": "x"}}'
+    tool_call2 = '{"tool": "file_write", "action": "write", "parameters": {"path": "test2.txt", "content": "y"}}'
+    responses = [tool_call1, "First written.", tool_call2, "Second written."]
+    call_count = [0]
+
+    def callback(**kwargs):
+        call_count[0] += 1
+        return {"confirmed": True, "trust_for_session": True}
+
+    agent = build_agent(test_config, responses=responses, confirmation_callback=callback)
+    task = agent.run("Write two files")
+    assert task.status == "completed"
+    assert call_count[0] == 1
+
+
 class SlowMockModel(MockModel):
     """Mock model that sleeps briefly on every chat call so cancel() has time to take effect."""
 

@@ -261,14 +261,20 @@ class BaseAgent:
                         task.update_status("waiting_confirmation")
                         step.status = "waiting_confirmation"
                         self.task_manager.update(task)
-                        user_confirmed = self.confirmation_callback(
+                        callback_result = self.confirmation_callback(
                             task=task,
                             tool=tool_name,
                             action=action,
                             parameters=parameters,
                             reason=decision.reason,
                         )
+                        user_confirmed = bool(callback_result)
+                        trust_session = (
+                            isinstance(callback_result, dict) and callback_result.get("trust_for_session") is True
+                        )
                         if user_confirmed:
+                            if trust_session:
+                                self.permission.trust_for_session(tool_name, action)
                             decision = self.permission.confirm(tool_name, action, parameters)
                             task.update_status("running")
                             step.status = "running"

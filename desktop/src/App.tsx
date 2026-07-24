@@ -51,6 +51,12 @@ function App() {
       }
     });
 
+    window.kyrozen.onSessionResumed(async (token: string, url: string) => {
+      setToken(token);
+      setStatusMessage(`已恢复会话：${url}`);
+      await loadProjects();
+    });
+
     window.kyrozen.requestInitialToken();
   }, []);
 

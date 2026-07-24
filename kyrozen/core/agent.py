@@ -33,6 +33,7 @@ class BaseAgent:
         task_manager: TaskManager | None = None,
         permission_manager: PermissionManager | None = None,
         logger: KyrozenLogger | None = None,
+        confirmation_callback: callable | None = None,
     ) -> None:
         self.config = config
         self.model = model or get_model_provider(config)
@@ -41,6 +42,7 @@ class BaseAgent:
         self.task_manager = task_manager or TaskManager(store_path=config.task_store_path)
         self.permission = permission_manager or PermissionManager(mode=config.permission_mode)
         self.logger = logger or get_logger(config.log_level)
+        self.confirmation_callback = confirmation_callback
 
     def _build_system_prompt(self) -> str:
         schemas = self.tools.list_schemas()
@@ -251,19 +253,50 @@ class BaseAgent:
             decision = self.permission.check(tool_name, action, parameters)
             if not decision.allowed:
                 if decision.requires_confirmation and not confirmed:
-                    task.update_status("waiting_confirmation")
-                    step.error = decision.reason
-                    step.status = "waiting_confirmation"
-                    step.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    self.task_manager.update(task)
-                    results.append({
-                        "tool": tool_name,
-                        "action": action,
-                        "parameters": parameters,
-                        "requires_confirmation": True,
-                        "reason": decision.reason,
-                    })
-                    continue
+                    # If a confirmation callback is registered, ask it and re-run
+                    # this single tool call with the user's decision.
+                    if self.confirmation_callback is not None:
+                        task.update_status("waiting_confirmation")
+                        step.status = "waiting_confirmation"
+                        self.task_manager.update(task)
+                        user_confirmed = self.confirmation_callback(
+                            task=task,
+                            tool=tool_name,
+                            action=action,
+                            parameters=parameters,
+                            reason=decision.reason,
+                        )
+                        if user_confirmed:
+                            decision = self.permission.confirm(tool_name, action, parameters)
+                            step.status = "running"
+                            self.task_manager.update(task)
+                        else:
+                            step.error = decision.reason
+                            step.status = "failed"
+                            step.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            self.task_manager.update(task)
+                            results.append({
+                                "tool": tool_name,
+                                "action": action,
+                                "parameters": parameters,
+                                "success": False,
+                                "error": f"User declined: {decision.reason}",
+                            })
+                            continue
+                    else:
+                        task.update_status("waiting_confirmation")
+                        step.error = decision.reason
+                        step.status = "waiting_confirmation"
+                        step.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        self.task_manager.update(task)
+                        results.append({
+                            "tool": tool_name,
+                            "action": action,
+                            "parameters": parameters,
+                            "requires_confirmation": True,
+                            "reason": decision.reason,
+                        })
+                        continue
                 if decision.requires_confirmation and confirmed:
                     decision = self.permission.confirm(tool_name, action, parameters)
                 else:

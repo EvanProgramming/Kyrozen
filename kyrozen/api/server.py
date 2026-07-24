@@ -1888,6 +1888,25 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         _db.save_event(event)
         return {"status": "ok"}
 
+    @app.get("/api/events")
+    async def api_list_events(
+        event_type: str | None = None,
+        project_id: str | None = None,
+        limit: int = 100,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        if _db is None:
+            raise HTTPException(503, "Database not initialized")
+        if project_id:
+            _get_owned_project(project_id, current_user)
+        events = _db.list_events(
+            user_id=current_user.user_id,
+            project_id=project_id,
+            event_type=event_type,
+            limit=max(1, min(limit, 1000)),
+        )
+        return {"events": events}
+
     @app.get("/api/analytics/summary", response_model=AnalyticsSummaryResponse)
     async def api_analytics_summary(
         admin: CurrentUser = Depends(require_admin),

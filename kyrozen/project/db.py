@@ -623,6 +623,7 @@ class KyrozenDatabase:
         self,
         user_id: str | None = None,
         project_id: str | None = None,
+        event_type: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         query = "SELECT * FROM events"
@@ -634,6 +635,9 @@ class KyrozenDatabase:
         if project_id:
             conditions.append("project_id = ?")
             params.append(project_id)
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY created_at DESC LIMIT ?"

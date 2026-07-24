@@ -366,6 +366,7 @@ class SupabaseDatabase:
         self,
         user_id: str | None = None,
         project_id: str | None = None,
+        event_type: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         try:
@@ -374,6 +375,8 @@ class SupabaseDatabase:
                 query = query.eq("user_id", user_id)
             if project_id:
                 query = query.eq("project_id", project_id)
+            if event_type:
+                query = query.eq("event_type", event_type)
             response = query.order("created_at", desc=True).limit(limit).execute()
         except Exception as exc:
             if self._is_missing_table_error(exc):

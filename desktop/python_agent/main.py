@@ -49,6 +49,7 @@ class DesktopAgentRuntime:
         self.current_task: Task | None = None
         self._pending_confirmations: dict[str, PendingConfirmation] = {}
         self._lock = threading.Lock()
+        self._task_thread: threading.Thread | None = None
 
     def set_send_message(self, send_message: callable) -> None:
         """Bind the function used to send JSON-RPC messages to Electron."""
@@ -115,23 +116,26 @@ class DesktopAgentRuntime:
             },
         })
 
-        try:
-            task = self.agent.run(message, project_id=str(params.get("project_id", "")))
-            self.current_task = task
-            self._notify("task_result", {
-                "task_id": task.id,
-                "status": task.status,
-                "result": task.result or {},
-                "steps": [step.to_dict() for step in task.steps],
-            })
-        except Exception as exc:
-            traceback_str = traceback.format_exc()
-            self._notify("task_result", {
-                "task_id": self.current_task_id,
-                "status": "failed",
-                "result": {"answer": f"Task failed: {exc}\n{traceback_str}"},
-            })
+        def execute() -> None:
+            try:
+                task = self.agent.run(message, project_id=str(params.get("project_id", "")))
+                self.current_task = task
+                self._notify("task_result", {
+                    "task_id": task.id,
+                    "status": task.status,
+                    "result": task.result or {},
+                    "steps": [step.to_dict() for step in task.steps],
+                })
+            except Exception as exc:
+                traceback_str = traceback.format_exc()
+                self._notify("task_result", {
+                    "task_id": self.current_task_id,
+                    "status": "failed",
+                    "result": {"answer": f"Task failed: {exc}\n{traceback_str}"},
+                })
 
+        self._task_thread = threading.Thread(target=execute, daemon=True)
+        self._task_thread.start()
         self._send_response(req_id, result={"status": "ok"})
 
     def _request_confirmation(
@@ -186,7 +190,15 @@ class DesktopAgentRuntime:
     def _handle_cancel_task(self, params: dict[str, object]) -> None:
         task_id = str(params.get("task_id", ""))
         self.logger.info("Received cancel request for task %s", task_id)
-        # TODO: implement graceful cancellation in BaseAgent
+        if self.agent:
+            self.agent.cancel()
+        if self.current_task and self.current_task.status == "running":
+            self.current_task.update_status("cancelled")
+            self._notify("task_result", {
+                "task_id": self.current_task.id,
+                "status": "cancelled",
+                "result": {"answer": "任务已被用户取消"},
+            })
 
     def _notify(self, method: str, params: dict[str, object]) -> None:
         if self.send_message is None:

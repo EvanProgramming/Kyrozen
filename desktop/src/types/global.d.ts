@@ -21,6 +21,7 @@ export interface KyrozenAPI {
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => void;
   onProtocolUrl: (callback: (url: string) => void) => void;
   sendChat: (message: string) => void;
+  cancelTask: () => void;
   onChatMessage: (callback: (message: { role: string; content: string }) => void) => void;
 }
 

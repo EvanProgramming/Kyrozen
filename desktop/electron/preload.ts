@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.on('kyrozen:protocol-url', (_event, url) => callback(url)),
 
   sendChat: (message: string) => ipcRenderer.send('kyrozen:send-chat', message),
+  cancelTask: () => ipcRenderer.send('kyrozen:cancel-task'),
 
   onChatMessage: (callback: (message: { role: string; content: string }) => void) =>
     ipcRenderer.on('kyrozen:chat-message', (_event, message) => callback(message)),

@@ -129,3 +129,24 @@ def test_chat_stream(test_config):
         final = json.loads(lines[-1].replace("data: ", ""))
         assert final["status"] == "completed"
         assert final["result"]["answer"] == "Streamed answer from API."
+
+
+def test_file_summary_saved_to_project_memory(client):
+    create = client.post("/api/projects", json={"name": "Summary Test", "description": "x"})
+    assert create.status_code == 200
+    project_id = create.json()["id"]
+
+    response = client.post(
+        f"/api/projects/{project_id}/file-summaries",
+        json={
+            "file_path": "/tmp/app/src/main.ts",
+            "event": "changed",
+            "summary": "main entry updated",
+            "content_snippet": "const app = createApp();",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["category"] == "local_file_summary"
+    assert data["metadata"]["file_path"] == "/tmp/app/src/main.ts"
+    assert data["metadata"]["event"] == "changed"

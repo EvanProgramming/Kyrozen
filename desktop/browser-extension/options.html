@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Kyrozen Extension Options</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 24px; max-width: 480px; margin: 0 auto; }
+      label { display: block; margin-top: 16px; font-weight: 600; }
+      input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+      button { margin-top: 24px; padding: 10px 20px; }
+      #status { margin-top: 12px; color: green; }
+    </style>
+  </head>
+  <body>
+    <h1>Kyrozen Extension Settings</h1>
+    <label for="serverUrl">Kyrozen Server URL</label>
+    <input id="serverUrl" type="url" placeholder="https://kyrozen.example.com" />
+
+    <label for="projectId">Project ID</label>
+    <input id="projectId" type="text" placeholder="proj_xxxxxxxx" />
+
+    <label for="accessToken">Access Token</label>
+    <input id="accessToken" type="password" placeholder="eyJ..." />
+
+    <button id="save">Save</button>
+    <div id="status"></div>
+    <script src="options.js"></script>
+  </body>
+</html>

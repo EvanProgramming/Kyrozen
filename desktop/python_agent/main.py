@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -37,6 +38,57 @@ class PendingConfirmation:
         self.trust_for_session: bool = False
 
 
+class PlanDetectingModelProvider:
+    """Wraps a model provider and emits the first execution plan it detects."""
+
+    def __init__(self, inner: CloudProxyModelProvider, on_plan: callable) -> None:
+        self._inner = inner
+        self._on_plan = on_plan
+        self._emitted_for_task = False
+
+    def reset_plan(self) -> None:
+        self._emitted_for_task = False
+
+    def chat(self, messages, model=None):
+        response = self._inner.chat(messages, model=model)
+        self._maybe_emit_plan(response.content)
+        return response
+
+    def chat_stream(self, messages, model=None):
+        chunks = list(self._inner.chat_stream(messages, model=model))
+        self._maybe_emit_plan("".join(chunks))
+        return iter(chunks)
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def _maybe_emit_plan(self, text: str) -> None:
+        if self._emitted_for_task:
+            return
+        plan = self._extract_plan_steps(text)
+        if plan:
+            self._emitted_for_task = True
+            self._on_plan(plan)
+
+    def _extract_plan_steps(self, text: str) -> list[str] | None:
+        lines = text.splitlines()
+        marker_re = re.compile(r"^\s*(?:[-*]|\d+[.\)])\s+(.+)$")
+        plan_heading = False
+        steps: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            lower = stripped.lower()
+            if any(keyword in lower for keyword in ("执行计划", "计划", "plan", "steps", "步骤")):
+                plan_heading = True
+            match = marker_re.match(line)
+            if match:
+                steps.append(match.group(1).strip())
+        # Emit if we see a plan heading with at least one step, or two+ steps without heading.
+        if steps and (plan_heading or len(steps) >= 2):
+            return steps[:10]
+        return None
+
+
 class DesktopAgentRuntime:
     """Minimal local agent runtime that talks to Electron over stdio JSON-RPC."""
 
@@ -60,7 +112,8 @@ class DesktopAgentRuntime:
     def set_send_message(self, send_message: callable) -> None:
         """Bind the function used to send JSON-RPC messages to Electron."""
         self.send_message = send_message
-        self.model = CloudProxyModelProvider(send_message=send_message)
+        inner_model = CloudProxyModelProvider(send_message=send_message)
+        self.model = PlanDetectingModelProvider(inner_model, self._emit_execution_plan)
         tools = get_default_registry()
         self.agent = BaseAgent(
             config=self.config,
@@ -93,8 +146,17 @@ class DesktopAgentRuntime:
             self.logger.error("Error handling request: %s", exc, exc_info=True)
             self._send_response(req_id, error=str(exc))
 
+    def _emit_execution_plan(self, steps: list[str]) -> None:
+        """Send a detected execution plan to Electron so it can show the banner."""
+        self._notify("execution_plan", {
+            "task_id": self.current_task_id,
+            "steps": steps,
+        })
+
     def _run_task(self, params: dict[str, object], req_id: object) -> None:
         self.current_task_id = str(params.get("task_id", ""))
+        if isinstance(self.model, PlanDetectingModelProvider):
+            self.model.reset_plan()
         workspace_root = str(params.get("workspace_root", "."))
         message = str(params.get("message", ""))
 

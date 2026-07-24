@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Kyrozen Capture</title>
+    <style>
+      body { width: 260px; padding: 16px; font-family: system-ui, sans-serif; }
+      button { width: 100%; padding: 10px; margin-top: 8px; cursor: pointer; }
+      .secondary { font-size: 12px; color: #666; margin-top: 8px; }
+      #status { margin-top: 12px; font-size: 13px; }
+      .error { color: #c00; }
+      .success { color: #080; }
+    </style>
+  </head>
+  <body>
+    <h2 style="margin-top:0">Kyrozen Web Capture</h2>
+    <button id="capture">Capture Current Page</button>
+    <button id="testApp" style="margin-top:8px">Test Local App</button>
+    <div class="secondary">
+      <a href="options.html" target="_blank">Open settings</a>
+    </div>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -7,6 +7,7 @@ directory via ``subprocess``.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,11 @@ class HardwareBridge:
         self.firmware_dir = Path(firmware_dir) if firmware_dir else Path.cwd()
 
     def _check_tool(self, command: str) -> str:
+        # Desktop client may pass pre-resolved tool paths via environment
+        # variables so that bundled toolchains can be used.
+        env_override = os.environ.get(f"KYROZEN_{command.upper().replace('-', '_')}_PATH")
+        if env_override and Path(env_override).is_file():
+            return env_override
         tool_path = shutil.which(command)
         if tool_path is None:
             raise HardwareBridgeError(f"Tool not found: {command}")

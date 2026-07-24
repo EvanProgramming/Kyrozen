@@ -22,7 +22,13 @@ from pydantic import BaseModel, Field
 from supabase import create_client
 
 from kyrozen.auth.context import current_user_ctx
-from kyrozen.auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_admin
+from kyrozen.auth.dependencies import (
+    CurrentUser,
+    _decode_supabase_token,
+    get_current_user,
+    get_current_user_optional,
+    require_admin,
+)
 from kyrozen.config import KyrozenConfig, get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
@@ -445,10 +451,15 @@ class DesktopOpenTokenRequest(BaseModel):
 
 
 class DesktopVerifyTokenRequest(BaseModel):
-    token: str = Field(..., min_length=1, description="Short-lived open token from /api/desktop/open-token")
+    token: str | None = Field(None, description="Short-lived open token from /api/desktop/open-token")
+    access_token: str | None = Field(None, description="Long-lived access token from /api/auth/signin")
     device_name: str = Field("Unknown Device", description="Desktop client device name")
     client_version: str = Field("", description="Desktop client version")
     platform: str = Field("", description="Desktop client platform")
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.token and not self.access_token:
+            raise ValueError("Either token or access_token must be provided")
 
 
 class ToolExecuteRequest(BaseModel):
@@ -2352,13 +2363,29 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
     @app.post("/api/desktop/verify-token")
     async def api_desktop_verify_token(request: DesktopVerifyTokenRequest):
-        """Exchange a short-lived open token for long-lived credentials."""
-        open_data = DesktopTokenManager.consume_open_token(request.token)
-        if open_data is None:
-            raise HTTPException(401, "Invalid or expired open token")
+        """Exchange a short-lived open token or access token for long-lived credentials."""
+        user_id: str | None = None
+        project_id: str | None = None
 
-        user_id = open_data["user_id"]
-        project_id = open_data.get("project_id")
+        if request.token:
+            open_data = DesktopTokenManager.consume_open_token(request.token)
+            if open_data is None:
+                raise HTTPException(401, "Invalid or expired open token")
+            user_id = open_data["user_id"]
+            project_id = open_data.get("project_id")
+        elif request.access_token:
+            config = _config or get_config()
+            try:
+                payload = _decode_supabase_token(request.access_token, config)
+            except Exception as exc:
+                raise HTTPException(401, f"Invalid access token: {exc}") from exc
+            user_id = payload.get("sub")
+            if not user_id:
+                raise HTTPException(401, "Invalid access token: missing user id")
+
+        if not user_id:
+            raise HTTPException(401, "Invalid token")
+
         credentials = DesktopTokenManager.create_credentials(user_id)
 
         manager = _get_desktop_manager()

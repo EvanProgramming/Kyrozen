@@ -112,7 +112,12 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
       return { success: false, error: '登录失败：未返回 access_token' };
     }
 
-    const verify = await apiPost('/api/desktop/verify-token', { access_token: data.access_token });
+    const verify = await apiPost('/api/desktop/verify-token', {
+      access_token: data.access_token,
+      device_name: require('os').hostname(),
+      client_version: app.getVersion(),
+      platform: process.platform,
+    });
     connectWebSocket(verify.ws_token);
     return { success: true, wsToken: verify.ws_token };
   } catch (err: any) {
@@ -122,7 +127,12 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
 
 ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
   try {
-    const data = await apiPost('/api/desktop/verify-token', { open_token: token });
+    const data = await apiPost('/api/desktop/verify-token', {
+      token,
+      device_name: require('os').hostname(),
+      client_version: app.getVersion(),
+      platform: process.platform,
+    });
     connectWebSocket(data.ws_token);
     return { wsToken: data.ws_token, refreshToken: data.refresh_token };
   } catch (err: any) {

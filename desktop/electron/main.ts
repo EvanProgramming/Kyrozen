@@ -21,6 +21,30 @@ interface WorkspaceMap {
 
 const isDev = process.env.NODE_ENV === 'development';
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
+
+const LOG_DIR = path.join(app.getPath('userData'), 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'main.log');
+
+async function writeLog(level: string, message: string): Promise<void> {
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}] [${level}] ${message}\n`;
+  try {
+    await fs.mkdir(LOG_DIR, { recursive: true });
+    await fs.appendFile(LOG_FILE, line, 'utf-8');
+  } catch (err) {
+    // Fallback to console if logging fails.
+    console.error('[Kyrozen] Failed to write log:', err);
+  }
+  // Also mirror to console in dev mode.
+  if (isDev) {
+    console.log(line.trimEnd());
+  }
+}
+
+const logInfo = (msg: string) => writeLog('INFO', msg);
+const logError = (msg: string) => writeLog('ERROR', msg);
+const logWarn = (msg: string) => writeLog('WARN', msg);
+
 let mainWindow: BrowserWindow | null = null;
 let wsClient: WebSocket | null = null;
 let pythonAgent: ChildProcessWithoutNullStreams | null = null;
@@ -87,10 +111,12 @@ async function loadCredentials(): Promise<{
   serverUrl: string;
 } | null> {
   try {
+    logInfo(`Loading credentials from ${TOKEN_STORE_PATH}`);
     const raw = await fs.readFile(TOKEN_STORE_PATH);
     const decrypted = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString();
     const data = JSON.parse(decrypted);
     if (data.wsToken) {
+      logInfo('Loaded existing credentials, resuming session');
       return {
         wsToken: data.wsToken,
         refreshToken: data.refreshToken || null,
@@ -98,8 +124,8 @@ async function loadCredentials(): Promise<{
         serverUrl: data.serverUrl || 'http://localhost:8000',
       };
     }
-  } catch {
-    // ignore missing or corrupt credential store
+  } catch (err: any) {
+    logInfo(`No credentials found or failed to load: ${err.message || err}`);
   }
   return null;
 }
@@ -146,6 +172,7 @@ async function getWorkspaceRoot(projectId: string | null): Promise<string | null
 }
 
 function updateConnection(state: 'disconnected' | 'connecting' | 'connected' | 'error', message: string) {
+  logInfo(`Connection state: ${state} - ${message}`);
   mainWindow?.webContents.send('kyrozen:connection-change', state, message);
 }
 
@@ -158,6 +185,7 @@ function sendExecutionPlan(plan: { task_id: string; steps: string[] }) {
 }
 
 function createWindow() {
+  logInfo('Creating main window');
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -174,6 +202,7 @@ function createWindow() {
   if (isDev) {
     const devPort = process.env.VITE_DESKTOP_PORT || '5173';
     const devUrl = `http://localhost:${devPort}`;
+    logInfo(`Loading dev URL: ${devUrl}`);
     mainWindow.loadURL(devUrl);
     // If the configured/default port is unavailable, fall back to other common Vite ports.
     mainWindow.webContents.on('did-fail-load', () => {
@@ -182,11 +211,13 @@ function createWindow() {
       const remaining = fallbackPorts.filter((p) => p !== currentPort);
       if (remaining.length === 0) return;
       const nextPort = remaining[0];
-      console.log(`[Kyrozen] Dev server not found on ${currentPort}, trying ${nextPort}`);
+      logWarn(`Dev server not found on ${currentPort}, trying ${nextPort}`);
       mainWindow.loadURL(`http://localhost:${nextPort}`);
     });
   } else {
-    mainWindow.loadFile(path.join(currentDir, '../dist/index.html'));
+    const prodUrl = path.join(currentDir, '../dist/index.html');
+    logInfo(`Loading production file: ${prodUrl}`);
+    mainWindow.loadFile(prodUrl);
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -276,11 +307,13 @@ function getProtocolUrl() {
 app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
 
 app.whenReady().then(async () => {
+  logInfo('App ready, initializing Kyrozen desktop client');
   await loadWorkspaceMap();
   createWindow();
   createTray();
 
   const protocolUrl = getProtocolUrl();
+  logInfo(`Protocol URL: ${protocolUrl || 'none'}`);
   if (protocolUrl && mainWindow) {
     mainWindow.webContents.once('did-finish-load', () => {
       mainWindow?.webContents.send('kyrozen:protocol-url', protocolUrl);
@@ -470,9 +503,11 @@ function stopWatchingProjectFiles(projectId: string): void {
 }
 
 ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, url: string) => {
+  logInfo(`Login requested for ${email} at ${url}`);
   try {
     serverUrl = url.replace(/\/$/, '');
     wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
+    logInfo(`Signing in via ${serverUrl}`);
     const data = await apiPost('/api/auth/signin', { email, password });
     if (!data.access_token) {
       return { success: false, error: '登录失败：未返回 access_token' };
@@ -485,15 +520,19 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
       platform: process.platform,
     });
     accessToken = data.access_token || null;
+    logInfo(`Signin success, verifying desktop token`);
     await saveCredentials(verify.ws_token, verify.refresh_token, accessToken || undefined);
     connectWebSocket(verify.ws_token);
+    logInfo(`Login complete, wsToken acquired`);
     return { success: true, wsToken: verify.ws_token };
   } catch (err: any) {
+    logError(`Login failed: ${err.message || err}`);
     return { success: false, error: err.message || '登录失败' };
   }
 });
 
 ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
+  logInfo('Verifying open token from URL scheme');
   try {
     const data = await apiPost('/api/desktop/verify-token', {
       token,
@@ -502,10 +541,12 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
       platform: process.platform,
     });
     accessToken = data.access_token || null;
+    logInfo(`Open token verified, wsToken acquired`);
     await saveCredentials(data.ws_token, data.refresh_token, accessToken || undefined);
     connectWebSocket(data.ws_token);
     return { wsToken: data.ws_token, refreshToken: data.refresh_token };
   } catch (err: any) {
+    logError(`Open token verification failed: ${err.message || err}`);
     updateConnection('error', err.message || '令牌验证失败');
     return null;
   }
@@ -595,6 +636,7 @@ ipcMain.handle('kyrozen:connect-github', async () => {
 
 ipcMain.on('kyrozen:request-initial-token', () => {
   const url = getProtocolUrl();
+  logInfo(`Renderer requested initial token, protocolUrl=${url || 'none'}`);
   if (url) {
     mainWindow?.webContents.send('kyrozen:protocol-url', url);
   }
@@ -623,11 +665,13 @@ ipcMain.on('kyrozen:cancel-task', () => {
 function connectWebSocket(token: string) {
   disconnectWebSocket();
   updateConnection('connecting', '正在连接云端...');
+  logInfo(`Connecting WebSocket to ${wsUrl}`);
 
   try {
     wsClient = new WebSocket(wsUrl);
 
     wsClient.on('open', async () => {
+      logInfo('WebSocket opened, sending auth');
       wsClient?.send(
         JSON.stringify({
           type: 'auth',
@@ -655,14 +699,17 @@ function connectWebSocket(token: string) {
     });
 
     wsClient.on('error', (err) => {
+      logError(`WebSocket error: ${err.message}`);
       updateConnection('error', `WebSocket 错误: ${err.message}`);
     });
 
-    wsClient.on('close', () => {
+    wsClient.on('close', (code: number, reason: Buffer) => {
+      logWarn(`WebSocket closed: code=${code}, reason=${reason.toString() || 'none'}`);
       updateConnection('disconnected', '连接已断开，5 秒后重连');
       scheduleReconnect(token);
     });
   } catch (err: any) {
+    logError(`WebSocket connection exception: ${err.message || err}`);
     updateConnection('error', err.message || '连接失败');
     scheduleReconnect(token);
   }
@@ -713,6 +760,7 @@ function scheduleReconnect(token: string) {
 /** Route messages from the cloud to the local Python Agent or UI. */
 async function handleServerMessage(message: Record<string, unknown>) {
   const type = message.type as string;
+  logInfo(`Received server message: ${type}`);
 
   if (type === 'assign_task') {
     currentTaskId = String(message.task_id);
@@ -760,6 +808,7 @@ function getRepoRoot(): string {
 
 /** Spawn the local Python Agent process and wire stdio JSON-RPC to the UI/cloud. */
 async function startPythonAgent() {
+  logInfo('Starting Python Agent');
   stopPythonAgent();
 
   let pythonPath = process.env.KYROZEN_PYTHON_PATH;
@@ -811,6 +860,7 @@ async function startPythonAgent() {
   }
 
   const agentScript = process.env.KYROZEN_AGENT_SCRIPT || path.join(currentDir, '../../python_agent/main.py');
+  logInfo(`Spawning Python Agent: ${pythonPath} ${agentScript}`);
 
   pythonAgent = spawn(pythonPath, [agentScript], {
     cwd: process.cwd(),
@@ -831,7 +881,13 @@ async function startPythonAgent() {
     sendChatMessage({ role: 'system', content: `Agent: ${data.toString().trim()}` });
   });
 
+  pythonAgent.on('error', (err) => {
+    logError(`Python Agent spawn error: ${err.message}`);
+    sendChatMessage({ role: 'system', content: `Agent 启动失败: ${err.message}` });
+  });
+
   pythonAgent.on('exit', (code) => {
+    logWarn(`Python Agent exited with code ${code ?? 'unknown'}`);
     sendChatMessage({ role: 'system', content: `Python Agent 已退出 (code ${code ?? 'unknown'})` });
     pythonAgent = null;
     if (!pythonAgentStopping && code !== 0) {

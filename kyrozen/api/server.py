@@ -15,7 +15,7 @@ from typing import Any
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -26,6 +26,7 @@ from kyrozen.auth.dependencies import CurrentUser, get_current_user, get_current
 from kyrozen.config import KyrozenConfig, get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
+from kyrozen.desktop import DesktopClientManager, DesktopTokenManager
 from kyrozen.development.agent import SoftwareDevelopmentAgent
 from kyrozen.discovery import ProblemDiscoveryAgent
 from kyrozen.hardware.agent import HardwareDevelopmentAgent
@@ -49,6 +50,7 @@ _db: KyrozenDatabase | SupabaseDatabase | None = None
 _project_manager: ProjectManager | None = None
 _context_builder: ProjectContextBuilder | None = None
 _learning_repository: LearningRepository | None = None
+_desktop_manager: DesktopClientManager | None = None
 
 
 _KYROZEN_QUESTION_RE = re.compile(r"```kyrozen-question\s*([\s\S]*?)\s*```")
@@ -438,6 +440,17 @@ class ConfirmRequest(BaseModel):
     confirmed: bool = Field(True, description="Confirm and continue the waiting task")
 
 
+class DesktopOpenTokenRequest(BaseModel):
+    project_id: str | None = Field(None, description="Project ID to pre-select in the desktop client")
+
+
+class DesktopVerifyTokenRequest(BaseModel):
+    token: str = Field(..., min_length=1, description="Short-lived open token from /api/desktop/open-token")
+    device_name: str = Field("Unknown Device", description="Desktop client device name")
+    client_version: str = Field("", description="Desktop client version")
+    platform: str = Field("", description="Desktop client platform")
+
+
 class ToolExecuteRequest(BaseModel):
     tool: str
     action: str
@@ -544,6 +557,12 @@ def _get_agent() -> BaseAgent:
     return _get_agent_factory().create_base_agent()
 
 
+def _get_desktop_manager() -> DesktopClientManager:
+    if _desktop_manager is None:
+        raise RuntimeError("Desktop manager not initialized")
+    return _desktop_manager
+
+
 def _get_project_manager() -> ProjectManager:
     if _project_manager is None:
         raise RuntimeError("Project manager not initialized")
@@ -585,6 +604,43 @@ def _get_owned_project(
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+def _requires_local_client(mode: str) -> bool:
+    """Return True for modes that need the local desktop client."""
+    return mode in {"development", "hardware"}
+
+
+async def _route_task_to_desktop(task: Any, user_id: str) -> bool:
+    """Try to dispatch a local-client task to an online desktop client.
+
+    Returns True if the task was pushed to a client.
+    """
+    manager = _get_desktop_manager()
+    client = manager.pick_client_for_task(user_id, task.project_id)
+    if client is None:
+        return False
+    dispatched = await manager.send_to_client(
+        client.client_id,
+        {
+            "type": "assign_task",
+            "task_id": task.id,
+            "project_id": task.project_id,
+            "mode": task.mode,
+            "message": task.description,
+            "requires_confirmation": True,
+        },
+    )
+    if dispatched:
+        task.assigned_client_id = client.client_id
+        if task.status == "pending":
+            task.update_status("running")
+        if _db is not None:
+            try:
+                _db.save_task(task)
+            except Exception as exc:
+                get_logger(__name__).warning("Failed to save routed task", exc_info=True)
+    return dispatched
 
 
 def _recommend_next_action(project: Any) -> dict[str, str] | None:
@@ -632,7 +688,7 @@ def _recommend_next_action(project: Any) -> dict[str, str] | None:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository
+        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository, _desktop_manager
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -659,6 +715,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             learning_repository=_learning_repository,
             logger=logger,
         )
+        _desktop_manager = DesktopClientManager()
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
@@ -961,12 +1018,59 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                     title=user_input[:60],
                     description=user_input,
                     project_id=request.project_id,
+                    mode=request.mode,
+                    requires_local_client=_requires_local_client(request.mode),
                 )
+                if _requires_local_client(request.mode):
+                    routed = await _route_task_to_desktop(task, current_user.user_id)
+                    if routed:
+                        return {
+                            "task_id": task.id,
+                            "status": task.status,
+                            "project_id": request.project_id,
+                            "mode": request.mode,
+                            "dispatched_to_desktop": True,
+                        }
                 return StreamingResponse(
                     _stream_task_progress(agent, task, user_input, request.confirmed),
                     media_type="text/event-stream",
                 )
-            task = agent.run(user_input, confirmed=request.confirmed, project_id=request.project_id)
+
+            task = agent.task_manager.create(
+                title=user_input[:60],
+                description=user_input,
+                project_id=request.project_id,
+                mode=request.mode,
+                requires_local_client=_requires_local_client(request.mode),
+            )
+            if _requires_local_client(request.mode):
+                routed = await _route_task_to_desktop(task, current_user.user_id)
+                if routed:
+                    content = (
+                        "任务已推送到你的 Kyrozen 桌面客户端执行。"
+                        "请在桌面客户端中查看进度。"
+                    )
+                    if request.project_id and user_message is not None:
+                        pm.save_chat_message(
+                            {
+                                "id": str(uuid.uuid4()),
+                                "user_id": current_user.user_id,
+                                "project_id": request.project_id,
+                                "role": "assistant",
+                                "content": content,
+                                "metadata": {"dispatched_to_desktop": True},
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                        )
+                    return {
+                        "task_id": task.id,
+                        "status": task.status,
+                        "project_id": request.project_id,
+                        "mode": request.mode,
+                        "dispatched_to_desktop": True,
+                    }
+
+            agent.run_task(task, user_input, confirmed=request.confirmed)
             if request.project_id and user_message is not None:
                 pm.save_chat_message(
                     {
@@ -2145,6 +2249,180 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(404, "Suggestion not found")
         repo.delete_suggestion(suggestion_id, user_id=current_user.user_id)
         return {"status": "deleted"}
+
+    # ------------------------------------------------------------------
+    # Desktop client
+    # ------------------------------------------------------------------
+    @app.post("/api/desktop/open-token")
+    async def api_desktop_open_token(
+        request: DesktopOpenTokenRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Generate a short-lived token used to launch the desktop client."""
+        if request.project_id:
+            _get_owned_project(request.project_id, current_user)
+        token = DesktopTokenManager.create_open_token(
+            user_id=current_user.user_id,
+            project_id=request.project_id,
+        )
+        return {
+            "token": token,
+            "expires_in": 300,
+            "project_id": request.project_id,
+            "scheme_url": f"kyrozen://open?project_id={request.project_id or ''}&token={token}",
+        }
+
+    @app.post("/api/desktop/verify-token")
+    async def api_desktop_verify_token(request: DesktopVerifyTokenRequest):
+        """Exchange a short-lived open token for long-lived credentials."""
+        open_data = DesktopTokenManager.consume_open_token(request.token)
+        if open_data is None:
+            raise HTTPException(401, "Invalid or expired open token")
+
+        user_id = open_data["user_id"]
+        project_id = open_data.get("project_id")
+        credentials = DesktopTokenManager.create_credentials(user_id)
+
+        manager = _get_desktop_manager()
+        client = manager.register(
+            user_id=user_id,
+            device_name=request.device_name,
+            client_version=request.client_version,
+            platform=request.platform,
+            current_project_id=project_id,
+        )
+        if _db is not None:
+            try:
+                _db.save_desktop_client(client.to_dict())
+            except Exception as exc:
+                get_logger(__name__).warning("Failed to persist desktop client", exc_info=True)
+
+        return {
+            "client_id": client.client_id,
+            "refresh_token": credentials["refresh_token"],
+            "ws_token": credentials["ws_token"],
+            "project_id": project_id,
+            "user_id": user_id,
+        }
+
+    @app.get("/api/desktop/clients")
+    async def api_list_desktop_clients(
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        manager = _get_desktop_manager()
+        clients = manager.list_online_for_user(current_user.user_id)
+        return {"clients": [c.to_dict() for c in clients]}
+
+    @app.websocket("/ws/desktop")
+    async def websocket_desktop(websocket: WebSocket):
+        logger = get_logger(_config.log_level if _config else "info")
+        await websocket.accept()
+        client: DesktopClient | None = None
+
+        try:
+            auth_message = await websocket.receive_json()
+            if auth_message.get("type") != "auth":
+                await websocket.close(code=1008, reason="First message must be auth")
+                return
+
+            ws_token = auth_message.get("token", "")
+            user_id = DesktopTokenManager.verify_ws_token(ws_token)
+            if user_id is None:
+                await websocket.close(code=1008, reason="Invalid websocket token")
+                return
+
+            manager = _get_desktop_manager()
+            client = manager.register(
+                user_id=user_id,
+                device_name=auth_message.get("device_name", "Unknown Device"),
+                client_version=auth_message.get("client_version", ""),
+                platform=auth_message.get("platform", ""),
+                current_project_id=auth_message.get("current_project_id"),
+                websocket=websocket,
+            )
+            if _db is not None:
+                try:
+                    _db.save_desktop_client(client.to_dict())
+                except Exception as exc:
+                    logger.warning("Failed to persist desktop client on connect", exc_info=True)
+
+            await websocket.send_json({
+                "type": "auth_success",
+                "client_id": client.client_id,
+                "user_id": user_id,
+            })
+
+            while True:
+                message = await websocket.receive_json()
+                msg_type = message.get("type")
+
+                if msg_type == "heartbeat":
+                    manager.touch(client.client_id)
+                    current_project = message.get("current_project_id")
+                    if current_project:
+                        manager.update_project(client.client_id, current_project)
+                    if _db is not None:
+                        try:
+                            _db.save_desktop_client(client.to_dict())
+                        except Exception as exc:
+                            logger.warning("Failed to persist desktop client heartbeat", exc_info=True)
+                    await websocket.send_json({"type": "heartbeat_ack", "timestamp": _utc_now_iso()})
+
+                elif msg_type == "task_accepted":
+                    task_id = message.get("task_id")
+                    if task_id and _db is not None:
+                        task = _db.get_task(task_id)
+                        if task is not None:
+                            task.assigned_client_id = client.client_id
+                            task.update_status("running")
+                            _db.save_task(task)
+                    await websocket.send_json({"type": "task_accepted_ack", "task_id": task_id})
+
+                elif msg_type == "task_step":
+                    task_id = message.get("task_id")
+                    step = message.get("step")
+                    if task_id and step and _db is not None:
+                        task = _db.get_task(task_id)
+                        if task is not None:
+                            from kyrozen.core.task import TaskStep
+                            task.steps.append(TaskStep(**step))
+                            _db.save_task(task)
+
+                elif msg_type == "task_result":
+                    task_id = message.get("task_id")
+                    status = message.get("status")
+                    result = message.get("result")
+                    if task_id and _db is not None:
+                        task = _db.get_task(task_id)
+                        if task is not None:
+                            task.result = result
+                            if status in {"completed", "failed", "cancelled"}:
+                                task.update_status(status)
+                            _db.save_task(task)
+
+                elif msg_type == "confirmation_response":
+                    # TODO: wire into running agent confirmation queue
+                    logger.info(f"Confirmation response for task {message.get('task_id')}: {message.get('confirmed')}")
+
+                else:
+                    logger.warning(f"Unknown desktop websocket message type: {msg_type}")
+
+        except WebSocketDisconnect:
+            logger.info("Desktop client disconnected")
+        except Exception as exc:
+            logger.warning(f"Desktop websocket error: {exc}")
+        finally:
+            if client is not None:
+                manager.unregister(client.client_id)
+                if _db is not None:
+                    try:
+                        _db.save_desktop_client(client.to_dict())
+                    except Exception as exc:
+                        logger.warning("Failed to persist desktop client disconnect", exc_info=True)
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
 
     return app
 

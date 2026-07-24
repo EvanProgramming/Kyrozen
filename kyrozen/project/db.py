@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     description TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
+    mode TEXT,
+    requires_local_client INTEGER NOT NULL DEFAULT 0,
+    assigned_client_id TEXT,
     steps TEXT,
     result TEXT,
     errors TEXT,
@@ -201,6 +204,21 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_project ON chat_messages(project_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id);
+
+CREATE TABLE IF NOT EXISTS desktop_clients (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_name TEXT NOT NULL DEFAULT 'Unknown Device',
+    client_version TEXT,
+    platform TEXT,
+    last_active_at TEXT NOT NULL,
+    online INTEGER NOT NULL DEFAULT 1,
+    current_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_desktop_clients_user ON desktop_clients(user_id);
+CREATE INDEX IF NOT EXISTS idx_desktop_clients_online ON desktop_clients(user_id, online, last_active_at);
 """
 
 
@@ -225,6 +243,18 @@ class KyrozenDatabase:
     def _init_schema(self) -> None:
         with self._lock, self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
+            self._migrate_tasks_table(conn)
+
+    def _migrate_tasks_table(self, conn: sqlite3.Connection) -> None:
+        """Add desktop-client related columns to existing tasks tables."""
+        cursor = conn.execute("PRAGMA table_info(tasks)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        if "mode" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN mode TEXT")
+        if "requires_local_client" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN requires_local_client INTEGER NOT NULL DEFAULT 0")
+        if "assigned_client_id" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN assigned_client_id TEXT")
 
     # ------------------------------------------------------------------
     # Projects
@@ -318,14 +348,18 @@ class KyrozenDatabase:
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO tasks (id, project_id, title, description, status, steps,
+                INSERT INTO tasks (id, project_id, title, description, status, mode,
+                                   requires_local_client, assigned_client_id, steps,
                                    result, errors, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     project_id=excluded.project_id,
                     title=excluded.title,
                     description=excluded.description,
                     status=excluded.status,
+                    mode=excluded.mode,
+                    requires_local_client=excluded.requires_local_client,
+                    assigned_client_id=excluded.assigned_client_id,
                     steps=excluded.steps,
                     result=excluded.result,
                     errors=excluded.errors,
@@ -337,6 +371,9 @@ class KyrozenDatabase:
                     task.title,
                     task.description,
                     task.status,
+                    getattr(task, "mode", None),
+                    1 if getattr(task, "requires_local_client", False) else 0,
+                    getattr(task, "assigned_client_id", None),
                     json.dumps([s.to_dict() for s in task.steps], ensure_ascii=False),
                     json.dumps(task.result, ensure_ascii=False) if task.result is not None else None,
                     json.dumps(task.errors, ensure_ascii=False),
@@ -372,8 +409,11 @@ class KyrozenDatabase:
             description=row["description"] or "",
             task_id=row["id"],
             status=row["status"],
+            project_id=row["project_id"],
+            mode=row["mode"],
+            requires_local_client=bool(row["requires_local_client"]),
+            assigned_client_id=row["assigned_client_id"],
         )
-        task.project_id = row["project_id"]
         task.created_at = row["created_at"]
         task.updated_at = row["updated_at"]
         task.result = json.loads(row["result"]) if row["result"] else None
@@ -1081,6 +1121,85 @@ class KyrozenDatabase:
             "content": row["content"] or "",
             "metadata": json.loads(row["metadata"] or "{}"),
             "created_at": row["created_at"],
+        }
+
+    # ------------------------------------------------------------------
+    # Desktop clients
+    # ------------------------------------------------------------------
+    def save_desktop_client(self, client: dict[str, Any]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO desktop_clients (id, user_id, device_name, client_version, platform,
+                                             last_active_at, online, current_project_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    device_name=excluded.device_name,
+                    client_version=excluded.client_version,
+                    platform=excluded.platform,
+                    last_active_at=excluded.last_active_at,
+                    online=excluded.online,
+                    current_project_id=excluded.current_project_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    client["id"],
+                    client["user_id"],
+                    client.get("device_name", "Unknown Device"),
+                    client.get("client_version"),
+                    client.get("platform"),
+                    client.get("last_active_at", now),
+                    1 if client.get("online", True) else 0,
+                    client.get("current_project_id"),
+                    client.get("created_at", now),
+                    client.get("updated_at", now),
+                ),
+            )
+
+    def get_desktop_client(self, client_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM desktop_clients WHERE id = ?", (client_id,)).fetchone()
+        if row is None:
+            return None
+        return self._row_to_desktop_client(row)
+
+    def list_desktop_clients(
+        self,
+        user_id: str,
+        online_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM desktop_clients WHERE user_id = ?"
+        params: list[Any] = [user_id]
+        if online_only:
+            query += " AND online = 1"
+        query += " ORDER BY last_active_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [self._row_to_desktop_client(row) for row in rows]
+
+    def delete_desktop_client(self, client_id: str, user_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM desktop_clients WHERE id = ? AND user_id = ?",
+                (client_id, user_id),
+            )
+            return cur.rowcount > 0
+
+    def _row_to_desktop_client(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "user_id": row["user_id"] or "",
+            "device_name": row["device_name"] or "Unknown Device",
+            "client_version": row["client_version"] or "",
+            "platform": row["platform"] or "",
+            "last_active_at": row["last_active_at"],
+            "online": bool(row["online"]),
+            "current_project_id": row["current_project_id"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
         }
 
     # ------------------------------------------------------------------

@@ -47,7 +47,7 @@ class BaseAgent:
         tools_text = json.dumps(schemas, ensure_ascii=False, indent=2)
         return (
             "You are Kyrozen Core, an AI agent foundation. You have access to tools.\n\n"
-            "When you need to use a tool, output a single JSON object in this exact format:\n"
+            "When you need to use a tool, output ONLY a single JSON object in this exact format:\n"
             '{\n  "tool": "tool_name",\n  "action": "action_name",\n  "parameters": {...}\n}\n\n'
             "If you need multiple tools, output a JSON array of objects.\n"
             "If no tool is needed, reply with a plain text answer.\n\n"
@@ -55,6 +55,7 @@ class BaseAgent:
             "Rules:\n"
             "- Use structured parameters, not plain strings.\n"
             "- Do not invent tool names or actions.\n"
+            "- Do NOT use XML tags such as <tool_call> for tool calls; use JSON only.\n"
             "- For file paths, prefer relative paths from the current working directory.\n"
             "- When asked to analyze a project, start with list_dir or find_files.\n"
             "- DO NOT write files, execute terminal commands, run git operations, or update project state unless the user explicitly asks you to.\n"
@@ -62,7 +63,7 @@ class BaseAgent:
         )
 
     def _extract_tool_calls(self, text: str) -> list[dict[str, Any]]:
-        """Extract tool-call JSON objects from the model response."""
+        """Extract tool-call JSON objects (and XML-style tool calls) from the model response."""
         calls: list[dict[str, Any]] = []
         # Try to parse the entire text as JSON first
         text = text.strip()
@@ -95,6 +96,11 @@ class BaseAgent:
 
         # Look for inline JSON objects/arrays (e.g. model preamble + JSON)
         calls.extend(self._extract_inline_tool_calls(text))
+
+        # Some models emit XML-style tool calls such as:
+        # <tool_call><tool_name>list_dir</tool_name><action>list</action>...</tool_call>
+        calls.extend(self._extract_xml_tool_calls(text))
+
         # Deduplicate while preserving order
         seen: set[str] = set()
         unique_calls: list[dict[str, Any]] = []
@@ -151,10 +157,39 @@ class BaseAgent:
             i += 1
         return calls
 
+    def _extract_xml_tool_calls(self, text: str) -> list[dict[str, Any]]:
+        """Parse XML-style tool calls like <tool_call><tool_name>x</tool_name>...</tool_call>."""
+        calls: list[dict[str, Any]] = []
+        pattern = re.compile(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", re.IGNORECASE)
+        for match in pattern.finditer(text):
+            inner = match.group(1)
+            tool_match = re.search(r"<tool_name>\s*([\s\S]*?)\s*</tool_name>", inner, re.IGNORECASE)
+            action_match = re.search(r"<action>\s*([\s\S]*?)\s*</action>", inner, re.IGNORECASE)
+            params_match = re.search(r"<parameters>\s*([\s\S]*?)\s*</parameters>", inner, re.IGNORECASE)
+            if not tool_match or not action_match:
+                continue
+            parameters: dict[str, Any] = {}
+            if params_match:
+                params_inner = params_match.group(1)
+                for param_match in re.finditer(r"<(\w+)>\s*([\s\S]*?)\s*</\1>", params_inner):
+                    # Skip nested metadata tags that some models may include.
+                    key = param_match.group(1)
+                    if key in ("tool_name", "action", "parameters"):
+                        continue
+                    parameters[key] = param_match.group(2).strip()
+            calls.append({
+                "tool": tool_match.group(1).strip(),
+                "action": action_match.group(1).strip(),
+                "parameters": parameters,
+            })
+        return calls
+
     def _strip_tool_calls_from_text(self, text: str) -> str:
-        """Remove code blocks and inline tool-call JSON, keeping only conversational text."""
+        """Remove code blocks, inline tool-call JSON, and XML tool-call blocks, keeping only conversational text."""
         # Remove fenced code blocks first.
         clean = re.sub(r"```(?:json)?\s*[\s\S]*?\s*```", "", text)
+        # Remove XML-style tool call blocks.
+        clean = re.sub(r"<tool_call>\s*[\s\S]*?\s*</tool_call>", "", clean, flags=re.IGNORECASE)
         # Scan for inline JSON objects/arrays and drop ones that look like tool calls.
         result: list[str] = []
         pairs = {"{": "}", "[": "]"}

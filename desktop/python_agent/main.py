@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -17,12 +19,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from kyrozen.config import KyrozenConfig, get_config
+from kyrozen.config import get_config
 from kyrozen.core.agent import BaseAgent
+from kyrozen.core.task import Task
 from kyrozen.desktop import CloudProxyModelProvider
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory
 from kyrozen.tools import get_default_registry
+
+
+class PendingConfirmation:
+    """Thread-safe container for an outstanding user confirmation."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.result: bool = False
 
 
 class DesktopAgentRuntime:
@@ -35,6 +46,9 @@ class DesktopAgentRuntime:
         self.model: CloudProxyModelProvider | None = None
         self.agent: BaseAgent | None = None
         self.current_task_id: str | None = None
+        self.current_task: Task | None = None
+        self._pending_confirmations: dict[str, PendingConfirmation] = {}
+        self._lock = threading.Lock()
 
     def set_send_message(self, send_message: callable) -> None:
         """Bind the function used to send JSON-RPC messages to Electron."""
@@ -46,6 +60,7 @@ class DesktopAgentRuntime:
             tools=get_default_registry(),
             memory=InMemoryMemory(),
             logger=self.logger,
+            confirmation_callback=self._request_confirmation,
         )
 
     def handle_request(self, request: dict[str, object]) -> None:
@@ -61,6 +76,8 @@ class DesktopAgentRuntime:
                 self._handle_cloud_model_response(params)
             elif method == "confirmation_response":
                 self._handle_confirmation_response(params)
+            elif method == "cancel_task":
+                self._handle_cancel_task(params)
             else:
                 self._send_response(req_id, error=f"Unknown method: {method}")
         except Exception as exc:
@@ -85,11 +102,13 @@ class DesktopAgentRuntime:
         })
 
         try:
-            result = self.agent.run(message, task_id=self.current_task_id)
+            task = self.agent.run(message, project_id=str(params.get("project_id", "")))
+            self.current_task = task
             self._notify("task_result", {
-                "task_id": self.current_task_id,
-                "status": "completed",
-                "result": {"answer": result},
+                "task_id": task.id,
+                "status": task.status,
+                "result": task.result or {},
+                "steps": [step.to_dict() for step in task.steps],
             })
         except Exception as exc:
             traceback_str = traceback.format_exc()
@@ -101,14 +120,59 @@ class DesktopAgentRuntime:
 
         self._send_response(req_id, result={"status": "ok"})
 
+    def _request_confirmation(
+        self,
+        *,
+        task: Task,
+        tool: str,
+        action: str,
+        parameters: dict[str, object],
+        reason: str,
+    ) -> bool:
+        """Called by BaseAgent when a tool requires user confirmation.
+
+        Sends a request to Electron and blocks until the user responds.
+        """
+        confirmation_id = f"conf_{task.id}_{tool}_{action}_{int(time.time() * 1000)}"
+        pending = PendingConfirmation()
+        with self._lock:
+            self._pending_confirmations[confirmation_id] = pending
+
+        self._notify("request_confirmation", {
+            "task_id": task.id,
+            "confirmation_id": confirmation_id,
+            "tool": tool,
+            "action": action,
+            "parameters": parameters,
+            "reason": reason,
+        })
+
+        # Wait for Electron to respond (with a generous timeout).
+        pending.event.wait(timeout=300)
+
+        with self._lock:
+            self._pending_confirmations.pop(confirmation_id, None)
+        return pending.result
+
+    def _handle_confirmation_response(self, params: dict[str, object]) -> None:
+        confirmation_id = str(params.get("confirmation_id", ""))
+        confirmed = bool(params.get("confirmed", False))
+        with self._lock:
+            pending = self._pending_confirmations.get(confirmation_id)
+            if pending is None:
+                return
+            pending.result = confirmed
+            pending.event.set()
+
     def _handle_cloud_model_response(self, params: dict[str, object]) -> None:
         if self.model is None:
             return
         self.model.handle_response(params)
 
-    def _handle_confirmation_response(self, params: dict[str, object]) -> None:
-        # TODO: wire into agent confirmation queue
-        self.logger.info("Confirmation response received: %s", params)
+    def _handle_cancel_task(self, params: dict[str, object]) -> None:
+        task_id = str(params.get("task_id", ""))
+        self.logger.info("Received cancel request for task %s", task_id)
+        # TODO: implement graceful cancellation in BaseAgent
 
     def _notify(self, method: str, params: dict[str, object]) -> None:
         if self.send_message is None:

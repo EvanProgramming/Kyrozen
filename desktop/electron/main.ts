@@ -350,7 +350,11 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
   const confirmed = result.response === 0;
   sendToPythonAgent({
     jsonrpc: '2.0',
-    id: params.confirmation_id || Date.now(),
-    result: { confirmed },
+    method: 'confirmation_response',
+    params: {
+      confirmation_id: params.confirmation_id,
+      confirmed,
+      task_id: params.task_id,
+    },
   });
 }

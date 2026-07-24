@@ -24,6 +24,7 @@ export function LoginPage({ onLogin }: Props) {
             <label className="block text-sm text-slate-300 mb-1">服务器地址</label>
             <input
               type="url"
+              name="serverUrl"
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
               className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
@@ -34,6 +35,7 @@ export function LoginPage({ onLogin }: Props) {
             <label className="block text-sm text-slate-300 mb-1">邮箱</label>
             <input
               type="email"
+              name="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
@@ -44,6 +46,7 @@ export function LoginPage({ onLogin }: Props) {
             <label className="block text-sm text-slate-300 mb-1">密码</label>
             <input
               type="password"
+              name="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"

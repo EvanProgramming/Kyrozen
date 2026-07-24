@@ -29,3 +29,4 @@ kyrozen_tasks.json
 *.env
 *.kyrozen_config.json
 .kyrozen_config.json
+.kyrozen_jwks_cache.json

@@ -2,7 +2,8 @@ import { apiClient } from './client';
 import type { ChatMessage, ChatRequest, ChatResponse, Task } from '../types/api';
 
 export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
-  const response = await apiClient.post<ChatResponse>('/chat', request);
+  // Market research and other agent loops can take longer than the default 60s timeout.
+  const response = await apiClient.post<ChatResponse>('/chat', request, { timeout: 300000 });
   return response.data;
 }
 

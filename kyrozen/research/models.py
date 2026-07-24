@@ -238,22 +238,86 @@ class MarketResearchReport:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MarketResearchReport":
+        # Support both the canonical schema and the looser schema produced by
+        # earlier agent prompts (e.g. market_size_and_trends, competitor_analysis).
+        market_status = data.get("market_status", "")
+        if not market_status and data.get("market_size_and_trends"):
+            market_status = data["market_size_and_trends"]
+
+        competitors: list[Competitor] = []
+        for c in data.get("competitors") or []:
+            competitors.append(Competitor.from_dict(c))
+        for c in data.get("competitor_analysis") or []:
+            competitors.append(
+                Competitor(
+                    name=c.get("name", ""),
+                    company=c.get("type", ""),
+                    solution=c.get("gap_analysis", ""),
+                    target_user="",
+                    main_features=[],
+                    price=c.get("price", ""),
+                    advantages=[c.get("strengths", "")] if c.get("strengths") else [],
+                    complaints=[c.get("weaknesses", "")] if c.get("weaknesses") else [],
+                    failure_reason="",
+                    sources=[c.get("source_url", "")] if c.get("source_url") else [],
+                )
+            )
+
+        user_feedback: list[ResearchSource] = [
+            ResearchSource.from_dict(s) for s in data.get("user_feedback") or []
+        ]
+        for item in data.get("user_pain_points_analysis") or []:
+            user_feedback.append(
+                ResearchSource(
+                    title=f"Pain point: {item.get('pain_point', '')}",
+                    url=item.get("source_url", ""),
+                    source_type="community",
+                    summary=item.get("evidence", ""),
+                    related_claim=item.get("pain_point", ""),
+                    confidence="medium",
+                    fact_type="fact",
+                )
+            )
+
+        alternative_solutions: list[ResearchSource] = [
+            ResearchSource.from_dict(s) for s in data.get("alternative_solutions") or []
+        ]
+        if data.get("existing_solutions_adequacy"):
+            alternative_solutions.append(
+                ResearchSource(
+                    title="Existing solutions adequacy",
+                    summary=data["existing_solutions_adequacy"],
+                    related_claim="Assessment of existing solutions",
+                    source_type="web_page",
+                )
+            )
+
+        market_gap = MarketGap.from_dict(data.get("market_gap") or {})
+        if data.get("opportunity_assessment"):
+            market_gap.possible_difference = data["opportunity_assessment"]
+        if data.get("overall_confidence") in CONFIDENCE_LEVELS:
+            market_gap.confidence = data["overall_confidence"]
+
+        risks = list(data.get("risks") or [])
+        for unknown in data.get("key_unknowns") or []:
+            risks.append(f"Unknown: {unknown}")
+
+        problem_summary = data.get("problem_summary", "")
+        if not problem_summary and data.get("existing_solutions_adequacy"):
+            problem_summary = data["existing_solutions_adequacy"]
+
         return cls(
-            problem_summary=data.get("problem_summary", ""),
-            market_status=data.get("market_status", ""),
-            competitors=[Competitor.from_dict(c) for c in data.get("competitors") or []],
+            problem_summary=problem_summary,
+            market_status=market_status,
+            competitors=competitors,
             open_source_projects=[
                 ResearchSource.from_dict(s) for s in data.get("open_source_projects") or []
             ],
-            user_feedback=[
-                ResearchSource.from_dict(s) for s in data.get("user_feedback") or []
-            ],
-            alternative_solutions=[
-                ResearchSource.from_dict(s) for s in data.get("alternative_solutions") or []
-            ],
+            user_feedback=user_feedback,
+            alternative_solutions=alternative_solutions,
             technology_routes=list(data.get("technology_routes") or []),
-            market_gap=MarketGap.from_dict(data.get("market_gap") or {}),
-            risks=list(data.get("risks") or []),
+            market_gap=market_gap,
+            risks=risks,
             recommendation=data.get("recommendation", "pause"),
             sources=[ResearchSource.from_dict(s) for s in data.get("sources") or []],
         )

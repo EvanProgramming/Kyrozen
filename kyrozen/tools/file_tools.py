@@ -27,7 +27,7 @@ class FileReadTool(Tool):
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         raw_path = parameters.get("path", "")
         allowed_root = _get_allowed_root(parameters)
-        path, error = _resolve_safe_path(raw_path, allowed_root)
+        path, error = _resolve_safe_path(raw_path, allowed_root, parameters.get("project_id"))
         if path is None:
             return ToolResult(success=False, data=None, error=error)
         try:
@@ -60,7 +60,7 @@ class FileWriteTool(Tool):
         raw_path = parameters.get("path", "")
         content = parameters.get("content", "")
         allowed_root = _get_allowed_root(parameters)
-        path, error = _resolve_safe_path(raw_path, allowed_root)
+        path, error = _resolve_safe_path(raw_path, allowed_root, parameters.get("project_id"))
         if path is None:
             return ToolResult(success=False, data=None, error=error)
         try:
@@ -88,7 +88,7 @@ class ListDirTool(Tool):
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         raw_path = parameters.get("path", ".") or "."
         allowed_root = _get_allowed_root(parameters)
-        path, error = _resolve_safe_path(raw_path, allowed_root)
+        path, error = _resolve_safe_path(raw_path, allowed_root, parameters.get("project_id"))
         if path is None:
             return ToolResult(success=False, data=None, error=error)
         try:
@@ -119,7 +119,7 @@ class FindFilesTool(Tool):
         pattern = parameters.get("pattern", "")
         raw_directory = parameters.get("directory", ".") or "."
         allowed_root = _get_allowed_root(parameters)
-        dir_path, error = _resolve_safe_path(raw_directory, allowed_root)
+        dir_path, error = _resolve_safe_path(raw_directory, allowed_root, parameters.get("project_id"))
         if dir_path is None:
             return ToolResult(success=False, data=None, error=error)
         try:

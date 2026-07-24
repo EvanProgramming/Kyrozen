@@ -373,12 +373,10 @@ class ProjectContextBuilder:
         """Return a short summary of the existing software project directory."""
         if self.project_manager is None:
             return ""
-        software_dir = os.path.join(
-            os.path.dirname(self.project_manager.db.db_path),
-            "projects",
-            project.id,
-            "software",
-        )
+        workspace_root = getattr(self.project_manager, "workspace_root", "")
+        if not workspace_root:
+            workspace_root = os.path.dirname(getattr(self.project_manager.db, "db_path", ""))
+        software_dir = os.path.join(workspace_root, "projects", project.id, "software")
         if not os.path.isdir(software_dir):
             return ""
         try:
@@ -498,12 +496,10 @@ class ProjectContextBuilder:
         """Return a short summary of the existing hardware project directory."""
         if self.project_manager is None:
             return ""
-        hardware_dir = os.path.join(
-            os.path.dirname(self.project_manager.db.db_path),
-            "projects",
-            project.id,
-            "hardware",
-        )
+        workspace_root = getattr(self.project_manager, "workspace_root", "")
+        if not workspace_root:
+            workspace_root = os.path.dirname(getattr(self.project_manager.db, "db_path", ""))
+        hardware_dir = os.path.join(workspace_root, "projects", project.id, "hardware")
         if not os.path.isdir(hardware_dir):
             return ""
         try:

@@ -59,7 +59,10 @@ def _project_dir(project_manager: "ProjectManager | None", project_id: str, subd
     """Return a project subdirectory, creating it if necessary."""
     if project_manager is None:
         raise RuntimeError("Project manager not available")
-    base = Path(os.path.dirname(project_manager.db.db_path)) / "projects" / project_id / subdir
+    workspace_root = getattr(project_manager, "workspace_root", "")
+    if not workspace_root:
+        workspace_root = os.path.dirname(getattr(project_manager.db, "db_path", ""))
+    base = Path(workspace_root) / "projects" / project_id / subdir
     base.mkdir(parents=True, exist_ok=True)
     return base
 

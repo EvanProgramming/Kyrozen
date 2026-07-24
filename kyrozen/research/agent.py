@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 class MarketResearchAgent(BaseAgent):
     """Agent specialized in market research and opportunity evaluation."""
 
+    max_rounds = 12
+
     def __init__(self, *args: Any, project_manager: "ProjectManager | None" = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.project_manager = project_manager
@@ -42,10 +44,25 @@ class MarketResearchAgent(BaseAgent):
             "- Always save the source URL, access_date, and confidence for every external claim.\n"
             "- Distinguish Fact, Inference, and Unknown in every source item.\n"
             "- Analyze competitors honestly: include why they succeed and why they fail.\n"
-            "- Search for: existing products/apps, open source projects, academic papers, patents, community discussions, alternative solutions. Use at most 5 searches.\n"
+            "- Search for: existing products/apps, open source projects, academic papers, patents, community discussions, alternative solutions. Use at most 4 searches.\n"
             "- After each search, save important sources with save_research_source. Do not rely on memory; save every source immediately.\n"
-            "- When enough evidence is gathered, save the Market Research Report with save_market_research_report.\n"
-            "- Finally, record the opportunity decision with record_opportunity_decision.\n"
+            "- After saving sources, you MUST call save_market_research_report to persist the final report.\n"
+            "  The report object MUST use this exact schema:\n"
+            "  {\n"
+            "    \"problem_summary\": \"string\",\n"
+            "    \"market_status\": \"string (market size, trends, maturity)\",\n"
+            "    \"competitors\": [{\"name\": \"string\", \"company\": \"string\", \"solution\": \"string\", \"target_user\": \"string\", \"main_features\": [\"string\"], \"price\": \"string\", \"advantages\": [\"string\"], \"complaints\": [\"string\"], \"failure_reason\": \"string\", \"sources\": [\"string\"]}],\n"
+            "    \"open_source_projects\": [{\"title\", \"url\", \"source_type\", \"summary\", \"related_claim\", \"confidence\", \"fact_type\"}],\n"
+            "    \"user_feedback\": [{same schema as open_source_projects}],\n"
+            "    \"alternative_solutions\": [{same schema as open_source_projects}],\n"
+            "    \"technology_routes\": [\"string\"],\n"
+            "    \"market_gap\": {\"existing_solution\": \"string\", \"problem_remaining\": \"string\", \"possible_difference\": \"string\", \"risk\": \"string\", \"confidence\": \"low|medium|high\"},\n"
+            "    \"risks\": [\"string\"],\n"
+            "    \"recommendation\": \"One of: continue_development, narrow_scope, change_target_user, change_product_form, use_existing_solution, pause, abandon\",\n"
+            "    \"sources\": [{same schema as open_source_projects}]\n"
+            "  }\n"
+            "- Then record the opportunity decision with record_opportunity_decision.\n"
+            "- Do not exceed the tool-call budget: leave enough rounds for save_research_source, save_market_research_report, and record_opportunity_decision.\n"
             "- If existing solutions are good enough, recommend \"use_existing_solution\" or \"abandon\".\n"
             "- After calling any tool, wait for the tool result and then summarize it in natural language. NEVER output raw JSON to the user.\n"
             "- NEVER output internal planning text such as 'Now let me search', 'Search X:', or 'Next I will' to the user. Only output the final summary or the tool JSON.\n"

@@ -6,6 +6,7 @@ import { ConnectionStatus } from './components/ConnectionStatus';
 import { EditorPanel } from './components/EditorPanel';
 import { FileTree } from './components/FileTree';
 import { GitPanel } from './components/GitPanel';
+import { HardwarePanel } from './components/HardwarePanel';
 import { PreviewPanel } from './components/PreviewPanel';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -265,6 +266,8 @@ function App() {
               <div className="px-2 font-medium text-slate-300 mb-1">本地文件</div>
               <FileTree projectId={currentProjectId} onSelectFile={setEditingFile} />
             </div>
+
+            <HardwarePanel />
           </div>
         </aside>
         <main className="flex-1 flex flex-col overflow-hidden relative">

@@ -139,6 +139,9 @@ class SupabaseDatabase:
             "title": task.title,
             "description": task.description,
             "status": task.status,
+            "mode": getattr(task, "mode", None),
+            "requires_local_client": getattr(task, "requires_local_client", False),
+            "assigned_client_id": getattr(task, "assigned_client_id", None),
             "steps": [s.to_dict() for s in task.steps] if task.steps else [],
             "result": task.result,
             "errors": task.errors if task.errors else [],
@@ -184,8 +187,11 @@ class SupabaseDatabase:
             description=row.get("description") or "",
             task_id=row["id"],
             status=row["status"],
+            project_id=row.get("project_id"),
+            mode=row.get("mode"),
+            requires_local_client=row.get("requires_local_client", False),
+            assigned_client_id=row.get("assigned_client_id"),
         )
-        task.project_id = row.get("project_id")
         task.created_at = row["created_at"]
         task.updated_at = row["updated_at"]
         task.result = row.get("result")
@@ -743,6 +749,70 @@ class SupabaseDatabase:
                 self.client.table("chat_messages")
                 .delete()
                 .eq("project_id", project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+        except Exception:
+            return False
+        rows = getattr(response, "data", [])
+        return len(rows) > 0
+
+    # ------------------------------------------------------------------
+    # Desktop clients
+    # ------------------------------------------------------------------
+    def save_desktop_client(self, client: dict[str, Any]) -> None:
+        data = {
+            "id": client["id"],
+            "user_id": str(client["user_id"]) if client.get("user_id") else None,
+            "device_name": client.get("device_name", "Unknown Device"),
+            "client_version": client.get("client_version"),
+            "platform": client.get("platform"),
+            "last_active_at": client.get("last_active_at"),
+            "online": client.get("online", True),
+            "current_project_id": client.get("current_project_id"),
+            "created_at": client.get("created_at"),
+            "updated_at": client.get("updated_at"),
+        }
+        self._execute_upsert("desktop_clients", data)
+
+    def get_desktop_client(self, client_id: str) -> dict[str, Any] | None:
+        try:
+            response = (
+                self.client.table("desktop_clients")
+                .select("*")
+                .eq("id", client_id)
+                .execute()
+            )
+        except Exception as exc:
+            if self._is_missing_table_error(exc):
+                raise
+            return None
+        rows = getattr(response, "data", [])
+        return rows[0] if rows else None
+
+    def list_desktop_clients(
+        self,
+        user_id: str,
+        online_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        try:
+            query = self.client.table("desktop_clients").select("*").eq("user_id", user_id)
+            if online_only:
+                query = query.eq("online", True)
+            response = query.order("last_active_at", desc=True).limit(limit).execute()
+        except Exception as exc:
+            if self._is_missing_table_error(exc):
+                raise
+            return []
+        return list(getattr(response, "data", []))
+
+    def delete_desktop_client(self, client_id: str, user_id: str) -> bool:
+        try:
+            response = (
+                self.client.table("desktop_clients")
+                .delete()
+                .eq("id", client_id)
                 .eq("user_id", user_id)
                 .execute()
             )

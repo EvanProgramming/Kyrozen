@@ -56,12 +56,18 @@ class Task:
         task_id: str | None = None,
         status: str = "pending",
         project_id: str | None = None,
+        mode: str | None = None,
+        requires_local_client: bool = False,
+        assigned_client_id: str | None = None,
     ) -> None:
         self.id = task_id or f"task_{uuid.uuid4().hex[:8]}"
         self.title = title
         self.description = description
         self.status = status
         self.project_id = project_id
+        self.mode = mode
+        self.requires_local_client = requires_local_client
+        self.assigned_client_id = assigned_client_id
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.updated_at = self.created_at
         self.steps: list[TaskStep] = []
@@ -97,6 +103,9 @@ class Task:
             "description": self.description,
             "status": self.status,
             "project_id": self.project_id,
+            "mode": self.mode,
+            "requires_local_client": self.requires_local_client,
+            "assigned_client_id": self.assigned_client_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "steps": [s.to_dict() for s in self.steps],
@@ -112,6 +121,9 @@ class Task:
             task_id=data.get("id"),
             status=data.get("status", "pending"),
             project_id=data.get("project_id"),
+            mode=data.get("mode"),
+            requires_local_client=data.get("requires_local_client", False),
+            assigned_client_id=data.get("assigned_client_id"),
         )
         task.created_at = data.get("created_at", task.created_at)
         task.updated_at = data.get("updated_at", task.updated_at)
@@ -147,8 +159,18 @@ class TaskManager:
         title: str,
         description: str = "",
         project_id: str | None = None,
+        mode: str | None = None,
+        requires_local_client: bool = False,
+        assigned_client_id: str | None = None,
     ) -> Task:
-        task = Task(title=title, description=description, project_id=project_id)
+        task = Task(
+            title=title,
+            description=description,
+            project_id=project_id,
+            mode=mode,
+            requires_local_client=requires_local_client,
+            assigned_client_id=assigned_client_id,
+        )
         with self._lock:
             self._tasks[task.id] = task
             self._save(task)

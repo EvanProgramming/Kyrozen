@@ -60,9 +60,21 @@ contextBridge.exposeInMainWorld('kyrozen', {
   onUpdateStatus: (callback: (status: { status: string; message: string }) => void) =>
     ipcRenderer.on('kyrozen:update-status', (_event, status) => callback(status)),
 
+  onGitHubStatus: (callback: (status: { connected: boolean; scope?: string }) => void) => {
+    const handler = (_event: unknown, status: { connected: boolean; scope?: string }) => callback(status);
+    ipcRenderer.on('kyrozen:github-status', handler);
+    return () => ipcRenderer.removeListener('kyrozen:github-status', handler);
+  },
+
   ensureHardwareToolchain: () => ipcRenderer.invoke('kyrozen:ensure-hardware-toolchain'),
   installCommonCores: () => ipcRenderer.invoke('kyrozen:install-common-cores'),
   connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),
+  getGitHubStatus: () => ipcRenderer.invoke('kyrozen:get-github-status'),
+  initGitRepo: (remoteUrl?: string) => ipcRenderer.invoke('kyrozen:init-git-repo', remoteUrl),
+  getGitStatus: () => ipcRenderer.invoke('kyrozen:get-git-status'),
+  commitAndPush: (message: string) => ipcRenderer.invoke('kyrozen:commit-and-push', message),
+  setAutoCommit: (enabled: boolean) => ipcRenderer.invoke('kyrozen:set-auto-commit', enabled),
+  getAutoCommit: () => ipcRenderer.invoke('kyrozen:get-auto-commit'),
 
   getOnboardingStatus: () => ipcRenderer.invoke('kyrozen:get-onboarding-status'),
   saveOnboardingLanguage: (language: 'zh' | 'en') => ipcRenderer.invoke('kyrozen:save-onboarding-language', language),

@@ -5,6 +5,7 @@ import { OnboardingPage } from './pages/OnboardingPage';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { EditorPanel } from './components/EditorPanel';
 import { FileTree } from './components/FileTree';
+import { GitPanel } from './components/GitPanel';
 import { PreviewPanel } from './components/PreviewPanel';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -281,6 +282,9 @@ function App() {
             />
           )}
         </main>
+        <div className="w-72 flex-shrink-0 h-full border-l border-slate-700 bg-slate-900">
+          <GitPanel />
+        </div>
       </div>
     </div>
   );

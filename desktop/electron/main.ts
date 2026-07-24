@@ -14,7 +14,20 @@ import {
   setPythonExe,
 } from './hardwareToolchain';
 import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
-import { checkForUpdates, initAutoUpdater, setUpdateApiBaseUrl, stopUpdateChecks } from './updater';
+import {
+  checkForUpdates,
+  initAutoUpdater,
+  setUpdateApiBaseUrl,
+  stopUpdateChecks,
+} from './updater';
+import {
+  commitAndPush,
+  getAutoCommit,
+  getGitStatus,
+  initGitRepo,
+  maybeAutoCommit,
+  setAutoCommit,
+} from './gitOperations';
 
 interface WorkspaceMap {
   [projectId: string]: string;
@@ -64,6 +77,8 @@ const PYTHON_AGENT_MAX_RESTARTS = 5;
 let pythonAgentStopping = false;
 let isQuitting = false;
 let fullTrustMode = false;
+let githubAccessToken: string | null = null;
+let githubTokenScope: string | null = null;
 
 // Ensure only one instance of the desktop client is running. On Windows/Linux,
 // opening a kyrozen:// URL while the app is already running will be forwarded
@@ -80,10 +95,10 @@ app.on('second-instance', (_event, argv) => {
     logInfo(`Received protocol URL from second instance: ${url}`);
     if (mainWindow.webContents.isLoading()) {
       mainWindow.webContents.once('did-finish-load', () => {
-        mainWindow?.webContents.send('kyrozen:protocol-url', url);
+        handleProtocolUrl(url);
       });
     } else {
-      mainWindow.webContents.send('kyrozen:protocol-url', url);
+      handleProtocolUrl(url);
     }
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
@@ -93,6 +108,7 @@ let pendingCloudMessages: string[] = [];
 let accessToken: string | null = null;
 let projectFileWatchers = new Map<string, FSWatcher>();
 let pendingFileChanges = new Map<string, NodeJS.Timeout>();
+let pendingAutoCommit = new Map<string, NodeJS.Timeout>();
 let pythonRuntimePath: string | null = null;
 let pythonRuntimeReady = false;
 
@@ -388,6 +404,39 @@ function getProtocolUrl() {
   return args.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`)) || null;
 }
 
+function handleProtocolUrl(url: string) {
+  logInfo(`Handling protocol URL: ${url}`);
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'open') {
+      const token = parsed.searchParams.get('token');
+      if (token && mainWindow) {
+        mainWindow.webContents.once('did-finish-load', () => {
+          mainWindow?.webContents.send('kyrozen:protocol-url', url);
+        });
+      }
+    } else if (parsed.hostname === 'auth' && parsed.pathname === '/github') {
+      const token = parsed.searchParams.get('token');
+      const scope = parsed.searchParams.get('scope');
+      if (token) {
+        githubAccessToken = token;
+        githubTokenScope = scope;
+        sendGitHubStatus();
+        sendChatMessage({ role: 'system', content: 'GitHub 授权已成功，可在 Git 面板中提交代码。' });
+      }
+    }
+  } catch (err: any) {
+    logError(`Failed to handle protocol URL: ${err.message || err}`);
+  }
+}
+
+function sendGitHubStatus() {
+  mainWindow?.webContents.send('kyrozen:github-status', {
+    connected: !!githubAccessToken,
+    scope: githubTokenScope,
+  });
+}
+
 app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
 
 app.whenReady().then(async () => {
@@ -401,7 +450,7 @@ app.whenReady().then(async () => {
   logInfo(`Protocol URL: ${protocolUrl || 'none'}`);
   if (protocolUrl && mainWindow) {
     mainWindow.webContents.once('did-finish-load', () => {
-      mainWindow?.webContents.send('kyrozen:protocol-url', protocolUrl);
+      handleProtocolUrl(protocolUrl);
     });
   } else if (onboardingConfig.completed) {
     // Onboarding already completed: try to resume the previous session from encrypted storage.
@@ -428,10 +477,10 @@ app.whenReady().then(async () => {
 app.on('open-url', (_event, url) => {
   if (mainWindow?.webContents.isLoading()) {
     mainWindow.webContents.once('did-finish-load', () => {
-      mainWindow?.webContents.send('kyrozen:protocol-url', url);
+      handleProtocolUrl(url);
     });
   } else {
-    mainWindow?.webContents.send('kyrozen:protocol-url', url);
+    handleProtocolUrl(url);
   }
 });
 
@@ -582,6 +631,17 @@ function startWatchingProjectFiles(projectId: string, root: string): void {
             pendingFileChanges.delete(key);
             void uploadFileSummary(projectId, absolute, String(eventType));
           }, 1500),
+        );
+
+        // Debounce auto-commit for the whole project.
+        const existingAutoCommit = pendingAutoCommit.get(projectId);
+        if (existingAutoCommit) clearTimeout(existingAutoCommit);
+        pendingAutoCommit.set(
+          projectId,
+          setTimeout(() => {
+            pendingAutoCommit.delete(projectId);
+            void maybeAutoCommit(root, githubAccessToken);
+          }, 10000),
         );
       },
     );
@@ -829,6 +889,62 @@ ipcMain.handle('kyrozen:connect-github', async () => {
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
   }
+});
+
+function getCurrentWorkspaceRoot(): string | null {
+  if (!currentProjectId) return null;
+  return workspaceMap[currentProjectId] || null;
+}
+
+ipcMain.handle('kyrozen:get-github-status', async () => {
+  return {
+    connected: !!githubAccessToken,
+    scope: githubTokenScope,
+  };
+});
+
+ipcMain.handle('kyrozen:init-git-repo', async (_event, remoteUrl?: string) => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { success: false, error: '未选择项目工作区' };
+  }
+  const result = await initGitRepo(root, remoteUrl);
+  return result;
+});
+
+ipcMain.handle('kyrozen:get-git-status', async () => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { success: false, isRepo: false, error: '未选择项目工作区' };
+  }
+  return getGitStatus(root);
+});
+
+ipcMain.handle('kyrozen:commit-and-push', async (_event, message: string) => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { success: false, error: '未选择项目工作区' };
+  }
+  if (!githubAccessToken) {
+    return { success: false, error: '未绑定 GitHub 账号' };
+  }
+  return commitAndPush(root, githubAccessToken, message);
+});
+
+ipcMain.handle('kyrozen:set-auto-commit', async (_event, enabled: boolean) => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { success: false, error: '未选择项目工作区' };
+  }
+  return setAutoCommit(root, enabled);
+});
+
+ipcMain.handle('kyrozen:get-auto-commit', async () => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { enabled: false };
+  }
+  return getAutoCommit(root);
 });
 
 ipcMain.handle('kyrozen:get-onboarding-status', async () => {

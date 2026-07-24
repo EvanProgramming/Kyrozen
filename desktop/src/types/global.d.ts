@@ -53,6 +53,22 @@ export interface KyrozenAPI {
   }>;
   installCommonCores: () => Promise<{ success: boolean; error?: string }>;
   connectGitHub: () => Promise<{ success: boolean; error?: string }>;
+  getGitHubStatus: () => Promise<{ connected: boolean; scope?: string }>;
+  initGitRepo: (remoteUrl?: string) => Promise<{ success: boolean; error?: string }>;
+  getGitStatus: () => Promise<{
+    success: boolean;
+    isRepo: boolean;
+    branch?: string;
+    ahead?: number;
+    behind?: number;
+    modified?: string[];
+    untracked?: string[];
+    error?: string;
+  }>;
+  commitAndPush: (message: string) => Promise<{ success: boolean; error?: string }>;
+  setAutoCommit: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  getAutoCommit: () => Promise<{ enabled: boolean }>;
+  onGitHubStatus: (callback: (status: { connected: boolean; scope?: string }) => void) => () => void;
 
   getOnboardingStatus: () => Promise<{ completed: boolean; language: 'zh' | 'en'; completedAt?: string }>;
   saveOnboardingLanguage: (language: 'zh' | 'en') => Promise<{ language: 'zh' | 'en' }>;

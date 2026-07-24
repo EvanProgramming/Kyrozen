@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from supabase import create_client
 
@@ -1101,15 +1101,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         scope = token_data.get("scope", "")
         is_desktop = state_data.get("desktop", False)
         if is_desktop:
-            return HTMLResponse(
-                content=(
-                    "<html><body style='font-family:system-ui,sans-serif;text-align:center;padding:48px;'>"
-                    "<h1>GitHub 授权成功</h1>"
-                    "<p>请回到 Kyrozen 桌面客户端继续操作。</p>"
-                    "<script>setTimeout(() => window.close(), 3000);</script>"
-                    "</body></html>"
-                )
-            )
+            # Redirect the desktop callback back to the kyrozen:// URL scheme so
+            # the client can capture the GitHub token without further polling.
+            redirect_url = f"kyrozen://auth/github?token={access_token}&scope={scope}"
+            return RedirectResponse(url=redirect_url)
         return {
             "success": True,
             "scope": scope,

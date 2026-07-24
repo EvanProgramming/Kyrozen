@@ -172,7 +172,12 @@ async function getWorkspaceRoot(projectId: string | null): Promise<string | null
   return pickWorkspaceRoot(projectId);
 }
 
+let currentConnectionState: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
+let currentConnectionMessage = '未连接';
+
 function updateConnection(state: 'disconnected' | 'connecting' | 'connected' | 'error', message: string) {
+  currentConnectionState = state;
+  currentConnectionMessage = message;
   logInfo(`Connection state: ${state} - ${message}`);
   mainWindow?.webContents.send('kyrozen:connection-change', state, message);
 }
@@ -325,7 +330,11 @@ app.whenReady().then(async () => {
     if (credentials) {
       serverUrl = credentials.serverUrl;
       wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
+      accessToken = credentials.accessToken;
       connectWebSocket(credentials.wsToken);
+      mainWindow?.webContents.once('did-finish-load', () => {
+        mainWindow?.webContents.send('kyrozen:session-resumed', credentials.wsToken, credentials.serverUrl);
+      });
     }
   }
 
@@ -641,6 +650,9 @@ ipcMain.on('kyrozen:request-initial-token', () => {
   if (url) {
     mainWindow?.webContents.send('kyrozen:protocol-url', url);
   }
+  // Send the current connection state in case the renderer missed earlier events
+  // (for example, when resuming a saved session before the window finished loading).
+  mainWindow?.webContents.send('kyrozen:connection-change', currentConnectionState, currentConnectionMessage);
 });
 
 ipcMain.on('kyrozen:send-chat', (_event, message: string) => {

@@ -1,5 +1,8 @@
 import http from 'http';
 import { AddressInfo } from 'net';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
 
 export interface ClipPayload {
   url: string;
@@ -20,6 +23,7 @@ export interface TestReportPayload {
 export interface ExtensionServerCallbacks {
   onClip: (payload: ClipPayload) => void;
   onTestReport: (payload: TestReportPayload) => void;
+  onNativeMessage?: (message: Record<string, unknown>) => void;
 }
 
 function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
@@ -105,6 +109,15 @@ export function createExtensionServer(callbacks: ExtensionServerCallbacks): http
         return;
       }
 
+      if (pathname === '/api/native-message') {
+        const msg = body as Record<string, unknown>;
+        if (callbacks.onNativeMessage) {
+          callbacks.onNativeMessage(msg);
+        }
+        sendJson(res, 200, { success: true, received: msg.type || 'unknown' });
+        return;
+      }
+
       sendJson(res, 404, { error: 'Not found' });
     } catch (err: any) {
       sendJson(res, 400, { error: err.message || 'Bad request' });
@@ -112,6 +125,25 @@ export function createExtensionServer(callbacks: ExtensionServerCallbacks): http
   });
 
   return server;
+}
+
+function getNativeMessagingPortFilePath(): string {
+  const platform = os.platform();
+  let baseDir: string;
+  if (platform === 'darwin') {
+    baseDir = path.join(os.homedir(), 'Library', 'Application Support', 'Kyrozen');
+  } else if (platform === 'win32') {
+    baseDir = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Kyrozen');
+  } else {
+    baseDir = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'kyrozen');
+  }
+  return path.join(baseDir, 'extension-server-port.json');
+}
+
+async function writeExtensionServerPort(port: number): Promise<void> {
+  const filePath = getNativeMessagingPortFilePath();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify({ port, updated_at: new Date().toISOString() }, null, 2));
 }
 
 export function startExtensionServer(
@@ -127,8 +159,14 @@ export function startExtensionServer(
       }
       reject(err);
     });
-    server.on('listening', () => {
+    server.on('listening', async () => {
       const address = server.address() as AddressInfo;
+      try {
+        await writeExtensionServerPort(address.port);
+      } catch (writeErr) {
+        // Port file is best-effort; the host can fall back to the default port.
+        console.error('Failed to write extension server port file:', writeErr);
+      }
       resolve({ server, port: address.port });
     });
     server.listen(preferredPort, '127.0.0.1');

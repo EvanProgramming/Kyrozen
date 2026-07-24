@@ -44,6 +44,24 @@ export default defineConfig({
           },
         },
       },
+      {
+        entry: 'electron/nativeMessagingHost.ts',
+        vite: {
+          build: {
+            sourcemap: false,
+            minify: process.env.NODE_ENV === 'production',
+            outDir: 'dist-electron/native-messaging-host',
+            lib: {
+              entry: 'electron/nativeMessagingHost.ts',
+              formats: ['cjs'],
+              fileName: () => 'nativeMessagingHost.js',
+            },
+            rollupOptions: {
+              external: [],
+            },
+          },
+        },
+      },
     ]),
     renderer(),
   ],

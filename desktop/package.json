@@ -49,6 +49,12 @@
       "dist/**/*",
       "dist-electron/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "dist-electron/native-messaging-host",
+        "to": "native-messaging-host"
+      }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [

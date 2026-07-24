@@ -36,6 +36,7 @@ class CloudProxyModelProvider(ModelInterface):
         super().__init__(model=model)
         self._send_message = send_message
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._pending_chunks: dict[str, list[str]] = {}
         self._lock = threading.Lock()
 
     @property
@@ -103,19 +104,26 @@ class CloudProxyModelProvider(ModelInterface):
         loop = future.get_loop()
 
         if message.get("type") == "model_error" or "error" in message:
+            with self._lock:
+                self._pending_chunks.pop(request_id, None)
             error = RuntimeError(message.get("error", "Unknown model error"))
             loop.call_soon_threadsafe(future.set_exception, error)
             return
 
         if message.get("finished"):
-            content = message.get("full_content", "")
+            with self._lock:
+                chunks = self._pending_chunks.pop(request_id, [])
+            content = message.get("full_content") or "".join(chunks)
             usage = message.get("usage")
             loop.call_soon_threadsafe(future.set_result, {"content": content, "usage": usage})
             return
 
-        # For true streaming, accumulate chunks here if needed. The server's
-        # current implementation sends the full content in the finished message,
-        # so intermediate chunks are ignored for the synchronous chat() path.
+        # Accumulate streaming chunks so the final response can fall back to the
+        # assembled text when the server does not include full_content.
+        chunk = message.get("chunk", "")
+        if isinstance(chunk, str) and chunk:
+            with self._lock:
+                self._pending_chunks.setdefault(request_id, []).append(chunk)
 
     def chat_stream(
         self,

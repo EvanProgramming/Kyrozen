@@ -19,6 +19,7 @@ import {
   stopHardwareToolchainAutoUpdate,
 } from './hardwareToolchain';
 import { startExtensionServer, ClipPayload, TestReportPayload } from './extensionServer';
+import { registerNativeMessagingHost } from './nativeMessagingRegistry';
 import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
 import {
   ensureProjectVenv,
@@ -123,9 +124,17 @@ let pendingAutoCommit = new Map<string, NodeJS.Timeout>();
 let pythonRuntimePath: string | null = null;
 let pythonRuntimeReady = false;
 let extensionServer: http.Server | null = null;
+let taskTimeoutTimer: NodeJS.Timeout | null = null;
+let lastTaskPayload: Record<string, unknown> | null = null;
+let taskRetryCount = 0;
+const MAX_TASK_RETRIES = 2;
 
 const PROTOCOL_SCHEME = 'kyrozen';
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const TASK_TIMEOUT_MS = 10 * 60 * 1000;
+const DEPENDENCY_TIMEOUT_MS = 5 * 60 * 1000;
+const MODEL_TIMEOUT_MS = 2 * 60 * 1000;
+const HARDWARE_TIMEOUT_MS = 15 * 60 * 1000;
 
 const WORKSPACE_CONFIG_PATH = path.join(app.getPath('userData'), 'workspaces.json');
 const TOKEN_STORE_PATH = path.join(app.getPath('userData'), 'credentials.json');
@@ -227,6 +236,29 @@ function showNotification(title: string, body: string) {
   if (Notification.isSupported()) {
     new Notification({ title, body }).show();
   }
+}
+
+function isLocalhostUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeServerUrl(url: string): string {
+  const clean = url.replace(/\/$/, '');
+  if (isLocalhostUrl(clean)) return clean;
+  // Enforce TLS/WSS for non-local servers.
+  return clean.replace(/^http:\/\//, 'https://');
+}
+
+function getWebSocketUrlFromHttp(httpUrl: string): string {
+  if (isLocalhostUrl(httpUrl)) {
+    return httpUrl.replace(/^http/, 'ws') + '/ws/desktop';
+  }
+  return httpUrl.replace(/^http/, 'wss') + '/ws/desktop';
 }
 
 async function pickWorkspaceRoot(projectId: string): Promise<string | null> {
@@ -475,9 +507,35 @@ app.whenReady().then(async () => {
           content: `本地测试页面报告：${payload.url}\n加载时间：${payload.metrics?.loadTime?.toFixed(0) || '未知'}ms\nDOM 节点：${payload.metrics?.domNodes || '未知'}\n错误：\n${errorText}`,
         });
       },
+      onNativeMessage: (message) => {
+        logInfo(`Native message from extension: ${message.type || 'unknown'}`);
+        if (message.type === 'clip') {
+          const summary = [message.title, message.url, message.selection, message.bodyText]
+            .filter((v) => typeof v === 'string')
+            .join('\n\n');
+          sendChatMessage({ role: 'user', content: `从浏览器扩展抓取的网页内容：\n\n${summary}` });
+        } else if (message.type === 'test-report') {
+          const errors = Array.isArray(message.errors) ? message.errors : [];
+          const errorText = errors.length
+            ? errors.map((e: any) => `- ${e.message}${e.source ? ` (${e.source}:${e.line})` : ''}`).join('\n')
+            : '无错误';
+          sendChatMessage({
+            role: 'system',
+            content: `本地测试页面报告：${message.url}\n错误：\n${errorText}`,
+          });
+        } else {
+          sendChatMessage({ role: 'system', content: `收到浏览器扩展消息：${JSON.stringify(message)}` });
+        }
+      },
     });
     extensionServer = ext.server;
     logInfo(`Extension server listening on port ${ext.port}`);
+
+    const extensionIds = (process.env.KYROZEN_EXTENSION_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (extensionIds.length) {
+      await registerNativeMessagingHost(extensionIds);
+      logInfo(`Registered native messaging host for extension IDs: ${extensionIds.join(', ')}`);
+    }
   } catch (err: any) {
     logError(`Failed to start extension server: ${err.message || err}`);
   }
@@ -492,9 +550,9 @@ app.whenReady().then(async () => {
     // Onboarding already completed: try to resume the previous session from encrypted storage.
     const credentials = await loadCredentials();
     if (credentials) {
-      serverUrl = credentials.serverUrl;
+      serverUrl = normalizeServerUrl(credentials.serverUrl);
       setUpdateApiBaseUrl(serverUrl);
-      wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
+      wsUrl = getWebSocketUrlFromHttp(serverUrl);
       accessToken = credentials.accessToken;
       connectWebSocket(credentials.wsToken);
       mainWindow?.webContents.once('did-finish-load', () => {
@@ -507,6 +565,18 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  process.on('uncaughtException', (err) => {
+    const summary = `Uncaught exception: ${err.message}\n${err.stack || ''}`;
+    logError(summary);
+    void promptAndUploadErrorReport(summary);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    const summary = reason instanceof Error ? `Unhandled rejection: ${reason.message}\n${reason.stack || ''}` : `Unhandled rejection: ${String(reason)}`;
+    logError(summary);
+    void promptAndUploadErrorReport(summary);
   });
 });
 
@@ -651,6 +721,14 @@ function shouldUploadFileSummary(relativePath: string): boolean {
   return false;
 }
 
+function sanitizeFileSnippet(snippet: string): string {
+  return snippet
+    .replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '<API_KEY>')
+    .replace(/\b([A-Za-z0-9_\-]{32,})\b/g, '<TOKEN>')
+    .replace(/(password|secret|token|key)\s*=\s*[^\s\n]+/gi, '$1=<REDACTED>')
+    .replace(/(https?:\/\/[^\s\"]+:[^@\s\"]+@)/g, 'https://<CREDENTIALS>@');
+}
+
 async function uploadFileSummary(
   projectId: string,
   absolutePath: string,
@@ -668,7 +746,8 @@ async function uploadFileSummary(
     if (!stats.isFile()) return;
     const content = await fs.readFile(absolutePath, 'utf-8');
     summary = `File ${event}: ${path.relative(root, absolutePath)}`;
-    snippet = content.length > 4000 ? content.slice(0, 4000) + '\n...' : content;
+    const rawSnippet = content.length > 4000 ? content.slice(0, 4000) + '\n...' : content;
+    snippet = sanitizeFileSnippet(rawSnippet);
   } catch {
     event = 'deleted';
     summary = `File deleted: ${path.relative(root, absolutePath)}`;
@@ -736,9 +815,9 @@ function stopWatchingProjectFiles(projectId: string): void {
 ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, url: string) => {
   logInfo(`Login requested for ${email} at ${url}`);
   try {
-    serverUrl = url.replace(/\/$/, '');
+    serverUrl = normalizeServerUrl(url);
     setUpdateApiBaseUrl(serverUrl);
-    wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
+    wsUrl = getWebSocketUrlFromHttp(serverUrl);
     logInfo(`Signing in via ${serverUrl}`);
     const data = await apiPost('/api/auth/signin', { email, password });
     if (!data.access_token) {
@@ -792,9 +871,9 @@ ipcMain.handle('kyrozen:poll-pairing', async (_event, url: string, code: string)
     }
     const data = await response.json();
     if (data.ready && data.ws_token) {
-      serverUrl = baseUrl;
+      serverUrl = normalizeServerUrl(baseUrl);
       setUpdateApiBaseUrl(serverUrl);
-      wsUrl = serverUrl.replace(/^http/, 'ws') + '/ws/desktop';
+      wsUrl = getWebSocketUrlFromHttp(serverUrl);
       await saveCredentials(data.ws_token);
       connectWebSocket(data.ws_token);
       return { success: true, wsToken: data.ws_token };
@@ -828,6 +907,14 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
   }
 });
 
+async function ensureWorkspaceStructure(root: string): Promise<void> {
+  await fs.mkdir(path.join(root, 'software'), { recursive: true });
+  await fs.mkdir(path.join(root, 'hardware'), { recursive: true });
+  await fs.mkdir(path.join(root, 'documents'), { recursive: true });
+  await fs.mkdir(path.join(root, 'logs'), { recursive: true });
+  await fs.mkdir(path.join(root, '.kyrozen', 'context'), { recursive: true });
+}
+
 ipcMain.handle('kyrozen:set-current-project', async (_event, projectId: string) => {
   if (currentProjectId && currentProjectId !== projectId) {
     stopWatchingProjectFiles(currentProjectId);
@@ -835,6 +922,7 @@ ipcMain.handle('kyrozen:set-current-project', async (_event, projectId: string) 
   currentProjectId = projectId;
   const root = await getWorkspaceRoot(projectId);
   if (root) {
+    await ensureWorkspaceStructure(root);
     sendChatMessage({ role: 'system', content: `项目工作目录：${root}` });
     await syncProjectArtifacts(projectId);
     startWatchingProjectFiles(projectId, root);
@@ -995,7 +1083,7 @@ ipcMain.handle('kyrozen:get-full-trust', () => {
   return { enabled: fullTrustMode };
 });
 
-ipcMain.handle('kyrozen:set-full-trust', (_event, enabled: boolean) => {
+ipcMain.handle('kyrozen:set-full-trust', async (_event, enabled: boolean) => {
   fullTrustMode = Boolean(enabled);
   logWarn(`Full-trust mode ${fullTrustMode ? 'enabled' : 'disabled'} by user`);
   mainWindow?.webContents.send('kyrozen:full-trust-change', { enabled: fullTrustMode });
@@ -1004,6 +1092,26 @@ ipcMain.handle('kyrozen:set-full-trust', (_event, enabled: boolean) => {
       '已开启完全信任模式',
       '本次会话内高危工具将自动执行，不再弹出确认对话框。'
     );
+    // Record a decision record so the cloud knows this project/user opted into full trust.
+    try {
+      await apiPost(
+        '/api/events',
+        {
+          event_type: 'desktop.decision_record',
+          project_id: currentProjectId,
+          payload: {
+            decision: 'enable_full_trust',
+            source: 'desktop',
+            project_id: currentProjectId,
+            session_id: accessToken ? accessToken.slice(-16) : null,
+          },
+          session_id: accessToken ? accessToken.slice(-16) : undefined,
+        },
+        true,
+      );
+    } catch (err: any) {
+      logError(`Failed to record full-trust decision: ${err.message || err}`);
+    }
   }
   return { enabled: fullTrustMode };
 });
@@ -1275,6 +1383,17 @@ function connectWebSocket(token: string) {
       pythonAgentRestartCount = 0;
       startHeartbeat();
       flushPendingCloudMessages();
+      if (currentTaskId && currentTaskRunning) {
+        sendToCloud({
+          type: 'task_step',
+          task_id: currentTaskId,
+          step: {
+            description: 'WebSocket 已重连，继续执行任务',
+            status: 'running',
+            metadata: { action: 'reconnected_during_task' },
+          },
+        });
+      }
       await startPythonAgent();
     });
 
@@ -1338,6 +1457,87 @@ function stopHeartbeat() {
   }
 }
 
+function getTaskTimeoutForPayload(payload: Record<string, unknown>): number {
+  const params = (payload.params as Record<string, unknown>) || {};
+  const mode = String(params.mode || '').toLowerCase();
+  const message = String(params.message || '').toLowerCase();
+  if (mode === 'hardware' || /\b(arduino|esp32|platformio|hardware|pio)\b/.test(message)) {
+    return HARDWARE_TIMEOUT_MS;
+  }
+  if (/\b(install|npm|yarn|pnpm|pip|依赖)\b/.test(message)) {
+    return DEPENDENCY_TIMEOUT_MS;
+  }
+  if (/\b(model|llm|chat|生成|思考|推理)\b/.test(message)) {
+    return MODEL_TIMEOUT_MS;
+  }
+  return TASK_TIMEOUT_MS;
+}
+
+async function restartPythonAgentAndRetryTask() {
+  logInfo(`Retrying task ${currentTaskId} (attempt ${taskRetryCount}/${MAX_TASK_RETRIES})`);
+  stopPythonAgent();
+  clearTaskTimeout();
+  await startPythonAgent();
+  if (lastTaskPayload && currentTaskId && currentTaskRunning) {
+    startTaskTimeout(getTaskTimeoutForPayload(lastTaskPayload));
+    sendToPythonAgent(lastTaskPayload);
+    sendToCloud({
+      type: 'task_step',
+      task_id: currentTaskId,
+      step: {
+        description: `任务超时后自动重做 (尝试 ${taskRetryCount}/${MAX_TASK_RETRIES})`,
+        status: 'running',
+        metadata: { action: 'retry_after_timeout' },
+      },
+    });
+  }
+}
+
+async function handleTaskTimeout() {
+  if (!currentTaskId || !currentTaskRunning) return;
+  logWarn(`Task ${currentTaskId} timed out`);
+  sendToPythonAgent({
+    jsonrpc: '2.0',
+    method: 'cancel_task',
+    params: { task_id: currentTaskId },
+  });
+
+  if (taskRetryCount < MAX_TASK_RETRIES) {
+    taskRetryCount += 1;
+    sendChatMessage({
+      role: 'system',
+      content: `任务 ${currentTaskId} 执行超时，正在尝试重做 (${taskRetryCount}/${MAX_TASK_RETRIES})...`,
+    });
+    await restartPythonAgentAndRetryTask();
+    return;
+  }
+
+  currentTaskRunning = false;
+  const previousTaskId = currentTaskId;
+  taskRetryCount = 0;
+  sendChatMessage({ role: 'system', content: `任务 ${previousTaskId} 执行超时，已自动终止。` });
+  sendToCloud({
+    type: 'task_result',
+    task_id: previousTaskId,
+    status: 'failed',
+    result: { error: 'Task timed out after retries' },
+  });
+}
+
+function startTaskTimeout(timeoutMs = TASK_TIMEOUT_MS) {
+  clearTaskTimeout();
+  taskTimeoutTimer = setTimeout(() => {
+    void handleTaskTimeout();
+  }, timeoutMs);
+}
+
+function clearTaskTimeout() {
+  if (taskTimeoutTimer) {
+    clearTimeout(taskTimeoutTimer);
+    taskTimeoutTimer = null;
+  }
+}
+
 function scheduleReconnect(token: string) {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
@@ -1354,6 +1554,7 @@ async function handleServerMessage(message: Record<string, unknown>) {
   if (type === 'assign_task') {
     currentTaskId = String(message.task_id);
     currentTaskRunning = true;
+    taskRetryCount = 0;
     const payload = {
       jsonrpc: '2.0',
       id: Date.now(),
@@ -1366,6 +1567,8 @@ async function handleServerMessage(message: Record<string, unknown>) {
         workspace_root: await chooseWorkspaceRoot(String(message.project_id || currentProjectId)),
       },
     };
+    lastTaskPayload = payload;
+    startTaskTimeout(getTaskTimeoutForPayload(payload));
     sendToPythonAgent(payload);
     wsClient?.send(
       JSON.stringify({
@@ -1377,6 +1580,53 @@ async function handleServerMessage(message: Record<string, unknown>) {
 
   if (type === 'model_stream_chunk' || type === 'model_error') {
     sendToPythonAgent({ jsonrpc: '2.0', method: 'cloud_model_response', params: message });
+  }
+
+  if (type === 'cleanup_account') {
+    const userId = String(message.user_id || '');
+    logWarn(`Received account cleanup instruction for user ${userId}`);
+    await handleAccountCleanup(userId);
+  }
+
+  if (type === 'connection_resumed') {
+    if (currentTaskId && currentTaskRunning) {
+      sendToCloud({
+        type: 'task_step',
+        task_id: currentTaskId,
+        step: {
+          description: 'WebSocket 重连成功，任务继续执行中',
+          status: 'running',
+          metadata: { action: 'connection_resumed' },
+        },
+      });
+    }
+  }
+}
+
+async function handleAccountCleanup(userId: string): Promise<void> {
+  if (!userId) return;
+  sendChatMessage({ role: 'system', content: '收到账户删除指令，正在清理本地项目数据...' });
+  try {
+    for (const [projectId, root] of Object.entries(workspaceMap)) {
+      try {
+        await fs.rm(root, { recursive: true, force: true });
+        logInfo(`Cleaned up workspace for project ${projectId}`);
+      } catch (err: any) {
+        logError(`Failed to cleanup workspace ${root}: ${err.message || err}`);
+      }
+    }
+    workspaceMap = {};
+    await saveWorkspaceMap();
+    await clearCredentials();
+    sendChatMessage({ role: 'system', content: '本地项目数据已清理，客户端将在退出后关闭。' });
+    showNotification('Kyrozen', '账户已删除，本地数据已清理');
+    setTimeout(() => {
+      isQuitting = true;
+      app.quit();
+    }, 3000);
+  } catch (err: any) {
+    logError(`Account cleanup failed: ${err.message || err}`);
+    sendChatMessage({ role: 'system', content: `账户清理失败: ${err.message || err}` });
   }
 }
 
@@ -1575,6 +1825,8 @@ function handlePythonAgentLine(line: string) {
       });
     } else if (message.method === 'task_result') {
       currentTaskRunning = false;
+      taskRetryCount = 0;
+      clearTaskTimeout();
       sendToCloud({
         type: 'task_result',
         task_id: message.params.task_id,
@@ -1653,8 +1905,33 @@ const DANGEROUS_PATTERNS = [
   /wget\s+.*\|\s*(bash|sh|zsh)\b/,
 ];
 
+// Static list of known malicious or compromised packages for MVP.
+// In production this should be replaced with a real-time security feed.
+const KNOWN_MALICIOUS_PACKAGES = new Set([
+  'event-stream',
+  'flatmap-stream',
+  'node-ipc',
+  'colors',
+  'faker',
+  'rc',
+  'left-pad',
+  'ua-parser-js',
+  'coa',
+]);
+
 function isDangerousCommand(command: string): boolean {
   return DANGEROUS_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+function findMaliciousPackage(command: string): string | null {
+  const packages = extractPackages(command);
+  for (const pkg of packages) {
+    const normalized = pkg.toLowerCase().replace(/^@[^/]+\//, '');
+    if (KNOWN_MALICIOUS_PACKAGES.has(normalized)) {
+      return pkg;
+    }
+  }
+  return null;
 }
 
 function extractPackages(command: string): string[] {
@@ -1697,6 +1974,33 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
   if (String(params.tool) === 'terminal' && String(params.action) === 'execute' && isDangerousCommand(command)) {
     const reason = '检测到高危命令模式，已被客户端自动拒绝。';
     logError(`Rejected dangerous command: ${command}`);
+    await logAuditEvent({
+      taskId: String(params.task_id || ''),
+      tool: String(params.tool || ''),
+      action: String(params.action || ''),
+      parameters: (params.parameters as Record<string, unknown>) || {},
+      confirmed: false,
+      fullTrust: fullTrustMode,
+    });
+    sendToPythonAgent({
+      jsonrpc: '2.0',
+      method: 'confirmation_response',
+      params: {
+        confirmation_id: params.confirmation_id,
+        confirmed: false,
+        trust_for_session: false,
+        task_id: params.task_id,
+        error: reason,
+      },
+    });
+    sendChatMessage({ role: 'system', content: reason });
+    return;
+  }
+
+  const maliciousPackage = String(params.tool) === 'terminal' && String(params.action) === 'execute' ? findMaliciousPackage(command) : null;
+  if (maliciousPackage) {
+    const reason = `检测到已知恶意或风险依赖包 ${maliciousPackage}，安装已被阻断。`;
+    logError(`Blocked malicious package installation: ${maliciousPackage}`);
     await logAuditEvent({
       taskId: String(params.task_id || ''),
       tool: String(params.tool || ''),
@@ -1774,4 +2078,70 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
       task_id: params.task_id,
     },
   });
+}
+
+function sanitizeLogForUpload(log: string): string {
+  return log
+    .replace(/\b[A-Za-z0-9_\-]{32,}\b/g, '<TOKEN>')
+    .replace(/ws_[A-Za-z0-9_\-]+/g, '<WS_TOKEN>')
+    .replace(/\/Users\/[^/\s]+/g, '<HOME>')
+    .replace(/\/home\/[^/\s]+/g, '<HOME>')
+    .replace(/C:\\\\Users\\\\[^\\\\\s]+/g, '<HOME>')
+    .replace(/eyJ[A-Za-z0-9_\-]*\.eyJ[A-Za-z0-9_\-]*\.[A-Za-z0-9_\-]*/g, '<JWT>');
+}
+
+async function uploadErrorReport(errorSummary: string): Promise<void> {
+  if (!accessToken) {
+    sendChatMessage({ role: 'system', content: '未登录，无法上传错误报告。' });
+    return;
+  }
+  try {
+    let logContent = '';
+    try {
+      logContent = await fs.readFile(LOG_FILE, 'utf-8');
+    } catch {
+      logContent = 'No log file available';
+    }
+    await apiPost(
+      '/api/events',
+      {
+        event_type: 'desktop.error_report',
+        project_id: currentProjectId,
+        payload: {
+          summary: errorSummary,
+          log: sanitizeLogForUpload(logContent.slice(-50000)),
+          version: app.getVersion(),
+          platform: process.platform,
+          arch: process.arch,
+          source: 'desktop',
+        },
+        session_id: accessToken.slice(-16),
+      },
+      true,
+    );
+    sendChatMessage({ role: 'system', content: '错误报告已上传，我们将尽快排查问题。' });
+  } catch (err: any) {
+    logError(`Failed to upload error report: ${err.message || err}`);
+    sendChatMessage({ role: 'system', content: `错误报告上传失败: ${err.message || err}` });
+  }
+}
+
+async function promptAndUploadErrorReport(errorSummary: string) {
+  if (!mainWindow) {
+    // Defer until the main window is available.
+    setTimeout(() => void promptAndUploadErrorReport(errorSummary), 1000);
+    return;
+  }
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'error',
+    buttons: ['上传脱敏错误报告', '取消'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Kyrozen 遇到错误',
+    message: '客户端发生错误，是否上传脱敏日志帮助我们排查？',
+    detail: sanitizeLogForUpload(errorSummary.slice(0, 500)),
+  });
+  if (result.response === 0) {
+    await uploadErrorReport(errorSummary);
+  }
 }

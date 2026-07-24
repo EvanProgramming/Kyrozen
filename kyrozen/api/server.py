@@ -538,6 +538,7 @@ class CreateEventRequest(BaseModel):
     event_type: str = Field(..., min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
     session_id: str | None = None
+    project_id: str | None = None
 
 
 class CreateLearningRecordRequest(BaseModel):

@@ -20,6 +20,15 @@ contextBridge.exposeInMainWorld('kyrozen', {
   getWorkspaceRoot: (projectId: string) => ipcRenderer.invoke('kyrozen:get-workspace-root', projectId),
   getProjects: () => ipcRenderer.invoke('kyrozen:get-projects'),
 
+  getQuota: () => ipcRenderer.invoke('kyrozen:get-quota'),
+  getFullTrust: () => ipcRenderer.invoke('kyrozen:get-full-trust'),
+  setFullTrust: (enabled: boolean) => ipcRenderer.invoke('kyrozen:set-full-trust', enabled),
+
+  listFiles: (projectId: string) => ipcRenderer.invoke('kyrozen:list-files', projectId),
+  readFile: (projectId: string, relativePath: string) => ipcRenderer.invoke('kyrozen:read-file', projectId, relativePath),
+  saveFile: (projectId: string, relativePath: string, content: string) =>
+    ipcRenderer.invoke('kyrozen:save-file', projectId, relativePath, content),
+
   requestInitialToken: () => ipcRenderer.send('kyrozen:request-initial-token'),
 
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) =>
@@ -39,6 +48,12 @@ contextBridge.exposeInMainWorld('kyrozen', {
 
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) =>
     ipcRenderer.on('kyrozen:execution-plan', (_event, plan) => callback(plan)),
+
+  openPreview: (url: string, mode: 'embedded' | 'window' | 'external') =>
+    ipcRenderer.invoke('kyrozen:open-preview', url, mode),
+
+  onOpenPreviewUrl: (callback: (url: string) => void) =>
+    ipcRenderer.on('kyrozen:open-preview-url', (_event, url) => callback(url)),
 
   checkForUpdates: () => ipcRenderer.invoke('kyrozen:check-for-updates'),
 

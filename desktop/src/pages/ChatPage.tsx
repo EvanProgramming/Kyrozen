@@ -12,9 +12,40 @@ interface ExecutionPlan {
 
 interface ChatPageProps {
   projectId: string | null;
+  onOpenPreview?: (url: string) => void;
 }
 
-export function ChatPage({ projectId }: ChatPageProps) {
+const LOCAL_URL_RE = /(https?:\/\/localhost(:\d+)(\/[^\s<>\"]*))/g;
+
+function renderMessageContent(content: string, onOpenPreview?: (url: string) => void) {
+  if (!onOpenPreview) return content;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = LOCAL_URL_RE.exec(content)) !== null) {
+    const [fullUrl] = match;
+    if (match.index > lastIndex) {
+      parts.push(content.slice(lastIndex, match.index));
+    }
+    parts.push(
+      <button
+        key={match.index}
+        onClick={() => onOpenPreview(fullUrl)}
+        className="text-blue-300 hover:text-blue-200 underline"
+        title="在内置预览中打开"
+      >
+        {fullUrl}
+      </button>
+    );
+    lastIndex = match.index + fullUrl.length;
+  }
+  if (lastIndex < content.length) {
+    parts.push(content.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : content;
+}
+
+export function ChatPage({ projectId, onOpenPreview }: ChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: '已连接到 Kyrozen 云端。选择左侧项目后，可以让 AI 帮你生成代码、操作本地文件或启动预览。' },
   ]);
@@ -86,13 +117,13 @@ export function ChatPage({ projectId }: ChatPageProps) {
         {messages.map((msg, idx) => (
           <div
             key={idx}
-            className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
+            className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${
               msg.role === 'user'
                 ? 'bg-blue-600 text-white self-end ml-auto'
                 : 'bg-slate-700 text-slate-100'
             }`}
           >
-            {msg.content}
+            {renderMessageContent(msg.content, onOpenPreview)}
           </div>
         ))}
         <div ref={bottomRef} />

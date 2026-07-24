@@ -62,6 +62,33 @@ let tray: Tray | null = null;
 let pythonAgentRestartCount = 0;
 const PYTHON_AGENT_MAX_RESTARTS = 5;
 let pythonAgentStopping = false;
+let isQuitting = false;
+let fullTrustMode = false;
+
+// Ensure only one instance of the desktop client is running. On Windows/Linux,
+// opening a kyrozen:// URL while the app is already running will be forwarded
+// to the existing instance via the second-instance event.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+  process.exit(0);
+}
+
+app.on('second-instance', (_event, argv) => {
+  const url = argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
+  if (url && mainWindow) {
+    logInfo(`Received protocol URL from second instance: ${url}`);
+    if (mainWindow.webContents.isLoading()) {
+      mainWindow.webContents.once('did-finish-load', () => {
+        mainWindow?.webContents.send('kyrozen:protocol-url', url);
+      });
+    } else {
+      mainWindow.webContents.send('kyrozen:protocol-url', url);
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 let pendingCloudMessages: string[] = [];
 let accessToken: string | null = null;
 let projectFileWatchers = new Map<string, FSWatcher>();
@@ -227,6 +254,16 @@ function createWindow() {
     mainWindow.loadFile(prodUrl);
   }
 
+  // Close-to-tray behavior: clicking the window close button hides the window
+  // so the WebSocket connection and Python Agent keep running in the background.
+  // A real quit must come from the tray menu or Cmd+Q / Alt+F4.
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -278,6 +315,13 @@ function createTray() {
         }
       },
     },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
     { type: 'separator' },
     {
       label: '退出并清除登录状态',
@@ -285,6 +329,7 @@ function createTray() {
         await clearCredentials();
         disconnectWebSocket();
         stopPythonAgent();
+        isQuitting = true;
         app.quit();
       },
     },
@@ -351,6 +396,11 @@ app.on('open-url', (_event, url) => {
   } else {
     mainWindow?.webContents.send('kyrozen:protocol-url', url);
   }
+});
+
+app.on('before-quit', () => {
+  // Allow windows to close normally once a real quit sequence has started.
+  isQuitting = true;
 });
 
 app.on('window-all-closed', () => {
@@ -586,14 +636,111 @@ ipcMain.handle('kyrozen:get-workspace-root', async (_event, projectId: string) =
   return { workspaceRoot: await getWorkspaceRoot(projectId) };
 });
 
-ipcMain.handle('kyrozen:get-projects', async () => {
-  if (!accessToken) return [];
+function isPathInside(parent: string, target: string): boolean {
+  const relative = path.relative(parent, target);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+async function listWorkspaceFiles(projectId: string): Promise<string[]> {
+  const root = workspaceMap[projectId];
+  if (!root) return [];
+  const files: string[] = [];
+  async function walk(dir: string, prefix: string) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(full, rel);
+      } else if (entry.isFile()) {
+        files.push(rel);
+      }
+    }
+  }
+  await walk(root, '');
+  return files;
+}
+
+ipcMain.handle('kyrozen:list-files', async (_event, projectId: string) => {
   try {
-    return await apiGet('/api/projects');
+    return { files: await listWorkspaceFiles(projectId) };
   } catch (err: any) {
+    logError(`Failed to list files: ${err.message || err}`);
+    return { files: [], error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:read-file', async (_event, projectId: string, relativePath: string) => {
+  try {
+    const root = workspaceMap[projectId];
+    if (!root) return { content: '', error: 'No workspace mapped' };
+    const target = path.resolve(root, relativePath);
+    if (!isPathInside(root, target)) {
+      return { content: '', error: 'Path outside workspace' };
+    }
+    const content = await fs.readFile(target, 'utf-8');
+    return { content };
+  } catch (err: any) {
+    return { content: '', error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePath: string, content: string) => {
+  try {
+    const root = workspaceMap[projectId];
+    if (!root) return { success: false, error: 'No workspace mapped' };
+    const target = path.resolve(root, relativePath);
+    if (!isPathInside(root, target)) {
+      return { success: false, error: 'Path outside workspace' };
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, 'utf-8');
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:get-projects', async () => {
+  if (!accessToken) {
+    logWarn('get-projects called without access token');
+    return [];
+  }
+  try {
+    const list = await apiGet('/api/projects');
+    logInfo(`Loaded ${Array.isArray(list) ? list.length : 0} projects from cloud`);
+    return list;
+  } catch (err: any) {
+    logError(`Failed to load projects: ${err.message || err}`);
     sendChatMessage({ role: 'system', content: `获取项目列表失败: ${err.message || err}` });
     return [];
   }
+});
+
+ipcMain.handle('kyrozen:get-quota', async () => {
+  if (!accessToken) return { allowed: false, reason: 'Not logged in', used: 0, limit: 0, remaining: 0 };
+  try {
+    return await apiGet('/api/desktop/quota');
+  } catch (err: any) {
+    logError(`Failed to fetch quota: ${err.message || err}`);
+    return { allowed: false, reason: err.message || 'Quota fetch failed', used: 0, limit: 0, remaining: 0 };
+  }
+});
+
+ipcMain.handle('kyrozen:get-full-trust', () => {
+  return { enabled: fullTrustMode };
+});
+
+ipcMain.handle('kyrozen:set-full-trust', (_event, enabled: boolean) => {
+  fullTrustMode = Boolean(enabled);
+  logWarn(`Full-trust mode ${fullTrustMode ? 'enabled' : 'disabled'} by user`);
+  if (fullTrustMode) {
+    showNotification(
+      '已开启完全信任模式',
+      '本次会话内高危工具将自动执行，不再弹出确认对话框。'
+    );
+  }
+  return { enabled: fullTrustMode };
 });
 
 ipcMain.handle('kyrozen:check-for-updates', async () => {
@@ -986,7 +1133,8 @@ function handlePythonAgentLine(line: string) {
     } else if (message.method === 'open_preview') {
       const url = String(message.params.url || '');
       if (url) {
-        openPreviewWindow(url);
+        // Prefer the inline preview panel; user can move it to a window from the UI.
+        mainWindow?.webContents.send('kyrozen:open-preview-url', url);
         sendChatMessage({ role: 'system', content: `已打开预览：${url}` });
       }
     } else if (message.method === 'execution_plan') {
@@ -1045,7 +1193,41 @@ function openPreviewWindow(url: string) {
   });
 }
 
+ipcMain.handle('kyrozen:open-preview', async (_event, url: string, mode: 'embedded' | 'window' | 'external') => {
+  if (!/^https?:\/\/localhost(:\d+)(\/.*)?$/.test(url)) {
+    return { success: false, error: '只允许 localhost 预览链接' };
+  }
+  if (mode === 'external') {
+    await shell.openExternal(url);
+    return { success: true };
+  }
+  if (mode === 'window') {
+    openPreviewWindow(url);
+    return { success: true };
+  }
+  // embedded: notify renderer to show the inline preview panel.
+  mainWindow?.webContents.send('kyrozen:open-preview-url', url);
+  return { success: true };
+});
+
 async function showConfirmationDialog(params: Record<string, unknown>) {
+  // When the user has explicitly enabled full-trust mode for this session,
+  // skip the dialog and tell the local agent to trust all confirmations.
+  if (fullTrustMode) {
+    logWarn(`Auto-confirming ${params.tool}.${params.action} because full-trust mode is enabled`);
+    sendToPythonAgent({
+      jsonrpc: '2.0',
+      method: 'confirmation_response',
+      params: {
+        confirmation_id: params.confirmation_id,
+        confirmed: true,
+        trust_for_session: true,
+        task_id: params.task_id,
+      },
+    });
+    return;
+  }
+
   const result = await dialog.showMessageBox(mainWindow!, {
     type: 'warning',
     buttons: ['确认并信任本次会话', '确认', '取消'],

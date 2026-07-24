@@ -2648,6 +2648,21 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "user_id": user_id,
         }
 
+    @app.get("/api/desktop/quota")
+    async def api_desktop_quota(
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Return the current user's desktop model-proxy token quota."""
+        manager = _get_quota_manager()
+        status = manager.check_quota(current_user.user_id)
+        return {
+            "allowed": status.allowed,
+            "reason": status.reason,
+            "used": status.used,
+            "limit": status.limit,
+            "remaining": status.remaining,
+        }
+
     @app.get("/api/desktop/clients")
     async def api_list_desktop_clients(
         current_user: CurrentUser = Depends(get_current_user),

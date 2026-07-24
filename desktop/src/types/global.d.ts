@@ -18,6 +18,19 @@ export interface KyrozenAPI {
   pickWorkspace: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
   getWorkspaceRoot: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
   getProjects: () => Promise<Array<{ id: string; name: string; current_stage: string; description?: string }>>;
+  getQuota: () => Promise<{
+    allowed: boolean;
+    reason: string;
+    used: number;
+    limit: number;
+    remaining: number;
+  }>;
+  getFullTrust: () => Promise<{ enabled: boolean }>;
+  setFullTrust: (enabled: boolean) => Promise<{ enabled: boolean }>;
+
+  listFiles: (projectId: string) => Promise<{ files: string[]; error?: string }>;
+  readFile: (projectId: string, relativePath: string) => Promise<{ content: string; error?: string }>;
+  saveFile: (projectId: string, relativePath: string, content: string) => Promise<{ success: boolean; error?: string }>;
 
   requestInitialToken: () => void;
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => void;
@@ -27,6 +40,9 @@ export interface KyrozenAPI {
   cancelTask: () => void;
   onChatMessage: (callback: (message: { role: string; content: string }) => void) => void;
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => void;
+  openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;
+  onOpenPreviewUrl: (callback: (url: string) => void) => void;
+
   checkForUpdates: () => Promise<{ success: boolean; error?: string }>;
   onUpdateStatus: (callback: (status: { status: string; message: string }) => void) => void;
   ensureHardwareToolchain: () => Promise<{

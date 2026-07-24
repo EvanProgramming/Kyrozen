@@ -14,7 +14,7 @@
  */
 import { spawn, ChildProcess } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -197,6 +197,19 @@ async function runJourney(): Promise<void> {
     await buildDesktop();
     const testProject = await ensureTestProject();
 
+    // Pre-create a local workspace mapping so the test does not block on a
+    // native file-picker dialog that Playwright cannot interact with.
+    const workspaceRoot = path.join(userDataDir, 'workspace', testProject.id);
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, 'test.txt'),
+      'Hello from Kyrozen desktop user journey test.\n'
+    );
+    await writeFile(
+      path.join(userDataDir, 'workspaces.json'),
+      JSON.stringify({ [testProject.id]: workspaceRoot }, null, 2)
+    );
+
     // ---------- First launch: manual login ----------
     console.log('[journey] First launch: manual login');
     app = await launchApp(userDataDir);
@@ -231,6 +244,42 @@ async function runJourney(): Promise<void> {
     } else {
       results['project-switch'] = 'skipped (no project button)';
       results['chat-input-active'] = 'skipped';
+    }
+
+    // ---------- File tree and simple editor ----------
+    try {
+      await page.waitForSelector('text=test.txt', { timeout: 10000 });
+      await page.click('text=test.txt');
+      await page.waitForSelector('textarea', { timeout: 10000 });
+      await page.screenshot({ path: path.join(DESKTOP_ROOT, 'e2e/screenshots/journey-05-editor-opened.png') });
+
+      const newContent = 'Updated by user journey test.\n';
+      await page.fill('textarea', newContent);
+      await page.click('button:has-text("保存")');
+      await page.waitForSelector('text=保存成功', { timeout: 10000 });
+      await page.screenshot({ path: path.join(DESKTOP_ROOT, 'e2e/screenshots/journey-06-file-saved.png') });
+
+      const saved = await readFile(path.join(workspaceRoot, 'test.txt'), 'utf-8');
+      results['file-tree'] = saved === newContent ? 'pass' : 'fail (content mismatch)';
+      results['editor-save'] = saved === newContent ? 'pass' : 'fail (content mismatch)';
+
+      await page.click('button:has-text("关闭")');
+      await page.waitForTimeout(300);
+    } catch (err: any) {
+      results['file-tree'] = `fail: ${err.message}`;
+      results['editor-save'] = `fail: ${err.message}`;
+    }
+
+    // ---------- Inline preview panel ----------
+    try {
+      await page.evaluate(async () => {
+        await window.kyrozen?.openPreview('http://localhost:8080', 'embedded');
+      });
+      await page.waitForSelector('text=预览：http://localhost:8080', { timeout: 10000 });
+      await page.screenshot({ path: path.join(DESKTOP_ROOT, 'e2e/screenshots/journey-07-preview-panel.png') });
+      results['preview-panel'] = 'pass';
+    } catch (err: any) {
+      results['preview-panel'] = `fail: ${err.message}`;
     }
 
     console.log('\n[journey] ----- Main process log (first launch) -----');

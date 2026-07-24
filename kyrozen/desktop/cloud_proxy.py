@@ -51,7 +51,14 @@ class CloudProxyModelProvider(ModelInterface):
         }
 
     def chat(self, messages: list[dict[str, str]], model: str | None = None) -> ModelResponse:
-        """Synchronous wrapper around the async cloud chat call."""
+        """Synchronous wrapper around the async cloud chat call.
+
+        This method is safe to call from both the asyncio event-loop thread and
+        from worker threads. When called from inside a running loop it schedules
+        the request on that loop and blocks until the cloud responds; otherwise it
+        runs a temporary event loop. The response is matched back to this call via
+        ``request_id`` in ``handle_response``.
+        """
         request = self._create_request(messages, stream=False)
         try:
             loop = asyncio.get_running_loop()

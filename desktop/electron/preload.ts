@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+/**
+ * Preload script for the Kyrozen desktop client.
+ *
+ * It exposes a minimal, typed API on `window.kyrozen` so the renderer process
+ * can communicate with the Electron main process without direct Node.js access.
+ */
+
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 contextBridge.exposeInMainWorld('kyrozen', {

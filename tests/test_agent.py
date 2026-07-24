@@ -16,15 +16,16 @@ from kyrozen.tools import get_default_registry
 from .conftest import MockModel
 
 
-def build_agent(test_config, responses=None):
+def build_agent(test_config, responses=None, confirmation_callback=None, model=None):
     return BaseAgent(
         config=test_config,
-        model=MockModel(responses=responses),
+        model=model if model is not None else MockModel(responses=responses),
         tools=get_default_registry(),
         memory=InMemoryMemory(),
         task_manager=TaskManager(store_path=test_config.task_store_path),
         permission_manager=PermissionManager(mode=test_config.permission_mode),
         logger=get_logger(test_config.log_level, log_dir=os.path.join(os.path.dirname(test_config.task_store_path), "logs")),
+        confirmation_callback=confirmation_callback,
     )
 
 
@@ -175,3 +176,51 @@ def test_agent_xml_tool_call_then_answer(test_config):
     assert task.status == "completed"
     assert task.result["answer"] == "I listed the directory."
     assert any("list_dir" in s.description for s in task.steps)
+
+
+def test_agent_confirmation_callback_allows_tool(test_config):
+    """When a confirmation callback approves, the tool should execute."""
+    test_config.permission_mode = "strict"
+    tool_call = '{"tool": "file_write", "action": "write", "parameters": {"path": "test.txt", "content": "x"}}'
+    agent = build_agent(test_config, responses=[tool_call, "File written."], confirmation_callback=lambda **kwargs: True)
+    task = agent.run("Write a file")
+    assert task.status == "completed"
+    assert task.result["answer"] == "File written."
+
+
+def test_agent_confirmation_callback_denies_tool(test_config):
+    """When a confirmation callback rejects, the tool should fail."""
+    test_config.permission_mode = "strict"
+    tool_call = '{"tool": "file_write", "action": "write", "parameters": {"path": "test.txt", "content": "x"}}'
+    agent = build_agent(test_config, responses=[tool_call, "Declined."], confirmation_callback=lambda **kwargs: False)
+    task = agent.run("Write a file")
+    assert task.status == "completed"
+    assert "Declined" in task.result["answer"]
+
+
+class SlowMockModel(MockModel):
+    """Mock model that sleeps briefly on every chat call so cancel() has time to take effect."""
+
+    def chat(self, messages, model=None):
+        import time
+        time.sleep(0.03)
+        return super().chat(messages, model=model)
+
+
+def test_agent_cancel(test_config):
+    """Calling cancel() should mark the running task as cancelled."""
+    import threading
+    import time
+
+    test_config.permission_mode = "permissive"
+    tool_call = '{"tool": "list_dir", "action": "list", "parameters": {"path": "."}}'
+    slow_model = SlowMockModel(responses=[tool_call, tool_call, tool_call, tool_call])
+    agent = build_agent(test_config, model=slow_model)
+
+    def cancel_after():
+        time.sleep(0.05)
+        agent.cancel()
+
+    threading.Thread(target=cancel_after, daemon=True).start()
+    task = agent.run("List files repeatedly")
+    assert task.status == "cancelled"

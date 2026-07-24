@@ -43,7 +43,10 @@ def _resolve_safe_path(
     if not raw_path:
         return None, "Path is required"
 
-    normalized = raw_path.replace("\\", "/").strip("/")
+    normalized = raw_path.replace("\\", "/")
+    is_absolute = normalized.startswith("/")
+    if not is_absolute:
+        normalized = normalized.strip("/")
     if project_id:
         prefixes = (
             f"projects/{project_id}/",

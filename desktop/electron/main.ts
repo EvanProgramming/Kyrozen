@@ -309,6 +309,7 @@ ipcMain.on('kyrozen:cancel-task', () => {
   }
 });
 
+/** Establish or re-establish the WebSocket connection to the Kyrozen cloud. */
 function connectWebSocket(token: string) {
   disconnectWebSocket();
   updateConnection('connecting', '正在连接云端...');
@@ -374,6 +375,7 @@ function scheduleReconnect(token: string) {
   }, 5000);
 }
 
+/** Route messages from the cloud to the local Python Agent or UI. */
 async function handleServerMessage(message: Record<string, unknown>) {
   const type = message.type as string;
 
@@ -416,6 +418,7 @@ async function chooseWorkspaceRoot(projectId: string | null): Promise<string> {
   return fallback;
 }
 
+/** Spawn the local Python Agent process and wire stdio JSON-RPC to the UI/cloud. */
 function startPythonAgent() {
   stopPythonAgent();
   const pythonPath = process.env.KYROZEN_PYTHON_PATH || 'python3';
@@ -459,6 +462,7 @@ function sendToPythonAgent(payload: unknown) {
   pythonAgent.stdin.write(JSON.stringify(payload) + '\n');
 }
 
+/** Parse one JSON-RPC line from the Python Agent and dispatch it. */
 function handlePythonAgentLine(line: string) {
   try {
     const message = JSON.parse(line);

@@ -18,7 +18,7 @@ export default defineConfig({
             minify: process.env.NODE_ENV === 'production',
             outDir: 'dist-electron/main',
             rollupOptions: {
-              external: ['electron'],
+              external: ['electron', 'ws'],
             },
           },
         },

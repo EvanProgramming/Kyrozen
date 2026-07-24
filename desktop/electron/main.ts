@@ -13,7 +13,7 @@ import {
   resolveHardwareCommand,
   setPythonExe,
 } from './hardwareToolchain';
-import { ensurePythonRuntime } from './pythonRuntime';
+import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
 import { checkForUpdates, initAutoUpdater, stopUpdateChecks } from './updater';
 
 interface WorkspaceMap {
@@ -101,6 +101,35 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 
 const WORKSPACE_CONFIG_PATH = path.join(app.getPath('userData'), 'workspaces.json');
 const TOKEN_STORE_PATH = path.join(app.getPath('userData'), 'credentials.json');
+const ONBOARDING_CONFIG_PATH = path.join(app.getPath('userData'), 'onboarding.json');
+
+interface OnboardingConfig {
+  completed: boolean;
+  language: 'zh' | 'en';
+  completedAt?: string;
+}
+
+let onboardingConfig: OnboardingConfig = { completed: false, language: 'zh' };
+
+async function loadOnboardingConfig(): Promise<OnboardingConfig> {
+  try {
+    const raw = await fs.readFile(ONBOARDING_CONFIG_PATH, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<OnboardingConfig>;
+    return {
+      completed: parsed.completed ?? false,
+      language: parsed.language ?? 'zh',
+      completedAt: parsed.completedAt,
+    };
+  } catch {
+    return { completed: false, language: 'zh' };
+  }
+}
+
+async function saveOnboardingConfig(patch: Partial<OnboardingConfig>): Promise<void> {
+  onboardingConfig = { ...onboardingConfig, ...patch };
+  await fs.mkdir(path.dirname(ONBOARDING_CONFIG_PATH), { recursive: true });
+  await fs.writeFile(ONBOARDING_CONFIG_PATH, JSON.stringify(onboardingConfig, null, 2));
+}
 
 async function loadWorkspaceMap(): Promise<void> {
   try {
@@ -215,6 +244,10 @@ function sendChatMessage(message: { role: string; content: string }) {
 
 function sendExecutionPlan(plan: { task_id: string; steps: string[] }) {
   mainWindow?.webContents.send('kyrozen:execution-plan', plan);
+}
+
+function sendOnboardingProgress(step: string, message: string, payload?: Record<string, unknown>) {
+  mainWindow?.webContents.send('kyrozen:onboarding-progress', { step, message, ...payload });
 }
 
 function createWindow() {
@@ -360,6 +393,7 @@ app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
 app.whenReady().then(async () => {
   logInfo('App ready, initializing Kyrozen desktop client');
   await loadWorkspaceMap();
+  onboardingConfig = await loadOnboardingConfig();
   createWindow();
   createTray();
 
@@ -369,8 +403,8 @@ app.whenReady().then(async () => {
     mainWindow.webContents.once('did-finish-load', () => {
       mainWindow?.webContents.send('kyrozen:protocol-url', protocolUrl);
     });
-  } else {
-    // No protocol URL: try to resume the previous session from encrypted storage.
+  } else if (onboardingConfig.completed) {
+    // Onboarding already completed: try to resume the previous session from encrypted storage.
     const credentials = await loadCredentials();
     if (credentials) {
       serverUrl = credentials.serverUrl;
@@ -381,6 +415,8 @@ app.whenReady().then(async () => {
         mainWindow?.webContents.send('kyrozen:session-resumed', credentials.wsToken, credentials.serverUrl);
       });
     }
+  } else {
+    logInfo('Onboarding not completed; waiting for renderer wizard');
   }
 
   app.on('activate', () => {
@@ -603,6 +639,7 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
     accessToken = data.access_token || null;
     logInfo(`Open token verified, wsToken acquired`);
     await saveCredentials(data.ws_token, data.refresh_token, accessToken || undefined);
+    await saveOnboardingConfig({ completed: true, completedAt: new Date().toISOString() });
     connectWebSocket(data.ws_token);
     return { wsToken: data.ws_token, refreshToken: data.refresh_token };
   } catch (err: any) {
@@ -789,6 +826,69 @@ ipcMain.handle('kyrozen:connect-github', async () => {
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
   }
+});
+
+ipcMain.handle('kyrozen:get-onboarding-status', async () => {
+  onboardingConfig = await loadOnboardingConfig();
+  return { ...onboardingConfig };
+});
+
+ipcMain.handle('kyrozen:save-onboarding-language', async (_event, language: 'zh' | 'en') => {
+  await saveOnboardingConfig({ language });
+  return { language };
+});
+
+ipcMain.handle('kyrozen:complete-onboarding', async (_event, language?: 'zh' | 'en') => {
+  const patch: Partial<OnboardingConfig> = { completed: true, completedAt: new Date().toISOString() };
+  if (language) patch.language = language;
+  await saveOnboardingConfig(patch);
+  return { ...onboardingConfig };
+});
+
+ipcMain.handle('kyrozen:check-python-runtime', async () => {
+  try {
+    const cached = await getCachedPythonRuntime();
+    if (cached) {
+      return { ready: true, path: cached };
+    }
+    return { ready: false, path: null };
+  } catch (err: any) {
+    return { ready: false, path: null, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:ensure-python-runtime', async () => {
+  try {
+    const repoRoot = getRepoRoot();
+    const pythonPath = await ensurePythonRuntime(repoRoot, (msg) => {
+      sendOnboardingProgress('python', msg);
+    });
+    if (pythonPath) {
+      pythonRuntimePath = pythonPath;
+      pythonRuntimeReady = true;
+      setPythonExe(pythonPath);
+    }
+    return { success: true, path: pythonPath };
+  } catch (err: any) {
+    logError(`Python runtime setup failed: ${err.message || err}`);
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:pick-onboarding-workspace', async () => {
+  const defaultPath = path.join(app.getPath('home'), 'KyrozenProjects');
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    title: '选择本地项目目录',
+    defaultPath,
+    properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    buttonLabel: '选择此文件夹',
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return { workspaceRoot: null };
+  }
+  const selected = result.filePaths[0];
+  await fs.mkdir(selected, { recursive: true });
+  return { workspaceRoot: selected };
 });
 
 ipcMain.on('kyrozen:request-initial-token', () => {

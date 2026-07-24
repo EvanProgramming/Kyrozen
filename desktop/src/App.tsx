@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChatPage } from './pages/ChatPage';
 import { LoginPage } from './pages/LoginPage';
+import { OnboardingPage } from './pages/OnboardingPage';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { EditorPanel } from './components/EditorPanel';
 import { FileTree } from './components/FileTree';
@@ -40,6 +41,7 @@ function App() {
   const [fullTrust, setFullTrust] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [onboardingStatus, setOnboardingStatus] = useState<'loading' | 'needed' | 'completed'>('loading');
 
   const loadProjects = async () => {
     if (!window.kyrozen) return;
@@ -69,6 +71,15 @@ function App() {
 
   useEffect(() => {
     if (!window.kyrozen) return;
+
+    window.kyrozen
+      .getOnboardingStatus()
+      .then((status) => {
+        setOnboardingStatus(status.completed ? 'completed' : 'needed');
+      })
+      .catch(() => {
+        setOnboardingStatus('completed');
+      });
 
     window.kyrozen.onConnectionChange((state: ConnectionState, message: string) => {
       setConnection(state);
@@ -107,6 +118,15 @@ function App() {
 
     window.kyrozen.requestInitialToken();
   }, []);
+
+  const handleOnboardingComplete = async (wsToken: string) => {
+    setOnboardingStatus('completed');
+    setToken(wsToken);
+    setStatusMessage('登录成功');
+    await loadProjects();
+    await loadQuota();
+    await loadFullTrust();
+  };
 
   const handleLogin = async (email: string, password: string, serverUrl: string) => {
     setStatusMessage('正在登录...');
@@ -147,6 +167,21 @@ function App() {
   const handleOpenPreview = (url: string) => {
     setPreviewUrl(url);
   };
+
+  if (onboardingStatus === 'loading') {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-slate-950 text-slate-200">
+        <div className="text-center">
+          <div className="text-lg font-medium">Kyrozen</div>
+          <div className="text-sm text-slate-400 mt-2">正在初始化...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (onboardingStatus === 'needed') {
+    return <OnboardingPage onComplete={handleOnboardingComplete} />;
+  }
 
   if (!token) {
     return (

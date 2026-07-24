@@ -53,6 +53,15 @@ export interface KyrozenAPI {
   }>;
   installCommonCores: () => Promise<{ success: boolean; error?: string }>;
   connectGitHub: () => Promise<{ success: boolean; error?: string }>;
+
+  getOnboardingStatus: () => Promise<{ completed: boolean; language: 'zh' | 'en'; completedAt?: string }>;
+  saveOnboardingLanguage: (language: 'zh' | 'en') => Promise<{ language: 'zh' | 'en' }>;
+  completeOnboarding: (language?: 'zh' | 'en') => Promise<{ completed: boolean; language: 'zh' | 'en' }>;
+  checkPythonRuntime: () => Promise<{ ready: boolean; path: string | null; error?: string }>;
+  ensurePythonRuntime: () => Promise<{ success: boolean; path: string | null; error?: string }>;
+  pickOnboardingWorkspace: () => Promise<{ workspaceRoot: string | null }>;
+
+  onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) => void;
 }
 
 declare global {

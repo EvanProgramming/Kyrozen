@@ -63,4 +63,14 @@ contextBridge.exposeInMainWorld('kyrozen', {
   ensureHardwareToolchain: () => ipcRenderer.invoke('kyrozen:ensure-hardware-toolchain'),
   installCommonCores: () => ipcRenderer.invoke('kyrozen:install-common-cores'),
   connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),
+
+  getOnboardingStatus: () => ipcRenderer.invoke('kyrozen:get-onboarding-status'),
+  saveOnboardingLanguage: (language: 'zh' | 'en') => ipcRenderer.invoke('kyrozen:save-onboarding-language', language),
+  completeOnboarding: (language?: 'zh' | 'en') => ipcRenderer.invoke('kyrozen:complete-onboarding', language),
+  checkPythonRuntime: () => ipcRenderer.invoke('kyrozen:check-python-runtime'),
+  ensurePythonRuntime: () => ipcRenderer.invoke('kyrozen:ensure-python-runtime'),
+  pickOnboardingWorkspace: () => ipcRenderer.invoke('kyrozen:pick-onboarding-workspace'),
+
+  onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) =>
+    ipcRenderer.on('kyrozen:onboarding-progress', (_event, progress) => callback(progress)),
 });

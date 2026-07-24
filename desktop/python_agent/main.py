@@ -55,14 +55,16 @@ class DesktopAgentRuntime:
         """Bind the function used to send JSON-RPC messages to Electron."""
         self.send_message = send_message
         self.model = CloudProxyModelProvider(send_message=send_message)
+        tools = get_default_registry()
         self.agent = BaseAgent(
             config=self.config,
             model=self.model,
-            tools=get_default_registry(),
+            tools=tools,
             memory=InMemoryMemory(),
             logger=self.logger,
             confirmation_callback=self._request_confirmation,
         )
+        self._wrap_tool_execution(tools)
 
     def handle_request(self, request: dict[str, object]) -> None:
         """Process a JSON-RPC request from Electron."""
@@ -137,6 +139,38 @@ class DesktopAgentRuntime:
         self._task_thread = threading.Thread(target=execute, daemon=True)
         self._task_thread.start()
         self._send_response(req_id, result={"status": "ok"})
+
+    def _wrap_tool_execution(self, tools: object) -> None:
+        """Detect local preview URLs in terminal output and notify Electron."""
+        original_execute = getattr(tools, "execute")
+
+        def wrapped(tool_name: str, action: str, parameters: dict[str, object]) -> object:
+            result = original_execute(tool_name, action, parameters)
+            if tool_name == "terminal" and action == "execute":
+                output = ""
+                if hasattr(result, "data") and result.data:
+                    output = str(result.data.get("output", "")) + str(result.data.get("error", ""))
+                url = self._extract_local_url(output)
+                if url:
+                    self._notify("open_preview", {"url": url})
+            return result
+
+        setattr(tools, "execute", wrapped)
+
+    def _extract_local_url(self, text: str) -> str | None:
+        """Look for common local development server URLs in command output."""
+        import re
+        patterns = [
+            r"(http://localhost:\d+)",
+            r"(http://127\.0\.0\.1:\d+)",
+            r"Local:\s+(http://\S+)",
+            r"Network:\s+(http://\S+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1)
+        return None
 
     def _request_confirmation(
         self,

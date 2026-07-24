@@ -88,7 +88,7 @@ function App() {
     <div className="h-screen w-screen flex flex-col bg-slate-900 text-slate-100">
       <ConnectionStatus state={connection} message={statusMessage} />
       <div className="flex-1 flex overflow-hidden">
-        <aside className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800 flex flex-col">
+        <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800 flex flex-col">
           <div className="p-4 border-b border-slate-700">
             <h2 className="font-semibold text-sm">我的项目</h2>
           </div>

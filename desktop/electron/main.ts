@@ -207,6 +207,7 @@ function createWindow() {
     mainWindow.loadURL(devUrl);
     // If the configured/default port is unavailable, fall back to other common Vite ports.
     mainWindow.webContents.on('did-fail-load', () => {
+      if (!mainWindow) return;
       const fallbackPorts = ['5173', '5174', '5175', '5176', '5177', '5178'];
       const currentPort = new URL(mainWindow.webContents.getURL()).port || devPort;
       const remaining = fallbackPorts.filter((p) => p !== currentPort);
@@ -216,7 +217,7 @@ function createWindow() {
       mainWindow.loadURL(`http://localhost:${nextPort}`);
     });
   } else {
-    const prodUrl = path.join(currentDir, '../dist/index.html');
+    const prodUrl = path.join(currentDir, '../../dist/index.html');
     logInfo(`Loading production file: ${prodUrl}`);
     mainWindow.loadFile(prodUrl);
   }

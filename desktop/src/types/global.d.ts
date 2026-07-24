@@ -14,7 +14,9 @@ export interface VerifyResult {
 export interface KyrozenAPI {
   login: (email: string, password: string, serverUrl: string) => Promise<LoginResult>;
   verifyOpenToken: (token: string) => Promise<VerifyResult | null>;
-  setCurrentProject: (projectId: string) => void;
+  setCurrentProject: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
+  pickWorkspace: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
+  getWorkspaceRoot: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
   requestInitialToken: () => void;
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => void;
   onProtocolUrl: (callback: (url: string) => void) => void;

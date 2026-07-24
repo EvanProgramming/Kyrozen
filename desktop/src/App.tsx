@@ -28,7 +28,7 @@ function App() {
         if (verified) {
           setToken(verified.wsToken);
           if (projectId) {
-            window.kyrozen.setCurrentProject(projectId);
+            await window.kyrozen.setCurrentProject(projectId);
           }
         }
       }

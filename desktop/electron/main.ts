@@ -19,6 +19,7 @@ let reconnectTimer: NodeJS.Timeout | null = null;
 let workspaceMap: WorkspaceMap = {};
 let currentTaskId: string | null = null;
 let currentTaskRunning = false;
+let previewWindow: BrowserWindow | null = null;
 
 const PROTOCOL_SCHEME = 'kyrozen';
 
@@ -401,6 +402,12 @@ function handlePythonAgentLine(line: string) {
       showConfirmationDialog(message.params);
     } else if (message.method === 'model_request') {
       wsClient?.send(JSON.stringify(message.params));
+    } else if (message.method === 'open_preview') {
+      const url = String(message.params.url || '');
+      if (url) {
+        openPreviewWindow(url);
+        sendChatMessage({ role: 'system', content: `已打开预览：${url}` });
+      }
     } else if (message.method === 'task_result') {
       currentTaskRunning = false;
       wsClient?.send(
@@ -417,6 +424,32 @@ function handlePythonAgentLine(line: string) {
   } catch {
     sendChatMessage({ role: 'system', content: line });
   }
+}
+
+function openPreviewWindow(url: string) {
+  if (previewWindow) {
+    previewWindow.loadURL(url);
+    previewWindow.focus();
+    return;
+  }
+
+  previewWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    minWidth: 600,
+    minHeight: 400,
+    title: 'Kyrozen 预览',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  previewWindow.loadURL(url);
+
+  previewWindow.on('closed', () => {
+    previewWindow = null;
+  });
 }
 
 async function showConfirmationDialog(params: Record<string, unknown>) {

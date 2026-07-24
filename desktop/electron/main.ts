@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs/promises';
+import http from 'http';
 import { watch, FSWatcher } from 'fs';
 import WebSocket from 'ws';
 import {
@@ -17,6 +18,7 @@ import {
   startHardwareToolchainAutoUpdate,
   stopHardwareToolchainAutoUpdate,
 } from './hardwareToolchain';
+import { startExtensionServer, ClipPayload, TestReportPayload } from './extensionServer';
 import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
 import {
   ensureProjectVenv,
@@ -120,6 +122,7 @@ let pendingFileChanges = new Map<string, NodeJS.Timeout>();
 let pendingAutoCommit = new Map<string, NodeJS.Timeout>();
 let pythonRuntimePath: string | null = null;
 let pythonRuntimeReady = false;
+let extensionServer: http.Server | null = null;
 
 const PROTOCOL_SCHEME = 'kyrozen';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -455,6 +458,30 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
 
+  try {
+    const ext = await startExtensionServer({
+      onClip: (payload: ClipPayload) => {
+        const summary = [payload.title, payload.url, payload.selection, payload.bodyText]
+          .filter(Boolean)
+          .join('\n\n');
+        sendChatMessage({ role: 'user', content: `从浏览器扩展抓取的网页内容：\n\n${summary}` });
+      },
+      onTestReport: (payload: TestReportPayload) => {
+        const errorText = payload.errors.length
+          ? payload.errors.map((e) => `- ${e.message}${e.source ? ` (${e.source}:${e.line})` : ''}`).join('\n')
+          : '无错误';
+        sendChatMessage({
+          role: 'system',
+          content: `本地测试页面报告：${payload.url}\n加载时间：${payload.metrics?.loadTime?.toFixed(0) || '未知'}ms\nDOM 节点：${payload.metrics?.domNodes || '未知'}\n错误：\n${errorText}`,
+        });
+      },
+    });
+    extensionServer = ext.server;
+    logInfo(`Extension server listening on port ${ext.port}`);
+  } catch (err: any) {
+    logError(`Failed to start extension server: ${err.message || err}`);
+  }
+
   const protocolUrl = getProtocolUrl();
   logInfo(`Protocol URL: ${protocolUrl || 'none'}`);
   if (protocolUrl && mainWindow) {
@@ -503,6 +530,7 @@ app.on('window-all-closed', () => {
   stopPythonAgent();
   stopUpdateChecks();
   stopHardwareToolchainAutoUpdate();
+  extensionServer?.close();
   if (process.platform !== 'darwin') app.quit();
 });
 

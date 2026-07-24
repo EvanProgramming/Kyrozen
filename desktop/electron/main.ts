@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, Tray } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs/promises';
 import { watch, FSWatcher } from 'fs';
@@ -239,7 +240,6 @@ function createWindow() {
 }
 
 function createTray() {
-  const { nativeImage } = require('electron');
   const iconPath = path.join(currentDir, '../../public/tray-icon.png');
   let trayIcon: Electron.NativeImage | undefined;
   try {
@@ -515,7 +515,7 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
 
     const verify = await apiPost('/api/desktop/verify-token', {
       access_token: data.access_token,
-      device_name: require('os').hostname(),
+      device_name: os.hostname(),
       client_version: app.getVersion(),
       platform: process.platform,
     });
@@ -536,7 +536,7 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
   try {
     const data = await apiPost('/api/desktop/verify-token', {
       token,
-      device_name: require('os').hostname(),
+      device_name: os.hostname(),
       client_version: app.getVersion(),
       platform: process.platform,
     });
@@ -676,7 +676,7 @@ function connectWebSocket(token: string) {
         JSON.stringify({
           type: 'auth',
           token,
-          device_name: require('os').hostname(),
+          device_name: os.hostname(),
           client_version: app.getVersion(),
           platform: process.platform,
           current_project_id: currentProjectId,

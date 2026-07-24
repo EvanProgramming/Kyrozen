@@ -122,3 +122,56 @@ def test_agent_final_synthesis_when_max_rounds_exhausted(test_config):
     assert task.status == "completed"
     assert "tool" not in task.result["answer"]
     assert "{" not in task.result["answer"]
+
+
+def test_agent_extract_xml_tool_call(test_config):
+    """Some models emit XML-style tool calls; the agent must parse them."""
+    agent = build_agent(test_config)
+    text = (
+        "I will list the directory.\n"
+        "<tool_call>\n"
+        "  <tool_name>list_dir</tool_name>\n"
+        "  <action>list</action>\n"
+        "  <parameters>\n"
+        "    <path>projects/proj_49be49d8/software</path>\n"
+        "  </parameters>\n"
+        "</tool_call>"
+    )
+    calls = agent._extract_tool_calls(text)
+    assert len(calls) == 1
+    assert calls[0]["tool"] == "list_dir"
+    assert calls[0]["action"] == "list"
+    assert calls[0]["parameters"]["path"] == "projects/proj_49be49d8/software"
+
+
+def test_agent_strip_xml_tool_call_from_text(test_config):
+    """XML tool-call blocks should be removed from the conversational text."""
+    agent = build_agent(test_config)
+    text = (
+        "I will list the directory.\n"
+        "<tool_call>\n"
+        "  <tool_name>list_dir</tool_name>\n"
+        "  <action>list</action>\n"
+        "  <parameters><path>.</path></parameters>\n"
+        "</tool_call>"
+    )
+    clean = agent._strip_tool_calls_from_text(text)
+    assert "<tool_call>" not in clean
+    assert "list_dir" not in clean
+    assert clean.strip() == "I will list the directory."
+
+
+def test_agent_xml_tool_call_then_answer(test_config):
+    """A full loop with an XML tool call must execute the tool and return a clean answer."""
+    xml_call = (
+        "<tool_call>\n"
+        "  <tool_name>list_dir</tool_name>\n"
+        "  <action>list</action>\n"
+        "  <parameters><path>.</path></parameters>\n"
+        "</tool_call>"
+    )
+    agent = build_agent(test_config, responses=[xml_call, "I listed the directory."])
+    task = agent.run("List files")
+    assert task.status == "completed"
+    assert task.result["answer"] == "I listed the directory."
+    assert any("list_dir" in s.description for s in task.steps)

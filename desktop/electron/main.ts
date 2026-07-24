@@ -25,6 +25,7 @@ let tray: Tray | null = null;
 let pythonAgentRestartCount = 0;
 const PYTHON_AGENT_MAX_RESTARTS = 5;
 let pythonAgentStopping = false;
+let pendingCloudMessages: string[] = [];
 
 const PROTOCOL_SCHEME = 'kyrozen';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -341,14 +342,12 @@ ipcMain.on('kyrozen:request-initial-token', () => {
 });
 
 ipcMain.on('kyrozen:send-chat', (_event, message: string) => {
-  wsClient?.send(
-    JSON.stringify({
-      type: 'task_result',
-      task_id: `task_${Date.now()}`,
-      status: 'pending',
-      result: { message },
-    })
-  );
+  sendToCloud({
+    type: 'task_result',
+    task_id: `task_${Date.now()}`,
+    status: 'pending',
+    result: { message },
+  });
 });
 
 ipcMain.on('kyrozen:cancel-task', () => {
@@ -383,6 +382,7 @@ function connectWebSocket(token: string) {
       updateConnection('connected', '已连接云端');
       pythonAgentRestartCount = 0;
       startHeartbeat();
+      flushPendingCloudMessages();
       startPythonAgent();
     });
 
@@ -555,19 +555,36 @@ function sendToPythonAgent(payload: unknown) {
   pythonAgent.stdin.write(JSON.stringify(payload) + '\n');
 }
 
+function sendToCloud(payload: object) {
+  const text = JSON.stringify(payload);
+  if (wsClient?.readyState === WebSocket.OPEN) {
+    wsClient.send(text);
+  } else {
+    pendingCloudMessages.push(text);
+  }
+}
+
+function flushPendingCloudMessages() {
+  if (!wsClient || wsClient.readyState !== WebSocket.OPEN) return;
+  while (pendingCloudMessages.length > 0) {
+    const message = pendingCloudMessages.shift();
+    if (message) wsClient.send(message);
+  }
+}
+
 /** Parse one JSON-RPC line from the Python Agent and dispatch it. */
 function handlePythonAgentLine(line: string) {
   try {
     const message = JSON.parse(line);
     if (message.method === 'task_step') {
       const step = message.params.step || {};
-      wsClient?.send(JSON.stringify({ type: 'task_step', task_id: message.params.task_id, step }));
+      sendToCloud({ type: 'task_step', task_id: message.params.task_id, step });
       sendChatMessage({ role: 'assistant', content: `[${step.status}] ${step.description}` });
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);
     } else if (message.method === 'model_request') {
-      wsClient?.send(JSON.stringify(message.params));
+      sendToCloud(message.params);
     } else if (message.method === 'open_preview') {
       const url = String(message.params.url || '');
       if (url) {
@@ -576,15 +593,13 @@ function handlePythonAgentLine(line: string) {
       }
     } else if (message.method === 'task_result') {
       currentTaskRunning = false;
-      wsClient?.send(
-        JSON.stringify({
-          type: 'task_result',
-          task_id: message.params.task_id,
-          status: message.params.status,
-          result: message.params.result,
-          steps: message.params.steps,
-        })
-      );
+      sendToCloud({
+        type: 'task_result',
+        task_id: message.params.task_id,
+        status: message.params.status,
+        result: message.params.result,
+        steps: message.params.steps,
+      });
       const status = message.params.status;
       const answer = message.params.result?.answer || '任务完成';
       sendChatMessage({ role: 'assistant', content: answer });

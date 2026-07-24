@@ -40,6 +40,9 @@ class PendingConfirmation:
 class DesktopAgentRuntime:
     """Minimal local agent runtime that talks to Electron over stdio JSON-RPC."""
 
+    # Default timeout for a local task (seconds). Can be overridden per task.
+    DEFAULT_TASK_TIMEOUT_SECONDS = 600
+
     def __init__(self) -> None:
         self.config = get_config()
         self.logger = get_logger(self.config.log_level)
@@ -51,6 +54,8 @@ class DesktopAgentRuntime:
         self._pending_confirmations: dict[str, PendingConfirmation] = {}
         self._lock = threading.Lock()
         self._task_thread: threading.Thread | None = None
+        self._task_timeout_timer: threading.Timer | None = None
+        self._task_timed_out = threading.Event()
 
     def set_send_message(self, send_message: callable) -> None:
         """Bind the function used to send JSON-RPC messages to Electron."""
@@ -123,23 +128,54 @@ class DesktopAgentRuntime:
             try:
                 task = self.agent.run(message, project_id=str(params.get("project_id", "")))
                 self.current_task = task
-                self._notify("task_result", {
-                    "task_id": task.id,
-                    "status": task.status,
-                    "result": task.result or {},
-                    "steps": [step.to_dict() for step in task.steps],
-                })
+                self._cancel_task_timeout_timer()
+                if not self._task_timed_out.is_set():
+                    self._notify("task_result", {
+                        "task_id": task.id,
+                        "status": task.status,
+                        "result": task.result or {},
+                        "steps": [step.to_dict() for step in task.steps],
+                    })
             except Exception as exc:
+                self._cancel_task_timeout_timer()
                 traceback_str = traceback.format_exc()
-                self._notify("task_result", {
-                    "task_id": self.current_task_id,
-                    "status": "failed",
-                    "result": {"answer": f"Task failed: {exc}\n{traceback_str}"},
-                })
+                if not self._task_timed_out.is_set():
+                    self._notify("task_result", {
+                        "task_id": self.current_task_id,
+                        "status": "failed",
+                        "result": {"answer": f"Task failed: {exc}\n{traceback_str}"},
+                    })
+
+        self._task_timed_out.clear()
+        timeout_seconds = int(params.get("timeout_seconds", self.DEFAULT_TASK_TIMEOUT_SECONDS))
+        self._task_timeout_timer = threading.Timer(timeout_seconds, self._handle_task_timeout)
+        self._task_timeout_timer.daemon = True
+        self._task_timeout_timer.start()
 
         self._task_thread = threading.Thread(target=execute, daemon=True)
         self._task_thread.start()
         self._send_response(req_id, result={"status": "ok"})
+
+    def _cancel_task_timeout_timer(self) -> None:
+        """Stop the task timeout timer if it is still running."""
+        timer = self._task_timeout_timer
+        if timer is not None:
+            timer.cancel()
+            self._task_timeout_timer = None
+
+    def _handle_task_timeout(self) -> None:
+        """Mark the current task as timed out and cancel the agent."""
+        self._task_timed_out.set()
+        self.logger.warning("Task %s timed out", self.current_task_id)
+        if self.agent:
+            self.agent.cancel()
+        if self.current_task and self.current_task.status == "running":
+            self.current_task.update_status("failed")
+        self._notify("task_result", {
+            "task_id": self.current_task_id,
+            "status": "failed",
+            "result": {"answer": "任务执行超时，已自动终止。"},
+        })
 
     def _wrap_tool_execution(self, tools: object) -> None:
         """Detect local preview URLs in terminal output and notify Electron."""
@@ -229,6 +265,7 @@ class DesktopAgentRuntime:
     def _handle_cancel_task(self, params: dict[str, object]) -> None:
         task_id = str(params.get("task_id", ""))
         self.logger.info("Received cancel request for task %s", task_id)
+        self._cancel_task_timeout_timer()
         if self.agent:
             self.agent.cancel()
         if self.current_task and self.current_task.status == "running":

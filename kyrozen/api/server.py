@@ -1192,6 +1192,61 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "scope": metadata.get("github_token_scopes", ""),
         }
 
+    @app.get("/api/user/github-token")
+    async def api_user_github_token(current_user: CurrentUser = Depends(get_current_user)):
+        """Return the GitHub access token stored in Supabase user metadata.
+
+        The desktop client uses this endpoint to restore the GitHub token after
+        a restart, so it can commit and push without re-authorizing every time.
+        """
+        metadata = current_user.raw_claims.get("user_metadata", {}) or {}
+        token = metadata.get("github_access_token")
+        if not token:
+            raise HTTPException(status_code=404, detail="GitHub token not found")
+        return {
+            "token": token,
+            "scope": metadata.get("github_token_scopes", ""),
+        }
+
+    @app.post("/api/user/github-token")
+    async def api_user_store_github_token(
+        request: Request,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Store or update the GitHub access token in Supabase user metadata.
+
+        This allows the desktop client to push a token obtained via the
+        kyrozen:// auth callback into Supabase metadata when the backend
+        callback flow cannot update it directly.
+        """
+        config = get_config()
+        if not config.supabase_url or not config.supabase_service_role_key:
+            raise HTTPException(status_code=503, detail="Supabase admin not configured")
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+        token = body.get("token")
+        scope = body.get("scope", "")
+        if not token or not isinstance(token, str):
+            raise HTTPException(status_code=400, detail="token is required")
+        try:
+            from supabase import create_client
+            admin_client = create_client(config.supabase_url, config.supabase_service_role_key)
+            admin_client.auth.admin.update_user_by_id(
+                current_user.id,
+                {
+                    "user_metadata": {
+                        "github_access_token": token,
+                        "github_token_scopes": scope,
+                    }
+                },
+            )
+        except Exception as exc:
+            get_logger(__name__).warning("Failed to store GitHub token: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to store GitHub token") from exc
+        return {"success": True}
+
     # ------------------------------------------------------------------
     # Chat
     # ------------------------------------------------------------------

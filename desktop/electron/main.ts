@@ -467,10 +467,11 @@ function handleProtocolUrl(url: string) {
       }
     } else if (parsed.hostname === 'auth' && parsed.pathname === '/github') {
       const token = parsed.searchParams.get('token');
-      const scope = parsed.searchParams.get('scope');
+      const scope = parsed.searchParams.get('scope') || '';
       if (token) {
         githubAccessToken = token;
         githubTokenScope = scope;
+        void storeGitHubToken(token, scope);
         sendGitHubStatus();
         sendChatMessage({ role: 'system', content: 'GitHub 授权已成功，可在 Git 面板中提交代码。' });
       }
@@ -485,6 +486,31 @@ function sendGitHubStatus() {
     connected: !!githubAccessToken,
     scope: githubTokenScope,
   });
+}
+
+async function fetchGitHubToken(): Promise<void> {
+  if (!accessToken) return;
+  try {
+    const data = await apiGet('/api/user/github-token');
+    if (data.token) {
+      githubAccessToken = data.token;
+      githubTokenScope = data.scope || null;
+      sendGitHubStatus();
+      logInfo('Restored GitHub token from Supabase metadata');
+    }
+  } catch (err: any) {
+    logInfo(`No GitHub token available: ${err.message || err}`);
+  }
+}
+
+async function storeGitHubToken(token: string, scope: string): Promise<void> {
+  if (!accessToken || !token) return;
+  try {
+    await apiPost('/api/user/github-token', { token, scope }, true);
+    logInfo('Stored GitHub token to Supabase metadata');
+  } catch (err: any) {
+    logWarn(`Failed to store GitHub token: ${err.message || err}`);
+  }
 }
 
 app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
@@ -565,6 +591,7 @@ app.whenReady().then(async () => {
       wsUrl = getWebSocketUrlFromHttp(serverUrl);
       accessToken = credentials.accessToken;
       connectWebSocket(credentials.wsToken);
+      void fetchGitHubToken();
       mainWindow?.webContents.once('did-finish-load', () => {
         mainWindow?.webContents.send('kyrozen:session-resumed', credentials.wsToken, credentials.serverUrl);
       });
@@ -844,6 +871,7 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
     logInfo(`Signin success, verifying desktop token`);
     await saveCredentials(verify.ws_token, verify.refresh_token, accessToken || undefined);
     connectWebSocket(verify.ws_token);
+    void fetchGitHubToken();
     logInfo(`Login complete, wsToken acquired`);
     return { success: true, wsToken: verify.ws_token };
   } catch (err: any) {
@@ -909,6 +937,7 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
     await saveCredentials(data.ws_token, data.refresh_token, accessToken || undefined);
     await saveOnboardingConfig({ completed: true, completedAt: new Date().toISOString() });
     connectWebSocket(data.ws_token);
+    void fetchGitHubToken();
     return { wsToken: data.ws_token, refreshToken: data.refresh_token };
   } catch (err: any) {
     logError(`Open token verification failed: ${err.message || err}`);

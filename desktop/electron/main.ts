@@ -1405,6 +1405,33 @@ ipcMain.handle('kyrozen:pick-onboarding-workspace', async () => {
   return { workspaceRoot: selected };
 });
 
+ipcMain.handle('kyrozen:import-local-project', async () => {
+  const defaultPath = app.getPath('home');
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    title: '导入已有本地目录作为 Kyrozen 项目',
+    defaultPath,
+    properties: ['openDirectory', 'promptToCreate'],
+    buttonLabel: '导入此文件夹',
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  const selected = result.filePaths[0];
+  await ensureWorkspaceStructure(selected);
+  const dirName = path.basename(selected);
+  const projectId = `local_${dirName}_${Date.now()}`;
+  workspaceMap[projectId] = selected;
+  await saveWorkspaceMap();
+  logInfo(`Imported local project ${projectId} at ${selected}`);
+  return {
+    projectId,
+    name: dirName,
+    workspaceRoot: selected,
+    current_stage: '本地导入',
+    localOnly: true,
+  };
+});
+
 ipcMain.on('kyrozen:request-initial-token', () => {
   const url = getProtocolUrl();
   logInfo(`Renderer requested initial token, protocolUrl=${url || 'none'}`);

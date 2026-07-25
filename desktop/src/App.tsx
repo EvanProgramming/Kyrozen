@@ -17,6 +17,12 @@ interface Project {
   name: string;
   current_stage: string;
   description?: string;
+  localOnly?: boolean;
+}
+
+interface UpdateStatus {
+  status: string;
+  message: string;
 }
 
 interface QuotaInfo {
@@ -45,6 +51,7 @@ function App() {
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [onboardingStatus, setOnboardingStatus] = useState<'loading' | 'needed' | 'completed'>('loading');
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
 
   const loadProjects = async () => {
     if (!window.kyrozen) return;
@@ -123,7 +130,22 @@ function App() {
       setFullTrust(status.enabled);
     });
 
+    window.kyrozen.onUpdateStatus((status) => {
+      setUpdateStatus(status);
+    });
+
+    // Automatically check for updates a few seconds after startup.
+    const updateTimer = setTimeout(() => {
+      window.kyrozen?.checkForUpdates().catch(() => {
+        // update check is non-critical
+      });
+    }, 5000);
+
     window.kyrozen.requestInitialToken();
+
+    return () => {
+      clearTimeout(updateTimer);
+    };
   }, []);
 
   const handleOnboardingComplete = async (wsToken: string) => {
@@ -175,6 +197,20 @@ function App() {
     setEditingFile(relativePath);
   };
 
+  const handleImportLocalProject = async () => {
+    if (!window.kyrozen) return;
+    const imported = await window.kyrozen.importLocalProject();
+    if (!imported) return;
+    const project: Project = {
+      id: imported.projectId,
+      name: imported.name,
+      current_stage: '本地导入',
+      localOnly: true,
+    };
+    setProjects((prev) => [...prev, project]);
+    await handleSelectProject(project.id);
+  };
+
   if (onboardingStatus === 'loading') {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-950 text-slate-200">
@@ -206,8 +242,16 @@ function App() {
       <ConnectionStatus state={connection} message={statusMessage} />
       <div className="flex-1 flex overflow-hidden">
         <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800 flex flex-col">
-          <div className="p-4 border-b border-slate-700">
+          <div className="p-4 border-b border-slate-700 flex items-center justify-between">
             <h2 className="font-semibold text-sm">我的项目</h2>
+            <button
+              type="button"
+              onClick={handleImportLocalProject}
+              title="导入已有本地目录"
+              className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
+            >
+              导入
+            </button>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {projects.length === 0 && (
@@ -274,6 +318,19 @@ function App() {
           </div>
         </aside>
         <main className="flex-1 flex flex-col overflow-hidden relative">
+          {updateStatus && updateStatus.status !== 'up-to-date' && (
+            <div className="px-4 py-2 bg-blue-900/40 border-b border-blue-800 text-sm flex items-center justify-between">
+              <div className="text-blue-100 text-xs">{updateStatus.message}</div>
+              <button
+                type="button"
+                onClick={() => setUpdateStatus(null)}
+                className="text-blue-200 hover:text-white text-xs"
+                aria-label="关闭更新提示"
+              >
+                ×
+              </button>
+            </div>
+          )}
           {currentProject && (
             <div className="px-4 py-2 bg-slate-800 border-b border-slate-700 text-sm">
               当前项目：<span className="font-medium">{currentProject.name}</span>

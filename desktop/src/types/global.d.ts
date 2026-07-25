@@ -104,6 +104,7 @@ export interface KyrozenAPI {
   installProjectDeps: (packages?: string[]) => Promise<{ success: boolean; installed: string[]; error?: string }>;
   getProjectVenv: () => Promise<{ ready: boolean; pythonPath: string | null }>;
   pickOnboardingWorkspace: () => Promise<{ workspaceRoot: string | null }>;
+  importLocalProject: () => Promise<{ projectId: string; name: string; workspaceRoot: string } | null>;
 
   onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) => void;
 }

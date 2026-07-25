@@ -97,6 +97,7 @@ contextBridge.exposeInMainWorld('kyrozen', {
   installProjectDeps: (packages?: string[]) => ipcRenderer.invoke('kyrozen:install-project-deps', packages),
   getProjectVenv: () => ipcRenderer.invoke('kyrozen:get-project-venv'),
   pickOnboardingWorkspace: () => ipcRenderer.invoke('kyrozen:pick-onboarding-workspace'),
+  importLocalProject: () => ipcRenderer.invoke('kyrozen:import-local-project'),
 
   onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) =>
     ipcRenderer.on('kyrozen:onboarding-progress', (_event, progress) => callback(progress)),

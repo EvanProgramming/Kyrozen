@@ -8,11 +8,21 @@ export function LoginPage({ onLogin }: Props) {
   const [mode, setMode] = useState<'password' | 'pairing'>('password');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [serverUrl, setServerUrl] = useState('http://localhost:8000');
+  const [serverUrl, setServerUrl] = useState('https://kyrozen.chat');
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [pairingError, setPairingError] = useState<string | null>(null);
   const [isPairing, setIsPairing] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (window.kyrozen) {
+      window.kyrozen.getServerUrl().then((url) => {
+        if (url) setServerUrl(url);
+      }).catch(() => {
+        // keep default
+      });
+    }
+  }, []);
 
   const clearPollTimer = () => {
     if (pollTimer.current) {
@@ -73,7 +83,8 @@ export function LoginPage({ onLogin }: Props) {
     <div className="flex-1 flex items-center justify-center p-6">
       <div className="w-full max-w-sm bg-slate-800 rounded-2xl p-8 shadow-2xl border border-slate-700">
         <h1 className="text-2xl font-bold mb-2 text-center">Kyrozen</h1>
-        <p className="text-slate-400 text-center mb-6">登录到本地客户端</p>
+        <p className="text-slate-400 text-center mb-2">登录到 Kyrozen</p>
+        <p className="text-xs text-slate-500 text-center mb-6">服务器：{serverUrl}</p>
 
         <div className="flex rounded-lg bg-slate-900 p-1 mb-6">
           <button
@@ -97,17 +108,6 @@ export function LoginPage({ onLogin }: Props) {
         </div>
 
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-slate-300 mb-1">服务器地址</label>
-            <input
-              type="url"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
-              required
-            />
-          </div>
-
           {mode === 'password' ? (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>

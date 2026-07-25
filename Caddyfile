@@ -1,0 +1,28 @@
+# Self-hosted Kyrozen reverse proxy.
+#
+# Replace :80 with your domain for automatic HTTPS, e.g.:
+#   kyrozen.example.com {
+#       reverse_proxy kyrozen-backend:8000
+#   }
+#
+# For local testing on a server without a domain, Caddy will serve a self-signed certificate.
+# The desktop client may warn about the certificate; use a real domain + DNS for production.
+
+:80 {
+	encode gzip
+
+	# WebSocket upgrade support
+	@websockets {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	reverse_proxy @websockets kyrozen-backend:8000
+
+	# Forward everything else to the backend
+	reverse_proxy kyrozen-backend:8000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote}
+		header_up X-Forwarded-For {remote}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

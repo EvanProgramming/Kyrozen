@@ -233,6 +233,21 @@ async function clearCredentials(): Promise<void> {
   }
 }
 
+async function saveServerUrl(url: string): Promise<void> {
+  const normalized = normalizeServerUrl(url);
+  serverUrl = normalized;
+  setUpdateApiBaseUrl(serverUrl);
+  wsUrl = getWebSocketUrlFromHttp(serverUrl);
+  const credentials = await loadCredentials();
+  if (credentials) {
+    await saveCredentials(
+      credentials.wsToken,
+      credentials.refreshToken || undefined,
+      credentials.accessToken || undefined,
+    );
+  }
+}
+
 function showNotification(title: string, body: string) {
   if (Notification.isSupported()) {
     new Notification({ title, body }).show();
@@ -1269,6 +1284,18 @@ ipcMain.handle('kyrozen:get-quota', async () => {
   } catch (err: any) {
     logError(`Failed to fetch quota: ${err.message || err}`);
     return { allowed: false, reason: err.message || 'Quota fetch failed', used: 0, limit: 0, remaining: 0 };
+  }
+});
+
+ipcMain.handle('kyrozen:get-server-url', () => serverUrl);
+
+ipcMain.handle('kyrozen:set-server-url', async (_event, url: string) => {
+  try {
+    await saveServerUrl(url);
+    return { success: true, serverUrl };
+  } catch (err: any) {
+    logError(`Failed to set server URL: ${err.message || err}`);
+    return { success: false, error: err.message || String(err) };
   }
 });
 

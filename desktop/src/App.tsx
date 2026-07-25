@@ -56,6 +56,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string }>({ connected: false, scope: '' });
+  const [serverUrl, setServerUrl] = useState('http://localhost:8000');
 
   const loadProjects = async () => {
     if (!window.kyrozen) return;
@@ -163,6 +164,12 @@ function App() {
       setShowSettings(true);
     });
 
+    window.kyrozen.getServerUrl().then((url) => {
+      setServerUrl(url || 'http://localhost:8000');
+    }).catch(() => {
+      // ignore
+    });
+
     window.kyrozen.onOpenPreviewUrl((url: string) => {
       setPreviewUrl(url);
     });
@@ -212,6 +219,15 @@ function App() {
     await loadFullTrust();
     await loadLanguage();
     await loadGitHubStatus();
+  };
+
+  const handleChangeServerUrl = async (url: string) => {
+    if (!window.kyrozen) return;
+    const result = await window.kyrozen.setServerUrl(url);
+    if (!result.success) {
+      throw new Error(result.error || '保存服务器地址失败');
+    }
+    setServerUrl(result.serverUrl || url);
   };
 
   const handleToggleFullTrust = async () => {
@@ -462,6 +478,8 @@ function App() {
           language={language}
           onChangeLanguage={handleChangeLanguage}
           onLogout={handleLogout}
+          serverUrl={serverUrl}
+          onChangeServerUrl={handleChangeServerUrl}
         />
       )}
     </div>

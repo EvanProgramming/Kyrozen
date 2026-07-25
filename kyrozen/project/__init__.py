@@ -4,6 +4,7 @@ from .context import ProjectContextBuilder
 from .db import KyrozenDatabase
 from .factory import create_database
 from .manager import ProjectManager
+from .postgres_db import PostgresDatabase
 from .project import Artifact, Decision, Project
 from .supabase_db import SupabaseDatabase
 
@@ -15,5 +16,6 @@ __all__ = [
     "ProjectManager",
     "KyrozenDatabase",
     "SupabaseDatabase",
+    "PostgresDatabase",
     "create_database",
 ]

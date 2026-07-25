@@ -125,7 +125,8 @@ class KyrozenConfig:
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     supabase_jwt_secret: str = ""
-    db_backend: str = "sqlite"  # "sqlite" or "supabase"
+    db_backend: str = "sqlite"  # "sqlite", "postgres", or "supabase"
+    postgres_dsn: str = ""  # e.g. postgresql://user:pass@localhost:5432/kyrozen
     beta_invite_only: bool = False
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
@@ -248,6 +249,7 @@ def get_config(
         or file_data.get("supabase_service_role_key", ""),
         supabase_jwt_secret=os.environ.get("SUPABASE_JWT_SECRET", "") or file_data.get("supabase_jwt_secret", ""),
         db_backend=os.environ.get("KYROZEN_DB_BACKEND", "") or file_data.get("db_backend", "sqlite"),
+        postgres_dsn=os.environ.get("KYROZEN_POSTGRES_DSN", "") or file_data.get("postgres_dsn", ""),
         beta_invite_only=_parse_bool(
             os.environ.get("KYROZEN_BETA_INVITE_ONLY", "")
             or file_data.get("beta_invite_only", "false")

@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
   getProjects: () => ipcRenderer.invoke('kyrozen:get-projects'),
 
   getQuota: () => ipcRenderer.invoke('kyrozen:get-quota'),
+  getServerUrl: () => ipcRenderer.invoke('kyrozen:get-server-url'),
+  setServerUrl: (url: string) => ipcRenderer.invoke('kyrozen:set-server-url', url),
   getFullTrust: () => ipcRenderer.invoke('kyrozen:get-full-trust'),
   setFullTrust: (enabled: boolean) => ipcRenderer.invoke('kyrozen:set-full-trust', enabled),
 

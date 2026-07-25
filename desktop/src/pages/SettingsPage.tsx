@@ -9,6 +9,8 @@ export interface Props {
   language: 'zh' | 'en';
   onChangeLanguage: (lang: 'zh' | 'en') => void;
   onLogout: () => void;
+  serverUrl: string;
+  onChangeServerUrl: (url: string) => Promise<void>;
 }
 
 export function SettingsPage({
@@ -20,8 +22,25 @@ export function SettingsPage({
   language,
   onChangeLanguage,
   onLogout,
+  serverUrl,
+  onChangeServerUrl,
 }: Props) {
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(true);
+  const [serverUrlInput, setServerUrlInput] = useState(serverUrl);
+  const [serverUrlSaving, setServerUrlSaving] = useState(false);
+  const [serverUrlError, setServerUrlError] = useState<string | null>(null);
+
+  const handleSaveServerUrl = async () => {
+    setServerUrlSaving(true);
+    setServerUrlError(null);
+    try {
+      await onChangeServerUrl(serverUrlInput.trim());
+    } catch (err: any) {
+      setServerUrlError(err.message || '保存失败');
+    } finally {
+      setServerUrlSaving(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -50,6 +69,31 @@ export function SettingsPage({
               >
                 退出登录
               </button>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-sm font-medium text-slate-300 mb-3">服务器地址</h3>
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={serverUrlInput}
+                onChange={(e) => setServerUrlInput(e.target.value)}
+                placeholder="https://your-server.com"
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+              />
+              {serverUrlError && <div className="text-xs text-red-400">{serverUrlError}</div>}
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">修改后需重新登录</span>
+                <button
+                  type="button"
+                  onClick={handleSaveServerUrl}
+                  disabled={serverUrlSaving || !serverUrlInput.trim()}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 text-white rounded text-sm transition-colors"
+                >
+                  {serverUrlSaving ? '保存中...' : '保存'}
+                </button>
+              </div>
             </div>
           </section>
 

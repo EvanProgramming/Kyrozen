@@ -25,6 +25,8 @@ export interface KyrozenAPI {
     limit: number;
     remaining: number;
   }>;
+  getServerUrl: () => Promise<string>;
+  setServerUrl: (url: string) => Promise<{ success: boolean; serverUrl?: string; error?: string }>;
   getFullTrust: () => Promise<{ enabled: boolean }>;
   setFullTrust: (enabled: boolean) => Promise<{ enabled: boolean }>;
 

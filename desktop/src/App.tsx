@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ChatPage } from './pages/ChatPage';
 import { LoginPage } from './pages/LoginPage';
 import { OnboardingPage } from './pages/OnboardingPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { EditorPanel } from './components/EditorPanel';
 import { FileTree } from './components/FileTree';
@@ -52,6 +53,9 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [onboardingStatus, setOnboardingStatus] = useState<'loading' | 'needed' | 'completed'>('loading');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [language, setLanguage] = useState<'zh' | 'en'>('zh');
+  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string }>({ connected: false, scope: '' });
 
   const loadProjects = async () => {
     if (!window.kyrozen) return;
@@ -76,6 +80,28 @@ function App() {
       setFullTrust(t.enabled);
     } catch {
       setFullTrust(false);
+    }
+  };
+
+  const loadLanguage = async () => {
+    if (!window.kyrozen) return;
+    try {
+      const result = await window.kyrozen.getOnboardingLanguage();
+      if (result.language === 'zh' || result.language === 'en') {
+        setLanguage(result.language);
+      }
+    } catch {
+      setLanguage('zh');
+    }
+  };
+
+  const loadGitHubStatus = async () => {
+    if (!window.kyrozen) return;
+    try {
+      const status = await window.kyrozen.getGitHubStatus();
+      setGithubStatus({ connected: status.connected, scope: status.scope || '' });
+    } catch {
+      setGithubStatus({ connected: false, scope: '' });
     }
   };
 
@@ -120,6 +146,21 @@ function App() {
       await loadProjects();
       await loadQuota();
       await loadFullTrust();
+      await loadLanguage();
+      await loadGitHubStatus();
+    });
+
+    window.kyrozen.onSessionEnded(() => {
+      setToken(null);
+      setProjects([]);
+      setCurrentProjectId(null);
+      setQuota(null);
+      setFullTrust(false);
+      setGithubStatus({ connected: false, scope: '' });
+    });
+
+    window.kyrozen.onOpenSettings(() => {
+      setShowSettings(true);
     });
 
     window.kyrozen.onOpenPreviewUrl((url: string) => {
@@ -128,6 +169,10 @@ function App() {
 
     window.kyrozen.onFullTrustChange((status) => {
       setFullTrust(status.enabled);
+    });
+
+    window.kyrozen.onGitHubStatus((status) => {
+      setGithubStatus({ connected: status.connected, scope: status.scope || '' });
     });
 
     window.kyrozen.onUpdateStatus((status) => {
@@ -155,6 +200,8 @@ function App() {
     await loadProjects();
     await loadQuota();
     await loadFullTrust();
+    await loadLanguage();
+    await loadGitHubStatus();
   };
 
   const handleLogin = async (wsToken: string, _serverUrl: string) => {
@@ -163,6 +210,8 @@ function App() {
     await loadProjects();
     await loadQuota();
     await loadFullTrust();
+    await loadLanguage();
+    await loadGitHubStatus();
   };
 
   const handleToggleFullTrust = async () => {
@@ -211,6 +260,26 @@ function App() {
     await handleSelectProject(project.id);
   };
 
+  const handleChangeLanguage = async (lang: 'zh' | 'en') => {
+    if (!window.kyrozen) return;
+    await window.kyrozen.saveOnboardingLanguage(lang);
+    setLanguage(lang);
+  };
+
+  const handleConnectGitHub = async () => {
+    if (!window.kyrozen) return;
+    const result = await window.kyrozen.connectGitHub();
+    if (result?.success) {
+      await loadGitHubStatus();
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!window.kyrozen) return;
+    await window.kyrozen.logout();
+    setShowSettings(false);
+  };
+
   if (onboardingStatus === 'loading') {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-950 text-slate-200">
@@ -240,6 +309,36 @@ function App() {
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-900 text-slate-100">
       <ConnectionStatus state={connection} message={statusMessage} />
+      <header className="h-12 border-b border-slate-700 bg-slate-800 flex items-center justify-between px-4 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-slate-100">Kyrozen</span>
+          {currentProject && (
+            <select
+              value={currentProjectId || ''}
+              onChange={(e) => handleSelectProject(e.target.value)}
+              className="bg-slate-900 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
+          >
+            设置
+          </button>
+          <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-medium">
+            K
+          </div>
+        </div>
+      </header>
       <div className="flex-1 flex overflow-hidden">
         <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800 flex flex-col">
           <div className="p-4 border-b border-slate-700 flex items-center justify-between">
@@ -353,6 +452,18 @@ function App() {
           <GitPanel />
         </div>
       </div>
+      {showSettings && (
+        <SettingsPage
+          onClose={() => setShowSettings(false)}
+          fullTrust={fullTrust}
+          onToggleFullTrust={handleToggleFullTrust}
+          githubStatus={githubStatus}
+          onConnectGitHub={handleConnectGitHub}
+          language={language}
+          onChangeLanguage={handleChangeLanguage}
+          onLogout={handleLogout}
+        />
+      )}
     </div>
   );
 }

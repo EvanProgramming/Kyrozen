@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('kyrozen', {
   onSessionResumed: (callback: (token: string, serverUrl: string) => void) =>
     ipcRenderer.on('kyrozen:session-resumed', (_event, token, serverUrl) => callback(token, serverUrl)),
 
+  onSessionEnded: (callback: () => void) =>
+    ipcRenderer.on('kyrozen:session-ended', () => callback()),
+
+  onOpenSettings: (callback: () => void) =>
+    ipcRenderer.on('kyrozen:open-settings', () => callback()),
+
   sendChat: (message: string) => ipcRenderer.send('kyrozen:send-chat', message),
   cancelTask: () => ipcRenderer.send('kyrozen:cancel-task'),
   startPairing: (serverUrl: string) => ipcRenderer.invoke('kyrozen:start-pairing', serverUrl),
@@ -89,8 +95,11 @@ contextBridge.exposeInMainWorld('kyrozen', {
   getAutoCommit: () => ipcRenderer.invoke('kyrozen:get-auto-commit'),
 
   getOnboardingStatus: () => ipcRenderer.invoke('kyrozen:get-onboarding-status'),
+  getOnboardingLanguage: () => ipcRenderer.invoke('kyrozen:get-onboarding-language'),
   saveOnboardingLanguage: (language: 'zh' | 'en') => ipcRenderer.invoke('kyrozen:save-onboarding-language', language),
   completeOnboarding: (language?: 'zh' | 'en') => ipcRenderer.invoke('kyrozen:complete-onboarding', language),
+
+  logout: () => ipcRenderer.invoke('kyrozen:logout'),
   checkPythonRuntime: () => ipcRenderer.invoke('kyrozen:check-python-runtime'),
   ensurePythonRuntime: () => ipcRenderer.invoke('kyrozen:ensure-python-runtime'),
   ensureProjectVenv: () => ipcRenderer.invoke('kyrozen:ensure-project-venv'),

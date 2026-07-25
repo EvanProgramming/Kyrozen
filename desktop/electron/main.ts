@@ -415,6 +415,19 @@ function createTray() {
       },
     },
     {
+      label: '设置',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('kyrozen:open-settings');
+        } else {
+          createWindow();
+        }
+      },
+    },
+    { type: 'separator' },
+    {
       label: '退出',
       click: () => {
         isQuitting = true;
@@ -1376,6 +1389,11 @@ ipcMain.handle('kyrozen:get-onboarding-status', async () => {
   return { ...onboardingConfig };
 });
 
+ipcMain.handle('kyrozen:get-onboarding-language', async () => {
+  onboardingConfig = await loadOnboardingConfig();
+  return { language: onboardingConfig.language };
+});
+
 ipcMain.handle('kyrozen:save-onboarding-language', async (_event, language: 'zh' | 'en') => {
   await saveOnboardingConfig({ language });
   return { language };
@@ -1386,6 +1404,19 @@ ipcMain.handle('kyrozen:complete-onboarding', async (_event, language?: 'zh' | '
   if (language) patch.language = language;
   await saveOnboardingConfig(patch);
   return { ...onboardingConfig };
+});
+
+ipcMain.handle('kyrozen:logout', async () => {
+  await clearCredentials();
+  disconnectWebSocket();
+  stopPythonAgent();
+  currentProjectId = null;
+  accessToken = null;
+  githubAccessToken = null;
+  githubTokenScope = null;
+  workspaceMap = {};
+  mainWindow?.webContents.send('kyrozen:session-ended');
+  return { success: true };
 });
 
 ipcMain.handle('kyrozen:check-python-runtime', async () => {

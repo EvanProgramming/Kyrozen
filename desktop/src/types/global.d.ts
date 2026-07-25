@@ -43,6 +43,8 @@ export interface KyrozenAPI {
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => void;
   onProtocolUrl: (callback: (url: string) => void) => void;
   onSessionResumed: (callback: (token: string, serverUrl: string) => void) => void;
+  onSessionEnded: (callback: () => void) => void;
+  onOpenSettings: (callback: () => void) => void;
   sendChat: (message: string) => void;
   cancelTask: () => void;
   startPairing: (serverUrl: string) => Promise<{ success: boolean; code?: string; expiresIn?: number; error?: string }>;
@@ -96,8 +98,11 @@ export interface KyrozenAPI {
   onFullTrustChange: (callback: (status: { enabled: boolean }) => void) => () => void;
 
   getOnboardingStatus: () => Promise<{ completed: boolean; language: 'zh' | 'en'; completedAt?: string }>;
+  getOnboardingLanguage: () => Promise<{ language: 'zh' | 'en' }>;
   saveOnboardingLanguage: (language: 'zh' | 'en') => Promise<{ language: 'zh' | 'en' }>;
   completeOnboarding: (language?: 'zh' | 'en') => Promise<{ completed: boolean; language: 'zh' | 'en' }>;
+
+  logout: () => Promise<{ success: boolean }>;
   checkPythonRuntime: () => Promise<{ ready: boolean; path: string | null; error?: string }>;
   ensurePythonRuntime: () => Promise<{ success: boolean; path: string | null; error?: string }>;
   ensureProjectVenv: () => Promise<{ success: boolean; pythonPath: string | null; created?: boolean; error?: string }>;

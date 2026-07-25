@@ -720,24 +720,97 @@ async function logAuditEvent(event: AuditEvent): Promise<void> {
   }
 }
 
+interface ArtifactSummary {
+  id: string;
+  type: string;
+  title: string;
+  version: number;
+  updated_at: string;
+}
+
+interface ArtifactFull extends ArtifactSummary {
+  content: string;
+}
+
+interface LocalManifestEntry {
+  id: string;
+  type: string;
+  title: string;
+  version: number;
+  local_path: string;
+  updated_at: string;
+}
+
+async function loadLocalManifest(contextDir: string): Promise<LocalManifestEntry[]> {
+  try {
+    const raw = await fs.readFile(path.join(contextDir, 'manifest.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as LocalManifestEntry[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Download the latest cloud artifacts for a project into <workspace>/.kyrozen/context/. */
 async function syncProjectArtifacts(projectId: string): Promise<void> {
   const root = workspaceMap[projectId];
   if (!root || !accessToken) return;
 
   try {
-    const artifacts: Array<{ id: string; type: string; title: string; version: number; updated_at: string }> =
-      await apiGet(`/api/projects/${projectId}/artifacts`);
+    const artifacts: ArtifactSummary[] = await apiGet(`/api/projects/${projectId}/artifacts`);
     const contextDir = path.join(root, '.kyrozen', 'context');
     await fs.mkdir(contextDir, { recursive: true });
 
+    const localManifest = await loadLocalManifest(contextDir);
+    const localByTitle = new Map(localManifest.map((entry) => [entry.title, entry]));
+
+    const conflicts: { title: string; cloudUpdatedAt: string; localUpdatedAt: string }[] = [];
+    for (const summary of artifacts) {
+      const localEntry = localByTitle.get(summary.title);
+      if (localEntry && new Date(localEntry.updated_at) > new Date(summary.updated_at)) {
+        conflicts.push({
+          title: summary.title,
+          cloudUpdatedAt: summary.updated_at,
+          localUpdatedAt: localEntry.updated_at,
+        });
+      }
+    }
+
+    let useCloudForConflicts = true;
+    if (conflicts.length > 0 && mainWindow) {
+      const detail = conflicts.map((c) => `• ${c.title}`).join('\n');
+      const result = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['使用云端版本', '保留本地版本'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Artifact 云本地冲突',
+        message: `检测到 ${conflicts.length} 个 Artifact 本地版本比云端更新，请选择处理方式`,
+        detail,
+      });
+      useCloudForConflicts = result.response === 0;
+    }
+
     const manifest: Array<Record<string, unknown>> = [];
     for (const summary of artifacts) {
-      const full: { id: string; type: string; title: string; content: string; version: number; updated_at: string } =
-        await apiGet(`/api/projects/${projectId}/artifacts/${summary.id}`);
+      const full: ArtifactFull = await apiGet(`/api/projects/${projectId}/artifacts/${summary.id}`);
       const safeTitle = String(full.title || full.type).replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]/g, '_');
       const fileName = `${safeTitle}.md`;
       const filePath = path.join(contextDir, fileName);
+      const isConflict = conflicts.some((c) => c.title === full.title);
+      if (isConflict && !useCloudForConflicts) {
+        // Keep local version; still update manifest metadata from cloud.
+        manifest.push({
+          id: full.id,
+          type: full.type,
+          title: full.title,
+          version: full.version,
+          local_path: filePath,
+          updated_at: full.updated_at,
+          conflict: 'kept_local',
+        });
+        continue;
+      }
       await fs.writeFile(filePath, full.content || '', 'utf-8');
       manifest.push({
         id: full.id,
@@ -752,7 +825,7 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
     await fs.writeFile(path.join(contextDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     sendChatMessage({
       role: 'system',
-      content: `已同步 ${artifacts.length} 个云端 Artifact 到本地 .kyrozen/context`,
+      content: `已同步 ${artifacts.length} 个云端 Artifact 到本地 .kyrozen/context${conflicts.length > 0 ? `（${conflicts.length} 个冲突）` : ''}`,
     });
   } catch (err: any) {
     sendChatMessage({ role: 'system', content: `Artifact 同步失败: ${err.message || err}` });

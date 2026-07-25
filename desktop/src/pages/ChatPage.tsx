@@ -18,6 +18,14 @@ interface ChatPageProps {
 
 const LOCAL_URL_RE = /(https?:\/\/localhost(:\d+)(\/[^\s<>\"]*))/g;
 
+function isQuotaError(content: string): boolean {
+  return /配额|额度|余额不足|insufficient quota|quota exceeded/i.test(content);
+}
+
+function openExternalUrl(url: string): void {
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 function renderMessageContent(content: string, onOpenPreview?: (url: string) => void) {
   if (!onOpenPreview) return content;
   const parts: React.ReactNode[] = [];
@@ -193,6 +201,17 @@ export function ChatPage({ projectId, onOpenPreview }: ChatPageProps) {
               }`}
             >
               {renderMessageContent(msg.content, onOpenPreview)}
+              {isQuotaError(msg.content) && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => openExternalUrl('https://kyrozen.com/pricing')}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors"
+                  >
+                    升级会员以继续使用
+                  </button>
+                </div>
+              )}
               {msg.raw && (
                 <div className="mt-2 pt-2 border-t border-slate-600/50">
                   <button

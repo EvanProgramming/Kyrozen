@@ -445,6 +445,11 @@ class SigninRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
+class WaitlistRequest(BaseModel):
+    email: str = Field(..., min_length=1)
+    source: str = Field("website", max_length=100)
+
+
 class ConfirmRequest(BaseModel):
     confirmed: bool = Field(True, description="Confirm and continue the waiting task")
 
@@ -940,10 +945,6 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if html_path.exists():
             return HTMLResponse(html_path.read_text(encoding="utf-8"))
         return HTMLResponse("<h1>Kyrozen Core</h1><p>Web UI not found.</p>")
-
-    class WaitlistRequest(BaseModel):
-        email: str = Field(..., min_length=1)
-        source: str = Field("website", max_length=100)
 
     @app.post("/api/waitlist")
     async def join_waitlist(request: Request, payload: WaitlistRequest):

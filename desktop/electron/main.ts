@@ -121,6 +121,7 @@ let accessToken: string | null = null;
 let projectFileWatchers = new Map<string, FSWatcher>();
 let pendingFileChanges = new Map<string, NodeJS.Timeout>();
 let pendingAutoCommit = new Map<string, NodeJS.Timeout>();
+let pendingTasks: Array<Record<string, unknown>> = [];
 let pythonRuntimePath: string | null = null;
 let pythonRuntimeReady = false;
 let extensionServer: http.Server | null = null;
@@ -1620,6 +1621,13 @@ function connectWebSocket(token: string) {
       pythonAgentRestartCount = 0;
       startHeartbeat();
       flushPendingCloudMessages();
+      // Ask the cloud for any tasks that were assigned while the client was offline.
+      wsClient?.send(
+        JSON.stringify({
+          type: 'request_pending_tasks',
+          current_project_id: currentProjectId,
+        })
+      );
       if (currentTaskId && currentTaskRunning) {
         sendToCloud({
           type: 'task_step',
@@ -1784,11 +1792,32 @@ function scheduleReconnect(token: string) {
 }
 
 /** Route messages from the cloud to the local Python Agent or UI. */
+async function processNextQueuedTask(): Promise<void> {
+  if (pendingTasks.length === 0 || currentTaskRunning) return;
+  const next = pendingTasks.shift();
+  if (!next) return;
+  logInfo(`Processing queued task ${next.task_id}`);
+  await handleServerMessage(next);
+}
+
 async function handleServerMessage(message: Record<string, unknown>) {
   const type = message.type as string;
   logInfo(`Received server message: ${type}`);
 
   if (type === 'assign_task') {
+    if (currentTaskRunning) {
+      pendingTasks.push(message);
+      sendToCloud({
+        type: 'task_queued',
+        task_id: message.task_id,
+        queue_length: pendingTasks.length,
+      });
+      sendChatMessage({
+        role: 'system',
+        content: `任务 ${message.task_id} 已加入队列，当前任务完成后自动执行。`,
+      });
+      return;
+    }
     currentTaskId = String(message.task_id);
     currentTaskRunning = true;
     taskRetryCount = 0;
@@ -2068,6 +2097,7 @@ function handlePythonAgentLine(line: string) {
       currentTaskRunning = false;
       taskRetryCount = 0;
       clearTaskTimeout();
+      void processNextQueuedTask();
       sendToCloud({
         type: 'task_result',
         task_id: message.params.task_id,

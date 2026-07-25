@@ -28,3 +28,4 @@ pnpm-debug.log*
 
 # Test artifacts
 e2e/screenshots/
+test-results/

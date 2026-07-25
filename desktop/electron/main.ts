@@ -2194,7 +2194,7 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
 
   const result = await dialog.showMessageBox(mainWindow!, {
     type: 'warning',
-    buttons: ['确认并信任本次会话', '确认', '取消'],
+    buttons: ['确认并信任该操作类型', '确认', '取消'],
     defaultId: 2,
     cancelId: 2,
     title: '高危操作确认',
@@ -2204,9 +2204,7 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
   const confirmed = result.response === 0 || result.response === 1;
   const trustForSession = result.response === 0;
   if (trustForSession) {
-    fullTrustMode = true;
-    mainWindow?.webContents.send('kyrozen:full-trust-change', { enabled: true });
-    showNotification('已开启完全信任模式', '本次会话内高危工具将自动执行，不再弹出确认对话框。');
+    showNotification('已信任该操作类型', `当前会话内 ${params.tool}.${params.action} 将不再弹窗确认。`);
   }
   await logAuditEvent({ ...auditBase, confirmed, fullTrust: fullTrustMode });
   sendToPythonAgent({

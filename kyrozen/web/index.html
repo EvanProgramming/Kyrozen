@@ -3,2338 +3,329 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kyrozen — Project Workspace</title>
+  <title>Kyrozen — 即将上线</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0d1117;
-      color: #c9d1d9;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
+
+    :root {
+      --bg: #0a0f17;
+      --surface: rgba(20, 26, 38, 0.7);
+      --text: #e8ecf2;
+      --muted: #9fb0c7;
+      --accent: #00f0ff;
+      --accent-glow: rgba(0, 240, 255, 0.35);
+      --success: #2ce48a;
+      --error: #ff5e7d;
     }
-    header {
-      background: #161b22;
-      padding: 12px 20px;
-      border-bottom: 1px solid #30363d;
+
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    body {
       display: flex;
       align-items: center;
-      gap: 16px;
+      justify-content: center;
+      position: relative;
     }
-    header h1 { font-size: 18px; color: #00f0ff; cursor: pointer; }
-    header .subtitle { font-size: 12px; color: #8b949e; }
-    #health { margin-left: auto; font-size: 12px; color: #8b949e; }
-    #health.ok { color: #00ff88; }
-    #health.degraded { color: #ffaa00; }
 
-    #main { flex: 1; display: flex; overflow: hidden; }
-    .view { flex: 1; overflow-y: auto; padding: 24px; display: none; }
-    .view.active { display: block; }
-
-    /* Project List */
-    .list-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-    .list-header h2 { font-size: 20px; }
-    .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
-    .project-card {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 10px;
-      padding: 16px;
-      cursor: pointer;
-      transition: border-color .2s, transform .1s;
+    /* Animated gradient background */
+    .bg-gradient {
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(circle at 20% 30%, rgba(0, 240, 255, 0.12) 0%, transparent 40%),
+        radial-gradient(circle at 80% 70%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
+        radial-gradient(circle at 50% 50%, rgba(0, 240, 255, 0.05) 0%, transparent 60%);
+      animation: pulse 12s ease-in-out infinite alternate;
+      z-index: 0;
     }
-    .project-card:hover { border-color: #00f0ff; transform: translateY(-2px); }
-    .project-card .name { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: #f0f6fc; }
-    .project-card .meta { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
-    .project-card .stage { display: inline-block; font-size: 11px; padding: 3px 8px; border-radius: 12px; background: #1f6feb22; color: #58a6ff; margin-right: 6px; }
-    .project-card .status { display: inline-block; font-size: 11px; padding: 3px 8px; border-radius: 12px; background: #23863622; color: #3fb950; }
-    .project-card .status.archived { background: #8b949e22; color: #8b949e; }
 
-    /* Forms */
-    .form-card {
-      max-width: 560px;
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 10px;
-      padding: 20px;
-      margin-bottom: 20px;
+    .grid-overlay {
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(circle at center, black 0%, transparent 70%);
+      -webkit-mask-image: radial-gradient(circle at center, black 0%, transparent 70%);
+      z-index: 0;
+      pointer-events: none;
     }
-    .form-card label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 6px; }
-    .form-card input, .form-card textarea, .form-card select {
-      width: 100%;
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 10px 12px;
-      color: #c9d1d9;
-      font-size: 14px;
-      margin-bottom: 14px;
-      font-family: inherit;
-    }
-    .form-card input:focus, .form-card textarea:focus, .form-card select:focus { outline: none; border-color: #00f0ff; }
-    .form-card textarea { min-height: 80px; resize: vertical; }
 
-    /* Project Detail */
-    .detail-header { margin-bottom: 20px; }
-    .detail-header h2 { font-size: 22px; margin-bottom: 6px; color: #f0f6fc; }
-    .detail-header p { color: #8b949e; font-size: 14px; }
-    .detail-actions { display: flex; gap: 10px; margin-bottom: 24px; }
-    .section { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-    .section h3 { font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
-    .section p { font-size: 14px; line-height: 1.6; }
-    .empty { color: #6e7681; font-size: 13px; }
-    .item-list { display: flex; flex-direction: column; gap: 10px; }
-    .item {
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      padding: 10px 12px;
-      font-size: 13px;
+    @keyframes pulse {
+      0% { opacity: 0.8; transform: scale(1); }
+      100% { opacity: 1; transform: scale(1.05); }
     }
-    .item .title { font-weight: 600; margin-bottom: 4px; }
-    .item .desc { color: #8b949e; font-size: 12px; }
 
-    /* Chat */
-    #chat-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    #chat { flex: 1; overflow-y: auto; padding: 20px; }
-    .msg { margin-bottom: 16px; max-width: 90%; }
-    .msg.user { margin-left: auto; }
-    .msg .role { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
-    .msg .content {
-      background: #161b22;
-      padding: 12px 16px;
-      border-radius: 8px;
-      line-height: 1.5;
-      white-space: pre-wrap;
-      word-break: break-word;
-      border: 1px solid #30363d;
+    .card {
+      position: relative;
+      z-index: 1;
+      width: min(520px, 92vw);
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      padding: 56px 40px;
+      text-align: center;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow:
+        0 24px 80px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset;
     }
-    .msg.user .content { background: #1f6feb22; border-color: #1f6feb44; }
-    .msg.assistant .content { background: #161b22; }
-    .msg.system .content { background: #1a1a2e; border-color: #00f0ff22; color: #8b949e; font-size: 12px; }
-    .msg.error .content { background: #ff446622; border-color: #ff446644; color: #ff9aa2; }
 
-    #input-area {
-      background: #161b22;
-      padding: 16px 20px;
-      border-top: 1px solid #30363d;
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 999px;
+      background: rgba(0, 240, 255, 0.1);
+      border: 1px solid rgba(0, 240, 255, 0.2);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 28px;
+    }
+
+    .badge::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px var(--accent-glow);
+      animation: blink 2s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    h1 {
+      font-size: 42px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      letter-spacing: -1px;
+      background: linear-gradient(135deg, #ffffff 0%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .tagline {
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.7;
+      margin-bottom: 40px;
+    }
+
+    .form {
       display: flex;
+      flex-direction: column;
       gap: 12px;
     }
-    #user-input {
-      flex: 1;
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 12px;
-      color: #c9d1d9;
-      font-size: 14px;
-      resize: none;
-      min-height: 44px;
-      max-height: 120px;
-      font-family: inherit;
-    }
-    #user-input:focus { outline: none; border-color: #00f0ff; }
-    button {
-      background: #00f0ff;
-      color: #0d1117;
-      border: none;
-      border-radius: 8px;
-      padding: 10px 18px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity .2s;
-      font-family: inherit;
-      font-size: 13px;
-    }
-    button:hover { opacity: .8; }
-    button:disabled { opacity: .4; cursor: default; }
-    button.secondary { background: #30363d; color: #c9d1d9; }
-    button.danger { background: #ff4466; color: #fff; }
 
-    #status-bar {
-      background: #161b22;
-      border-top: 1px solid #30363d;
-      padding: 8px 20px;
-      font-size: 12px;
-      color: #8b949e;
+    .input-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    input[type="email"] {
+      flex: 1;
+      min-width: 220px;
+      padding: 14px 18px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(10, 15, 23, 0.6);
+      color: var(--text);
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input[type="email"]::placeholder {
+      color: rgba(159, 176, 199, 0.5);
+    }
+
+    input[type="email"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    button {
+      padding: 14px 24px;
+      border-radius: 12px;
+      border: none;
+      background: linear-gradient(135deg, var(--accent) 0%, #00c2ff 100%);
+      color: #00141a;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.2s;
+      white-space: nowrap;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 24px var(--accent-glow);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .message {
+      min-height: 24px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 0.3s, transform 0.3s;
+    }
+
+    .message.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .message.success { color: var(--success); }
+    .message.error { color: var(--error); }
+
+    .features {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      margin-top: 40px;
+      flex-wrap: wrap;
+    }
+
+    .feature {
       display: flex;
       align-items: center;
-      gap: 16px;
-    }
-    #status { font-weight: 600; }
-    #status.ready { color: #8b949e; }
-    #status.thinking { color: #00f0ff; }
-    #status.calling { color: #ffaa00; }
-    #status.waiting { color: #ffaa00; }
-    #status.completed { color: #00ff88; }
-    #status.failed { color: #ff4466; }
-
-    #sidebar {
-      width: 360px;
-      background: #161b22;
-      border-left: 1px solid #30363d;
-      display: flex;
-      flex-direction: column;
-    }
-    #sidebar h2 {
-      font-size: 13px;
-      padding: 12px 16px;
-      border-bottom: 1px solid #30363d;
-      color: #8b949e;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    #task-info { padding: 12px 16px; border-bottom: 1px solid #30363d; font-size: 12px; }
-    #task-info div { margin-bottom: 6px; }
-    #task-info .label { color: #8b949e; }
-    #steps { flex: 1; overflow-y: auto; padding: 12px 16px; font-size: 12px; }
-    .step { margin-bottom: 10px; padding: 8px; border-radius: 6px; background: #0d1117; border: 1px solid #30363d; }
-    .step .name { font-weight: 600; margin-bottom: 4px; }
-    .step.pending { border-color: #30363d; }
-    .step.running { border-color: #00f0ff; }
-    .step.completed { border-color: #00ff88; }
-    .step.failed { border-color: #ff4466; }
-    .step.waiting { border-color: #ffaa00; }
-    .step .detail { color: #8b949e; font-size: 11px; margin-top: 4px; word-break: break-all; }
-
-    #confirm-box {
-      display: none;
-      background: #1a1a2e;
-      border-top: 1px solid #00f0ff22;
-      padding: 14px 16px;
-      flex-direction: column;
       gap: 10px;
+      color: var(--muted);
+      font-size: 14px;
     }
-    #confirm-box.active { display: flex; }
-    #confirm-box .confirm-title { font-size: 13px; font-weight: 600; color: #ffaa00; }
-    #confirm-box .confirm-detail { font-size: 12px; color: #c9d1d9; white-space: pre-wrap; word-break: break-word; }
-    #confirm-box .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
 
-    .hidden { display: none !important; }
+    .feature::before {
+      content: '✦';
+      color: var(--accent);
+      font-size: 16px;
+    }
 
-    @media (max-width: 900px) {
-      #sidebar { display: none; }
+    .footer {
+      margin-top: 36px;
+      font-size: 12px;
+      color: rgba(159, 176, 199, 0.5);
+    }
+
+    @media (max-width: 480px) {
+      .card { padding: 40px 24px; }
+      h1 { font-size: 32px; }
+      .tagline { font-size: 15px; }
+      .input-row { flex-direction: column; }
+      button { width: 100%; }
+      .features { gap: 16px; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1 onclick="location.hash='#/projects'">Kyrozen</h1>
-    <span class="subtitle" id="page-subtitle">Project Workspace</span>
-    <span id="health">Checking...</span>
-  </header>
+  <div class="bg-gradient"></div>
+  <div class="grid-overlay"></div>
 
-  <div id="main">
-    <!-- Project List View -->
-    <div id="view-list" class="view active">
-      <div class="list-header">
-        <h2>项目列表</h2>
-        <button onclick="showCreateForm()">+ 创建项目</button>
+  <main class="card">
+    <div class="badge">Coming Soon</div>
+    <h1>Kyrozen</h1>
+    <p class="tagline">
+      AI 驱动的项目工作流平台，让创意从想法到产品一气呵成。<br>
+      我们正在打磨最后的细节，很快与你见面。
+    </p>
+
+    <form class="form" id="waitlist-form">
+      <div class="input-row">
+        <input
+          type="email"
+          id="email"
+          placeholder="输入你的邮箱"
+          autocomplete="email"
+          required
+        />
+        <button type="submit" id="submit-btn">Join Waitlist</button>
       </div>
+      <div class="message" id="message"></div>
+    </form>
 
-      <div id="create-form" class="form-card hidden">
-        <label>项目名称</label>
-        <input type="text" id="new-project-name" placeholder="例如：智能跑步设备">
-        <label>项目目标</label>
-        <input type="text" id="new-project-goal" placeholder="例如：改善运动音乐体验">
-        <label>初始想法 / 描述</label>
-        <textarea id="new-project-desc" placeholder="描述你想要做什么..."></textarea>
-        <div style="display:flex;gap:10px;">
-          <button onclick="createProject()">创建</button>
-          <button class="secondary" onclick="hideCreateForm()">取消</button>
-        </div>
-      </div>
-
-      <div id="project-list" class="project-grid"></div>
-      <p id="no-projects" class="empty hidden">暂无项目，点击上方按钮创建一个。</p>
+    <div class="features">
+      <div class="feature">AI 规划</div>
+      <div class="feature">自动开发</div>
+      <div class="feature">硬件集成</div>
     </div>
 
-    <!-- Project Detail View -->
-    <div id="view-detail" class="view">
-      <div class="detail-header">
-        <h2 id="detail-name">—</h2>
-        <p id="detail-meta">—</p>
-      </div>
-      <div class="detail-actions">
-        <button onclick="enterDiscovery()">进入 Problem Discovery</button>
-        <button onclick="enterMarketResearch()">进入 Market Research</button>
-        <button onclick="enterPlanning()">进入 Product Planning</button>
-        <button onclick="enterDevelopment()">进入 Software Development</button>
-        <button onclick="enterHardware()">进入 Hardware Development</button>
-        <button onclick="enterTesting()">进入 Testing & Validation</button>
-        <button onclick="enterLearning()">进入 Learning Center</button>
-        <button class="secondary" onclick="enterProjectChat()">普通聊天</button>
-        <button class="secondary" onclick="location.hash='#/projects'">返回列表</button>
-      </div>
-
-      <div class="section">
-        <h3>目标 Goal</h3>
-        <p id="detail-goal" class="empty">暂无</p>
-      </div>
-
-      <div class="section">
-        <h3>描述 Description</h3>
-        <p id="detail-description" class="empty">暂无</p>
-      </div>
-
-      <div class="section">
-        <h3>下一步 Next Steps</h3>
-        <p id="detail-next" class="empty">暂无</p>
-      </div>
-
-      <div class="section">
-        <h3>最近任务 Recent Tasks</h3>
-        <div id="detail-tasks" class="item-list"><span class="empty">暂无任务</span></div>
-      </div>
-
-      <div class="section">
-        <h3>最近决策 Recent Decisions</h3>
-        <div id="detail-decisions" class="item-list"><span class="empty">暂无决策</span></div>
-      </div>
-
-      <div class="section">
-        <h3>最近产物 Recent Artifacts</h3>
-        <div id="detail-artifacts" class="item-list"><span class="empty">暂无产物</span></div>
-      </div>
-    </div>
-
-    <!-- Project Chat View -->
-    <div id="view-chat" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="chat-panel">
-        <div id="chat"></div>
-
-        <div id="confirm-box">
-          <div class="confirm-title">高风险操作需要确认</div>
-          <div class="confirm-detail" id="confirm-detail">Agent 请求执行可能影响文件或系统的操作。</div>
-          <div class="confirm-actions">
-            <button id="confirm-btn" onclick="confirmTask(true)">确认执行</button>
-            <button class="secondary" onclick="confirmTask(false)">拒绝</button>
-          </div>
-        </div>
-
-        <div id="input-area">
-          <textarea id="user-input" placeholder="输入任务，例如：下一步怎么办？" rows="1"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
-          <button onclick="sendMessage()" id="send-btn">发送</button>
-          <button class="secondary" onclick="leaveChat()">返回项目</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Problem Discovery View -->
-    <div id="view-discovery" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="discovery-panel" style="flex:1;display:flex;min-width:0;">
-        <div id="discovery-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-          <div id="discovery-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
-          <div id="discovery-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
-            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
-            <div id="discovery-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="confirmDiscoveryTask(true)">确认执行</button>
-              <button class="secondary" onclick="confirmDiscoveryTask(false)">拒绝</button>
-            </div>
-          </div>
-          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
-            <textarea id="discovery-input" placeholder="描述你的困扰或想法..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDiscoveryMessage()}"></textarea>
-            <button onclick="sendDiscoveryMessage()" id="discovery-send-btn">发送</button>
-            <button class="secondary" onclick="leaveDiscovery()">返回项目</button>
-          </div>
-        </div>
-        <div id="discovery-sidebar" style="width:380px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
-          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Problem Brief</h2>
-          <div id="discovery-brief" style="padding:12px 16px;font-size:12px;line-height:1.6;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">下一步问题</h2>
-          <div id="discovery-next" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">未验证假设</h2>
-          <div id="discovery-assumptions" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Market Research View -->
-    <div id="view-market-research" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="market-research-panel" style="flex:1;display:flex;min-width:0;">
-        <div id="market-research-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-          <div id="market-research-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
-          <div id="market-research-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
-            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
-            <div id="market-research-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="confirmMarketResearchTask(true)">确认执行</button>
-              <button class="secondary" onclick="confirmMarketResearchTask(false)">拒绝</button>
-            </div>
-          </div>
-          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
-            <textarea id="market-research-input" placeholder="输入研究方向或确认开始调研..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMarketResearchMessage()}"></textarea>
-            <button onclick="sendMarketResearchMessage()" id="market-research-send-btn">发送</button>
-            <button class="secondary" onclick="leaveMarketResearch()">返回项目</button>
-          </div>
-        </div>
-        <div id="market-research-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
-          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Research Progress</h2>
-          <div id="market-research-progress" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Recommendation</h2>
-          <div id="market-research-recommendation" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Sources</h2>
-          <div id="market-research-sources" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Product Planning View -->
-    <div id="view-planning" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="planning-panel" style="flex:1;display:flex;min-width:0;">
-        <div id="planning-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-          <div id="planning-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
-          <div id="planning-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
-            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
-            <div id="planning-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="confirmPlanningTask(true)">确认执行</button>
-              <button class="secondary" onclick="confirmPlanningTask(false)">拒绝</button>
-            </div>
-          </div>
-          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
-            <textarea id="planning-input" placeholder="输入产品规划指令，例如：开始产品规划..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendPlanningMessage()}"></textarea>
-            <button onclick="sendPlanningMessage()" id="planning-send-btn">发送</button>
-            <button class="secondary" onclick="leavePlanning()">返回项目</button>
-          </div>
-        </div>
-        <div id="planning-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
-          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Product Goal</h2>
-          <div id="planning-goal" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Target User</h2>
-          <div id="planning-user" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">MVP Scope</h2>
-          <div id="planning-mvp" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Solutions</h2>
-          <div id="planning-solutions" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Recommendation</h2>
-          <div id="planning-recommendation" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Software Development View -->
-    <div id="view-development" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="development-panel" style="flex:1;display:flex;min-width:0;">
-        <div id="development-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-          <div id="development-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
-          <div id="development-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
-            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
-            <div id="development-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="confirmDevelopmentTask(true)">确认执行</button>
-              <button class="secondary" onclick="confirmDevelopmentTask(false)">拒绝</button>
-            </div>
-          </div>
-          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
-            <textarea id="development-input" placeholder="输入开发指令，例如：开始开发..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDevelopmentMessage()}"></textarea>
-            <button onclick="sendDevelopmentMessage()" id="development-send-btn">发送</button>
-            <button class="secondary" onclick="leaveDevelopment()">返回项目</button>
-          </div>
-        </div>
-        <div id="development-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
-          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Technical Plan</h2>
-          <div id="development-plan" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Feature Records</h2>
-          <div id="development-features" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Test Report</h2>
-          <div id="development-tests" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Deployment</h2>
-          <div id="development-deployment" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Git Log</h2>
-          <div id="development-git" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Hardware Development View -->
-    <div id="view-hardware" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="hardware-panel" style="flex:1;display:flex;min-width:0;">
-        <div id="hardware-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-          <div id="hardware-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
-          <div id="hardware-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
-            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
-            <div id="hardware-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="confirmHardwareTask(true)">确认执行</button>
-              <button class="secondary" onclick="confirmHardwareTask(false)">拒绝</button>
-            </div>
-          </div>
-          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
-            <textarea id="hardware-input" placeholder="输入硬件开发指令，例如：开始硬件开发..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendHardwareMessage()}"></textarea>
-            <button onclick="sendHardwareMessage()" id="hardware-send-btn">发送</button>
-            <button class="secondary" onclick="leaveHardware()">返回项目</button>
-          </div>
-        </div>
-        <div id="hardware-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
-          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Hardware Architecture</h2>
-          <div id="hardware-architecture" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">BOM</h2>
-          <div id="hardware-bom" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Wiring Design</h2>
-          <div id="hardware-wiring" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Firmware</h2>
-          <div id="hardware-firmware" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Assembly Steps</h2>
-          <div id="hardware-assembly" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Debug Records</h2>
-          <div id="hardware-debug" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Git Log</h2>
-          <div id="hardware-git" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Testing & Validation View -->
-    <div id="view-testing" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="testing-panel" style="flex:1;display:flex;min-width:0;">
-        <div id="testing-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-          <div id="testing-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
-          <div id="testing-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
-            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
-            <div id="testing-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="confirmTestingTask(true)">确认执行</button>
-              <button class="secondary" onclick="confirmTestingTask(false)">拒绝</button>
-            </div>
-          </div>
-          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
-            <textarea id="testing-input" placeholder="输入测试指令，例如：开始测试计划..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTestingMessage()}"></textarea>
-            <button onclick="sendTestingMessage()" id="testing-send-btn">发送</button>
-            <button class="secondary" onclick="leaveTesting()">返回项目</button>
-          </div>
-        </div>
-        <div id="testing-sidebar" style="width:420px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
-          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Test Plan</h2>
-          <div id="testing-plan" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Test Results</h2>
-          <div id="testing-results" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">User Feedback</h2>
-          <div id="testing-feedback" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Validation Report</h2>
-          <div id="testing-validation" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Iteration Plan</h2>
-          <div id="testing-iteration" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Learning & Proactive Improvement View -->
-    <div id="view-learning" class="view" style="display:flex;flex-direction:column;padding:0;">
-      <div id="learning-panel" style="flex:1;display:flex;min-width:0;">
-        <div id="learning-chat" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-          <div id="learning-messages" style="flex:1;overflow-y:auto;padding:20px;"></div>
-          <div id="learning-confirm-box" style="display:none;background:#1a1a2e;border-top:1px solid #00f0ff22;padding:14px 16px;flex-direction:column;gap:10px;">
-            <div style="font-size:13px;font-weight:600;color:#ffaa00;">高风险操作需要确认</div>
-            <div id="learning-confirm-detail" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;">Agent 请求执行可能影响文件或系统的操作。</div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="confirmLearningTask(true)">确认执行</button>
-              <button class="secondary" onclick="confirmLearningTask(false)">拒绝</button>
-            </div>
-          </div>
-          <div style="background:#161b22;padding:16px 20px;border-top:1px solid #30363d;display:flex;gap:12px;">
-            <textarea id="learning-input" placeholder="输入学习指令，例如：分析这个项目并提取经验..." rows="1" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;color:#c9d1d9;font-size:14px;resize:none;min-height:44px;max-height:120px;font-family:inherit;"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendLearningMessage()}"></textarea>
-            <button onclick="sendLearningMessage()" id="learning-send-btn">发送</button>
-            <button class="secondary" onclick="leaveLearning()">返回项目</button>
-          </div>
-        </div>
-        <div id="learning-sidebar" style="width:460px;background:#161b22;border-left:1px solid #30363d;display:flex;flex-direction:column;overflow-y:auto;">
-          <h2 style="font-size:13px;padding:12px 16px;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Learning Records</h2>
-          <div id="learning-records" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Failure Knowledge</h2>
-          <div id="learning-failures" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Success Knowledge</h2>
-          <div id="learning-successes" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-          <h2 style="font-size:13px;padding:12px 16px;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Improvement Suggestions</h2>
-          <div id="learning-suggestions" style="padding:12px 16px;font-size:12px;color:#c9d1d9;"></div>
-        </div>
-      </div>
-    </div>
-
-    <div id="sidebar">
-      <h2>任务状态</h2>
-      <div id="task-info">
-        <div><span class="label">任务 ID:</span> <span id="task-id">—</span></div>
-        <div><span class="label">状态:</span> <span id="task-status">—</span></div>
-        <div><span class="label">耗时:</span> <span id="task-elapsed">—</span></div>
-      </div>
-      <h2>执行步骤</h2>
-      <div id="steps"></div>
-    </div>
-  </div>
-
-  <div id="status-bar">
-    <span>Status:</span>
-    <span id="status" class="ready">Ready</span>
-    <span id="status-detail"></span>
-  </div>
+    <div class="footer">© 2026 Kyrozen. All rights reserved.</div>
+  </main>
 
   <script>
-    let currentProjectId = null;
-    let currentTaskId = null;
-    let pollInterval = null;
-    let taskStartTime = null;
+    const form = document.getElementById('waitlist-form');
+    const emailInput = document.getElementById('email');
+    const submitBtn = document.getElementById('submit-btn');
+    const messageEl = document.getElementById('message');
 
-    let discoveryTaskId = null;
-    let discoveryPollInterval = null;
-    let discoveryTaskStartTime = null;
-
-    function escapeHtml(text) {
-      return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    function showMessage(text, type) {
+      messageEl.textContent = text;
+      messageEl.className = 'message ' + type + ' visible';
     }
 
-    function addMessage(role, content, type = role) {
-      const chat = document.getElementById('chat');
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
-      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
+    function clearMessage() {
+      messageEl.className = 'message';
+      messageEl.textContent = '';
     }
 
-    function setStatus(status, detail = '') {
-      const el = document.getElementById('status');
-      el.className = status;
-      const map = {
-        ready: 'Ready',
-        thinking: 'Thinking...',
-        calling: 'Calling tool...',
-        waiting: 'Waiting confirmation',
-        completed: 'Completed',
-        failed: 'Failed'
-      };
-      el.textContent = map[status] || status;
-      document.getElementById('status-detail').textContent = detail;
-    }
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMessage();
 
-    function showView(name) {
-      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-      document.getElementById('view-' + name).classList.add('active');
-      const sidebar = document.getElementById('sidebar');
-      if (name === 'chat') {
-        sidebar.style.display = 'flex';
-      } else {
-        sidebar.style.display = 'none';
-      }
-    }
-
-    function parseHash() {
-      const hash = location.hash.replace('#', '') || '/projects';
-      const parts = hash.split('/').filter(Boolean);
-      if (parts[0] === 'projects') {
-        if (!parts[1]) return { view: 'list' };
-        if (parts[2] === 'chat') return { view: 'chat', projectId: parts[1] };
-        if (parts[2] === 'discovery') return { view: 'discovery', projectId: parts[1] };
-        if (parts[2] === 'market-research') return { view: 'market-research', projectId: parts[1] };
-        if (parts[2] === 'planning') return { view: 'planning', projectId: parts[1] };
-        if (parts[2] === 'development') return { view: 'development', projectId: parts[1] };
-        if (parts[2] === 'hardware') return { view: 'hardware', projectId: parts[1] };
-        if (parts[2] === 'testing') return { view: 'testing', projectId: parts[1] };
-        if (parts[2] === 'learning') return { view: 'learning', projectId: parts[1] };
-        return { view: 'detail', projectId: parts[1] };
-      }
-      return { view: 'list' };
-    }
-
-    async function route() {
-      const routeInfo = parseHash();
-      if (routeInfo.view === 'list') {
-        currentProjectId = null;
-        showView('list');
-        await loadProjectList();
-      } else if (routeInfo.view === 'detail') {
-        currentProjectId = routeInfo.projectId;
-        showView('detail');
-        await loadProjectDetail(routeInfo.projectId);
-      } else if (routeInfo.view === 'chat') {
-        currentProjectId = routeInfo.projectId;
-        showView('chat');
-        document.getElementById('chat').innerHTML = '';
-        addMessage('system', `已进入项目聊天。项目 ID: ${routeInfo.projectId}`, 'system');
-      } else if (routeInfo.view === 'discovery') {
-        currentProjectId = routeInfo.projectId;
-        showView('discovery');
-        document.getElementById('discovery-messages').innerHTML = '';
-        addDiscoveryMessage('system', `已进入 Problem Discovery。项目 ID: ${routeInfo.projectId}\n\n请描述你的困扰、想法或遇到的问题，我会帮你逐步理清真实问题。`, 'system');
-        await loadDiscoveryState();
-      } else if (routeInfo.view === 'market-research') {
-        currentProjectId = routeInfo.projectId;
-        showView('market-research');
-        document.getElementById('market-research-messages').innerHTML = '';
-        addMarketResearchMessage('system', `已进入 Market Research。项目 ID: ${routeInfo.projectId}\n\n我会基于 Problem Brief 进行市场调研，判断这个问题是否值得解决。`, 'system');
-        await loadMarketResearchState();
-      } else if (routeInfo.view === 'planning') {
-        currentProjectId = routeInfo.projectId;
-        showView('planning');
-        document.getElementById('planning-messages').innerHTML = '';
-        addPlanningMessage('system', `已进入 Product Planning。项目 ID: ${routeInfo.projectId}\n\n我会基于 Problem Brief 和 Market Research Report 制定产品方向、MVP 范围和方案比较。`, 'system');
-        await loadPlanningState();
-      } else if (routeInfo.view === 'development') {
-        currentProjectId = routeInfo.projectId;
-        showView('development');
-        document.getElementById('development-messages').innerHTML = '';
-        addDevelopmentMessage('system', `已进入 Software Development。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 把产品变成可运行的软件原型。`, 'system');
-        await loadDevelopmentState();
-      } else if (routeInfo.view === 'hardware') {
-        currentProjectId = routeInfo.projectId;
-        showView('hardware');
-        document.getElementById('hardware-messages').innerHTML = '';
-        addHardwareMessage('system', `已进入 Hardware Development。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 制定硬件方案、BOM、接线、固件和调试流程。`, 'system');
-        await loadHardwareState();
-      } else if (routeInfo.view === 'testing') {
-        currentProjectId = routeInfo.projectId;
-        showView('testing');
-        document.getElementById('testing-messages').innerHTML = '';
-        addTestingMessage('system', `已进入 Testing & Validation。项目 ID: ${routeInfo.projectId}\n\n我会基于 PRD 验证产品是否真正解决了最初的问题，并生成迭代建议。`, 'system');
-        await loadTestingState();
-      } else if (routeInfo.view === 'learning') {
-        currentProjectId = routeInfo.projectId;
-        showView('learning');
-        document.getElementById('learning-messages').innerHTML = '';
-        addLearningMessage('system', `已进入 Learning & Proactive Improvement。项目 ID: ${routeInfo.projectId}\n\n我会从项目历史中提取可复用经验，并主动发现改进机会。我不会自动修改项目内容。`, 'system');
-        await loadLearningState();
-        await loadImprovementState();
-      }
-    }
-
-    async function checkHealth() {
-      try {
-        const res = await fetch('/api/health');
-        const data = await res.json();
-        const el = document.getElementById('health');
-        el.textContent = `Provider: ${data.provider || 'none'} | Mode: ${data.permission_mode || 'unknown'}`;
-        el.className = data.status === 'ok' ? 'ok' : 'degraded';
-      } catch (e) {
-        document.getElementById('health').textContent = 'API 不可用';
-        document.getElementById('health').className = 'degraded';
-      }
-    }
-
-    function showCreateForm() {
-      document.getElementById('create-form').classList.remove('hidden');
-    }
-
-    function hideCreateForm() {
-      document.getElementById('create-form').classList.add('hidden');
-    }
-
-    async function createProject() {
-      const name = document.getElementById('new-project-name').value.trim();
-      const goal = document.getElementById('new-project-goal').value.trim();
-      const desc = document.getElementById('new-project-desc').value.trim();
-      if (!name) { alert('请输入项目名称'); return; }
-
-      try {
-        const res = await fetch('/api/projects', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, goal, description: desc, initial_idea: desc })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-        hideCreateForm();
-        document.getElementById('new-project-name').value = '';
-        document.getElementById('new-project-goal').value = '';
-        document.getElementById('new-project-desc').value = '';
-        location.hash = `#/projects/${data.id}`;
-      } catch (e) {
-        alert('创建项目失败：' + e.message);
-      }
-    }
-
-    async function loadProjectList() {
-      try {
-        const res = await fetch('/api/projects');
-        const data = await res.json();
-        const container = document.getElementById('project-list');
-        const empty = document.getElementById('no-projects');
-        container.innerHTML = '';
-        if (!data || data.length === 0) {
-          empty.classList.remove('hidden');
-          return;
-        }
-        empty.classList.add('hidden');
-        for (const p of data) {
-          const card = document.createElement('div');
-          card.className = 'project-card';
-          card.onclick = () => { location.hash = `#/projects/${p.id}`; };
-          card.innerHTML = `
-            <div class="name">${escapeHtml(p.name)}</div>
-            <div class="meta">${escapeHtml(p.goal || '暂无目标')} · 更新于 ${formatTime(p.updated_at)}</div>
-            <span class="stage">${escapeHtml(p.current_stage)}</span>
-            <span class="status ${p.status}">${escapeHtml(p.status)}</span>
-          `;
-          container.appendChild(card);
-        }
-      } catch (e) {
-        document.getElementById('project-list').innerHTML = `<p class="empty">加载失败：${escapeHtml(e.message)}</p>`;
-      }
-    }
-
-    async function loadProjectDetail(projectId) {
-      try {
-        const res = await fetch(`/api/projects/${projectId}`);
-        if (!res.ok) throw new Error('Project not found');
-        const p = await res.json();
-        document.getElementById('detail-name').textContent = p.name;
-        document.getElementById('detail-meta').textContent = `Stage: ${p.current_stage} · Status: ${p.status} · Updated: ${formatTime(p.updated_at)}`;
-        document.getElementById('detail-goal').textContent = p.goal || '暂无';
-        document.getElementById('detail-goal').className = p.goal ? '' : 'empty';
-        document.getElementById('detail-description').textContent = p.description || '暂无';
-        document.getElementById('detail-description').className = p.description ? '' : 'empty';
-        document.getElementById('detail-next').textContent = p.next_steps || '暂无';
-        document.getElementById('detail-next').className = p.next_steps ? '' : 'empty';
-
-        renderItemList('detail-tasks', p.recent_tasks, t => ({
-          title: `${t.title} (${t.status})`,
-          desc: t.description || ''
-        }));
-        renderItemList('detail-decisions', p.recent_decisions, d => ({
-          title: d.decision,
-          desc: d.reason || ''
-        }));
-        renderItemList('detail-artifacts', p.recent_artifacts, a => ({
-          title: `${a.title} (v${a.version})`,
-          desc: a.type || ''
-        }));
-      } catch (e) {
-        document.getElementById('detail-name').textContent = '加载失败';
-      }
-    }
-
-    function renderItemList(elementId, items, mapper) {
-      const el = document.getElementById(elementId);
-      el.innerHTML = '';
-      if (!items || items.length === 0) {
-        el.innerHTML = '<span class="empty">暂无</span>';
+      const email = emailInput.value.trim();
+      if (!email) {
+        showMessage('请输入邮箱地址', 'error');
         return;
       }
-      for (const item of items) {
-        const mapped = mapper(item);
-        const div = document.createElement('div');
-        div.className = 'item';
-        div.innerHTML = `<div class="title">${escapeHtml(mapped.title)}</div>${mapped.desc ? `<div class="desc">${escapeHtml(mapped.desc)}</div>` : ''}`;
-        el.appendChild(div);
-      }
-    }
 
-    function enterProjectChat() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}/chat`;
-    }
-
-    function leaveChat() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}`;
-    }
-
-    function renderConfirmDetail(step) {
-      const detailEl = document.getElementById('confirm-detail');
-      if (!step || !step.metadata || !step.metadata.tool) {
-        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
-        return;
-      }
-      const { tool, action, parameters } = step.metadata;
-      let paramsText = '';
-      if (parameters && Object.keys(parameters).length > 0) {
-        paramsText = '\n参数：\n' + Object.entries(parameters)
-          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-          .join('\n');
-      }
-      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
-    }
-
-    function formatTime(iso) {
-      if (!iso) return '—';
-      const d = new Date(iso);
-      if (isNaN(d)) return iso;
-      return d.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    }
-
-    async function sendMessage() {
-      const input = document.getElementById('user-input');
-      const btn = document.getElementById('send-btn');
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      input.value = '';
-      btn.disabled = true;
-      setStatus('thinking');
-      document.getElementById('confirm-box').classList.remove('active');
-      addMessage('user', msg);
-      addMessage('system', '已创建任务，等待 Kyrozen Core 处理...', 'system');
-
-      currentTaskId = null;
-      clearInterval(pollInterval);
-      taskStartTime = Date.now();
+      submitBtn.disabled = true;
+      submitBtn.textContent = '提交中...';
 
       try {
-        const res = await fetch('/api/chat', {
+        const res = await fetch('/api/waitlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, project_id: currentProjectId })
+          body: JSON.stringify({ email, source: 'website' }),
         });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
-        currentTaskId = data.task_id;
-        document.getElementById('task-id').textContent = currentTaskId;
-        pollTask();
-        pollInterval = setInterval(pollTask, 1000);
-      } catch (e) {
-        addMessage('system', '错误：' + e.message, 'error');
-        setStatus('failed', e.message);
-        btn.disabled = false;
-      }
-    }
 
-    async function pollTask() {
-      if (!currentTaskId) return;
-      try {
-        const res = await fetch(`/api/tasks/${currentTaskId}`);
-        if (!res.ok) return;
-        const task = await res.json();
-        renderTask(task);
+        const data = await res.json().catch(() => ({}));
 
-        if (task.status === 'waiting_confirmation') {
-          clearInterval(pollInterval);
-          setStatus('waiting');
-          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
-          renderConfirmDetail(pending);
-          document.getElementById('confirm-box').classList.add('active');
-          document.getElementById('send-btn').disabled = false;
-          return;
-        }
-
-        if (task.status === 'completed' || task.status === 'failed') {
-          clearInterval(pollInterval);
-          const elapsed = ((Date.now() - taskStartTime) / 1000).toFixed(1);
-          document.getElementById('task-elapsed').textContent = elapsed + 's';
-
-          if (task.status === 'completed') {
-            setStatus('completed');
-            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
-            addMessage('assistant', answer);
-          } else {
-            setStatus('failed', task.errors.join('; '));
-            addMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
-          }
-          document.getElementById('send-btn').disabled = false;
+        if (res.ok) {
+          showMessage('已成功加入等待列表，上线后我们会第一时间通知你。', 'success');
+          emailInput.value = '';
         } else {
-          const runningStep = task.steps.find(s => s.status === 'running');
-          if (runningStep) {
-            setStatus('calling', runningStep.description);
-          } else {
-            setStatus('thinking');
-          }
+          showMessage(data.detail || '提交失败，请稍后重试', 'error');
         }
-      } catch (e) {
-        console.error('poll error', e);
+      } catch (err) {
+        showMessage('网络错误，请稍后重试', 'error');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Join Waitlist';
       }
-    }
-
-    function renderTask(task) {
-      document.getElementById('task-status').textContent = task.status;
-      const stepsEl = document.getElementById('steps');
-      stepsEl.innerHTML = '';
-      if (!task.steps || task.steps.length === 0) {
-        stepsEl.innerHTML = '<div class="step pending"><div class="name">等待中...</div></div>';
-        return;
-      }
-      for (const step of task.steps) {
-        const div = document.createElement('div');
-        div.className = 'step ' + step.status;
-        let detail = '';
-        if (step.result) {
-          detail = JSON.stringify(step.result, null, 2).slice(0, 500);
-        }
-        if (step.error) {
-          detail = step.error;
-        }
-        div.innerHTML = `<div class="name">${escapeHtml(step.description)}</div>` +
-          (detail ? `<div class="detail">${escapeHtml(detail)}</div>` : '');
-        stepsEl.appendChild(div);
-      }
-    }
-
-    async function confirmTask(confirm) {
-      if (!currentTaskId) return;
-      document.getElementById('confirm-box').classList.remove('active');
-      setStatus('thinking');
-      document.getElementById('send-btn').disabled = true;
-      try {
-        const res = await fetch(`/api/tasks/${currentTaskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: confirm })
-        });
-        if (!res.ok) throw new Error('确认请求失败');
-        const task = await res.json();
-        renderTask(task);
-        if (task.status === 'waiting_confirmation') {
-          setStatus('waiting');
-          document.getElementById('confirm-box').classList.add('active');
-          return;
-        }
-        pollInterval = setInterval(pollTask, 1000);
-        pollTask();
-      } catch (e) {
-        addMessage('system', '确认失败：' + e.message, 'error');
-        setStatus('failed', e.message);
-        document.getElementById('send-btn').disabled = false;
-      }
-    }
-
-    // ---------------- Problem Discovery ----------------
-
-    function enterDiscovery() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}/discovery`;
-    }
-
-    function leaveDiscovery() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}`;
-    }
-
-    function addDiscoveryMessage(role, content, type = role) {
-      const chat = document.getElementById('discovery-messages');
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
-      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
-    }
-
-    async function loadDiscoveryState() {
-      if (!currentProjectId) return;
-      try {
-        const res = await fetch(`/api/projects/${currentProjectId}/problem-discovery/state`);
-        if (!res.ok) return;
-        const data = await res.json();
-        renderDiscoveryBrief(data.brief, data.state_summary);
-      } catch (e) {
-        console.error('loadDiscoveryState error', e);
-      }
-    }
-
-    function renderDiscoveryBrief(brief, summary) {
-      const briefEl = document.getElementById('discovery-brief');
-      const fields = [
-        ['title', '标题'],
-        ['target_user', '目标用户'],
-        ['scenario', '场景'],
-        ['surface_problem', '表面问题'],
-        ['deep_need', '深层需求'],
-        ['current_solution', '当前方案'],
-        ['current_solution_problem', '当前方案不足'],
-        ['frequency', '频率'],
-        ['impact', '影响'],
-        ['opportunity_direction', '机会方向'],
-        ['confidence', '可信度'],
-        ['confidence_reason', '可信度说明'],
-        ['decision', '问题层判断'],
-        ['decision_reason', '判断理由'],
-      ];
-      let html = '';
-      for (const [key, label] of fields) {
-        const value = brief[key] || '(未设置)';
-        html += `<div style="margin-bottom:8px;"><span style="color:#8b949e;">${label}:</span> ${escapeHtml(String(value))}</div>`;
-      }
-      briefEl.innerHTML = html;
-
-      const nextEl = document.getElementById('discovery-next');
-      if (summary && summary.next_question) {
-        nextEl.innerHTML = `<div style="color:#00f0ff;margin-bottom:4px;">${escapeHtml(summary.next_question.dimension)}</div><div>${escapeHtml(summary.next_question.question)}</div>`;
-      } else {
-        nextEl.innerHTML = '<span style="color:#6e7681;">信息已基本收集，可生成 Problem Brief。</span>';
-      }
-
-      const assumptionsEl = document.getElementById('discovery-assumptions');
-      const assumptions = brief.unknown_assumptions || [];
-      if (assumptions.length === 0) {
-        assumptionsEl.innerHTML = '<span style="color:#6e7681;">暂无</span>';
-      } else {
-        assumptionsEl.innerHTML = assumptions.map(a =>
-          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-          `<div>${escapeHtml(a.claim)}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">来源: ${escapeHtml(a.source)} · 已验证: ${a.verified ? '是' : '否'}</div>` +
-          `</div>`
-        ).join('');
-      }
-    }
-
-    function renderDiscoveryConfirmDetail(step) {
-      const detailEl = document.getElementById('discovery-confirm-detail');
-      if (!step || !step.metadata || !step.metadata.tool) {
-        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
-        return;
-      }
-      const { tool, action, parameters } = step.metadata;
-      let paramsText = '';
-      if (parameters && Object.keys(parameters).length > 0) {
-        paramsText = '\n参数：\n' + Object.entries(parameters)
-          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-          .join('\n');
-      }
-      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
-    }
-
-    async function sendDiscoveryMessage() {
-      const input = document.getElementById('discovery-input');
-      const btn = document.getElementById('discovery-send-btn');
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      input.value = '';
-      btn.disabled = true;
-      setStatus('thinking');
-      document.getElementById('discovery-confirm-box').classList.remove('active');
-      addDiscoveryMessage('user', msg);
-      addDiscoveryMessage('system', '已创建 discovery 任务，等待 Kyrozen 处理...', 'system');
-
-      discoveryTaskId = null;
-      clearInterval(discoveryPollInterval);
-      discoveryTaskStartTime = Date.now();
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'discovery' })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
-        discoveryTaskId = data.task_id;
-        pollDiscoveryTask();
-        discoveryPollInterval = setInterval(pollDiscoveryTask, 1000);
-      } catch (e) {
-        addDiscoveryMessage('system', '错误：' + e.message, 'error');
-        setStatus('failed', e.message);
-        btn.disabled = false;
-      }
-    }
-
-    async function pollDiscoveryTask() {
-      if (!discoveryTaskId) return;
-      try {
-        const res = await fetch(`/api/tasks/${discoveryTaskId}`);
-        if (!res.ok) return;
-        const task = await res.json();
-
-        if (task.status === 'waiting_confirmation') {
-          clearInterval(discoveryPollInterval);
-          setStatus('waiting');
-          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
-          renderDiscoveryConfirmDetail(pending);
-          document.getElementById('discovery-confirm-box').classList.add('active');
-          document.getElementById('discovery-send-btn').disabled = false;
-          return;
-        }
-
-        if (task.status === 'completed' || task.status === 'failed') {
-          clearInterval(discoveryPollInterval);
-          if (task.status === 'completed') {
-            setStatus('completed');
-            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
-            addDiscoveryMessage('assistant', answer);
-          } else {
-            setStatus('failed', task.errors.join('; '));
-            addDiscoveryMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
-          }
-          document.getElementById('discovery-send-btn').disabled = false;
-          await loadDiscoveryState();
-        } else {
-          const runningStep = task.steps.find(s => s.status === 'running');
-          if (runningStep) {
-            setStatus('calling', runningStep.description);
-          } else {
-            setStatus('thinking');
-          }
-        }
-      } catch (e) {
-        console.error('poll discovery error', e);
-      }
-    }
-
-    async function confirmDiscoveryTask(confirm) {
-      if (!discoveryTaskId) return;
-      document.getElementById('discovery-confirm-box').classList.remove('active');
-      setStatus('thinking');
-      document.getElementById('discovery-send-btn').disabled = true;
-      try {
-        const res = await fetch(`/api/tasks/${discoveryTaskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: confirm })
-        });
-        if (!res.ok) throw new Error('确认请求失败');
-        const task = await res.json();
-        if (task.status === 'waiting_confirmation') {
-          setStatus('waiting');
-          document.getElementById('discovery-confirm-box').classList.add('active');
-          return;
-        }
-        discoveryPollInterval = setInterval(pollDiscoveryTask, 1000);
-        pollDiscoveryTask();
-      } catch (e) {
-        addDiscoveryMessage('system', '确认失败：' + e.message, 'error');
-        setStatus('failed', e.message);
-        document.getElementById('discovery-send-btn').disabled = false;
-      }
-    }
-
-    // ---------------- Market Research ----------------
-
-    let marketResearchTaskId = null;
-    let marketResearchPollInterval = null;
-
-    function enterMarketResearch() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}/market-research`;
-    }
-
-    function leaveMarketResearch() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}`;
-    }
-
-    function addMarketResearchMessage(role, content, type = role) {
-      const chat = document.getElementById('market-research-messages');
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
-      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
-    }
-
-    const RESEARCH_STAGES = [
-      'understanding_problem',
-      'planning_research',
-      'searching_sources',
-      'analyzing_competitors',
-      'reviewing_feedback',
-      'generating_report',
-      'completed'
-    ];
-
-    function renderMarketResearchProgress(stage) {
-      const progressEl = document.getElementById('market-research-progress');
-      const index = RESEARCH_STAGES.indexOf(stage || 'understanding_problem');
-      let html = '';
-      for (let i = 0; i < RESEARCH_STAGES.length; i++) {
-        const name = RESEARCH_STAGES[i];
-        const label = name.replace(/_/g, ' ');
-        const color = i < index ? '#8b949e' : i === index ? '#00f0ff' : '#30363d';
-        html += `<div style="margin-bottom:6px;color:${color};">${i === index ? '▸ ' : ''}${label}</div>`;
-      }
-      progressEl.innerHTML = html || '<span style="color:#6e7681;">等待开始...</span>';
-    }
-
-    function renderMarketResearchState(data) {
-      const report = data.report || {};
-      document.getElementById('market-research-recommendation').innerHTML = `
-        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Recommendation:</span> <span style="color:#00f0ff;font-weight:600;">${escapeHtml(report.recommendation || 'none')}</span></div>
-        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Market Status:</span> ${escapeHtml(report.market_status || 'N/A')}</div>
-        <div><span style="color:#8b949e;">Competitors:</span> ${(report.competitors || []).length} · <span style="color:#8b949e;">Sources:</span> ${(report.sources || []).length}</div>
-      `;
-      const sources = data.sources || [];
-      const sourcesEl = document.getElementById('market-research-sources');
-      if (sources.length === 0) {
-        sourcesEl.innerHTML = '<span style="color:#6e7681;">暂无来源</span>';
-      } else {
-        sourcesEl.innerHTML = sources.map(s => {
-          const content = JSON.parse(s.content || '{}');
-          return `<div style="margin-bottom:8px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-            `<div style="font-weight:600;">${escapeHtml(content.title || s.title || 'Untitled')}</div>` +
-            `<div style="color:#8b949e;font-size:11px;">${escapeHtml(content.source_type || s.type || '')} · ${escapeHtml(content.confidence || '')} · ${escapeHtml(content.fact_type || '')}</div>` +
-            (content.url ? `<a href="${escapeHtml(content.url)}" target="_blank" style="color:#58a6ff;font-size:11px;word-break:break-all;">${escapeHtml(content.url)}</a>` : '') +
-            `</div>`;
-        }).join('');
-      }
-      renderMarketResearchProgress(report.recommendation ? 'completed' : 'understanding_problem');
-    }
-
-    async function loadMarketResearchState() {
-      if (!currentProjectId) return;
-      try {
-        const res = await fetch(`/api/projects/${currentProjectId}/market-research/state`);
-        if (!res.ok) return;
-        const data = await res.json();
-        renderMarketResearchState(data);
-      } catch (e) {
-        console.error('loadMarketResearchState error', e);
-      }
-    }
-
-    function renderMarketResearchConfirmDetail(step) {
-      const detailEl = document.getElementById('market-research-confirm-detail');
-      if (!step || !step.metadata || !step.metadata.tool) {
-        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
-        return;
-      }
-      const { tool, action, parameters } = step.metadata;
-      let paramsText = '';
-      if (parameters && Object.keys(parameters).length > 0) {
-        paramsText = '\n参数：\n' + Object.entries(parameters)
-          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-          .join('\n');
-      }
-      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
-    }
-
-    async function sendMarketResearchMessage() {
-      const input = document.getElementById('market-research-input');
-      const btn = document.getElementById('market-research-send-btn');
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      input.value = '';
-      btn.disabled = true;
-      setStatus('thinking');
-      document.getElementById('market-research-confirm-box').classList.remove('active');
-      addMarketResearchMessage('user', msg);
-      addMarketResearchMessage('system', '已创建 market research 任务，等待 Kyrozen 处理...', 'system');
-
-      marketResearchTaskId = null;
-      clearInterval(marketResearchPollInterval);
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'market_research' })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
-        marketResearchTaskId = data.task_id;
-        pollMarketResearchTask();
-        marketResearchPollInterval = setInterval(pollMarketResearchTask, 1000);
-      } catch (e) {
-        addMarketResearchMessage('system', '错误：' + e.message, 'error');
-        setStatus('failed', e.message);
-        btn.disabled = false;
-      }
-    }
-
-    async function pollMarketResearchTask() {
-      if (!marketResearchTaskId) return;
-      try {
-        const res = await fetch(`/api/tasks/${marketResearchTaskId}`);
-        if (!res.ok) return;
-        const task = await res.json();
-
-        if (task.status === 'waiting_confirmation') {
-          clearInterval(marketResearchPollInterval);
-          setStatus('waiting');
-          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
-          renderMarketResearchConfirmDetail(pending);
-          document.getElementById('market-research-confirm-box').classList.add('active');
-          document.getElementById('market-research-send-btn').disabled = false;
-          return;
-        }
-
-        if (task.status === 'completed' || task.status === 'failed') {
-          clearInterval(marketResearchPollInterval);
-          if (task.status === 'completed') {
-            setStatus('completed');
-            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
-            addMarketResearchMessage('assistant', answer);
-          } else {
-            setStatus('failed', task.errors.join('; '));
-            addMarketResearchMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
-          }
-          document.getElementById('market-research-send-btn').disabled = false;
-          await loadMarketResearchState();
-        } else {
-          const runningStep = task.steps.find(s => s.status === 'running');
-          if (runningStep) {
-            setStatus('calling', runningStep.description);
-          } else {
-            setStatus('thinking');
-          }
-        }
-      } catch (e) {
-        console.error('poll market research error', e);
-      }
-    }
-
-    async function confirmMarketResearchTask(confirm) {
-      if (!marketResearchTaskId) return;
-      document.getElementById('market-research-confirm-box').classList.remove('active');
-      setStatus('thinking');
-      document.getElementById('market-research-send-btn').disabled = true;
-      try {
-        const res = await fetch(`/api/tasks/${marketResearchTaskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: confirm })
-        });
-        if (!res.ok) throw new Error('确认请求失败');
-        const task = await res.json();
-        if (task.status === 'waiting_confirmation') {
-          setStatus('waiting');
-          document.getElementById('market-research-confirm-box').classList.add('active');
-          return;
-        }
-        marketResearchPollInterval = setInterval(pollMarketResearchTask, 1000);
-        pollMarketResearchTask();
-      } catch (e) {
-        addMarketResearchMessage('system', '确认失败：' + e.message, 'error');
-        setStatus('failed', e.message);
-        document.getElementById('market-research-send-btn').disabled = false;
-      }
-    }
-
-    // ---------------- Product Planning ----------------
-
-    let planningTaskId = null;
-    let planningPollInterval = null;
-
-    function enterPlanning() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}/planning`;
-    }
-
-    function leavePlanning() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}`;
-    }
-
-    function addPlanningMessage(role, content, type = role) {
-      const chat = document.getElementById('planning-messages');
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
-      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
-    }
-
-    async function loadPlanningState() {
-      if (!currentProjectId) return;
-      try {
-        const res = await fetch(`/api/projects/${currentProjectId}/planning/state`);
-        if (!res.ok) return;
-        const data = await res.json();
-        renderPlanningState(data);
-      } catch (e) {
-        console.error('loadPlanningState error', e);
-      }
-    }
-
-    function renderPlanningState(data) {
-      const brief = data.brief || {};
-      const goal = brief.product_goal || {};
-      const targetUser = brief.target_user || {};
-      const mvp = brief.mvp_scope || {};
-      const comparison = data.solution_comparison || {};
-
-      document.getElementById('planning-goal').innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Goal:</span> ${escapeHtml(goal.product_goal || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Problem:</span> ${escapeHtml(goal.core_problem || 'none')}</div>
-        <div><span style="color:#8b949e;">Value:</span> ${escapeHtml(goal.value_proposition || 'none')}</div>
-      `;
-
-      document.getElementById('planning-user').innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Primary:</span> ${escapeHtml(targetUser.primary_user || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Secondary:</span> ${escapeHtml(targetUser.secondary_user || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Use Case:</span> ${escapeHtml(targetUser.use_case || 'none')}</div>
-        <div><span style="color:#8b949e;">Context:</span> ${escapeHtml(targetUser.user_context || 'none')}</div>
-      `;
-
-      const mvpFeatures = mvp.mvp_features || [];
-      const excludedFeatures = mvp.excluded_features || [];
-      document.getElementById('planning-mvp').innerHTML = `
-        <div style="margin-bottom:8px;"><span style="color:#8b949e;">MVP Features:</span></div>
-        ${mvpFeatures.length === 0 ? '<div style="color:#6e7681;">none</div>' : mvpFeatures.map(f => `<div style="margin-bottom:4px;color:#00ff88;">• ${escapeHtml(f)}</div>`).join('')}
-        <div style="margin-top:8px;margin-bottom:8px;"><span style="color:#8b949e;">Excluded:</span></div>
-        ${excludedFeatures.length === 0 ? '<div style="color:#6e7681;">none</div>' : excludedFeatures.map(f => `<div style="margin-bottom:4px;color:#ffaa00;">• ${escapeHtml(f)}</div>`).join('')}
-        <div style="margin-top:8px;"><span style="color:#8b949e;">Success Metric:</span> ${escapeHtml(mvp.success_metric || 'none')}</div>
-      `;
-
-      const solutions = comparison.solutions || [];
-      const solutionsEl = document.getElementById('planning-solutions');
-      if (solutions.length === 0) {
-        solutionsEl.innerHTML = '<span style="color:#6e7681;">暂无方案</span>';
-      } else {
-        solutionsEl.innerHTML = solutions.map(s =>
-          `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-          `<div style="font-weight:600;margin-bottom:4px;">${escapeHtml(s.name || 'Unnamed')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">${escapeHtml(s.solution || '')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;margin-top:4px;">Cost: ${escapeHtml(s.cost || '?')} · Difficulty: ${escapeHtml(s.difficulty || '?')} · Time: ${escapeHtml(s.development_time || '?')}</div>` +
-          `</div>`
-        ).join('');
-      }
-
-      document.getElementById('planning-recommendation').innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Recommendation:</span> <span style="color:#00f0ff;font-weight:600;">${escapeHtml(comparison.recommendation || 'none')}</span></div>
-        <div><span style="color:#8b949e;">Reason:</span> ${escapeHtml(comparison.recommendation_reason || 'none')}</div>
-      `;
-    }
-
-    function renderPlanningConfirmDetail(step) {
-      const detailEl = document.getElementById('planning-confirm-detail');
-      if (!step || !step.metadata || !step.metadata.tool) {
-        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
-        return;
-      }
-      const { tool, action, parameters } = step.metadata;
-      let paramsText = '';
-      if (parameters && Object.keys(parameters).length > 0) {
-        paramsText = '\n参数：\n' + Object.entries(parameters)
-          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-          .join('\n');
-      }
-      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
-    }
-
-    async function sendPlanningMessage() {
-      const input = document.getElementById('planning-input');
-      const btn = document.getElementById('planning-send-btn');
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      input.value = '';
-      btn.disabled = true;
-      setStatus('thinking');
-      document.getElementById('planning-confirm-box').classList.remove('active');
-      addPlanningMessage('user', msg);
-      addPlanningMessage('system', '已创建 product planning 任务，等待 Kyrozen 处理...', 'system');
-
-      planningTaskId = null;
-      clearInterval(planningPollInterval);
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'planning' })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
-        planningTaskId = data.task_id;
-        pollPlanningTask();
-        planningPollInterval = setInterval(pollPlanningTask, 1000);
-      } catch (e) {
-        addPlanningMessage('system', '错误：' + e.message, 'error');
-        setStatus('failed', e.message);
-        btn.disabled = false;
-      }
-    }
-
-    async function pollPlanningTask() {
-      if (!planningTaskId) return;
-      try {
-        const res = await fetch(`/api/tasks/${planningTaskId}`);
-        if (!res.ok) return;
-        const task = await res.json();
-
-        if (task.status === 'waiting_confirmation') {
-          clearInterval(planningPollInterval);
-          setStatus('waiting');
-          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
-          renderPlanningConfirmDetail(pending);
-          document.getElementById('planning-confirm-box').classList.add('active');
-          document.getElementById('planning-send-btn').disabled = false;
-          return;
-        }
-
-        if (task.status === 'completed' || task.status === 'failed') {
-          clearInterval(planningPollInterval);
-          if (task.status === 'completed') {
-            setStatus('completed');
-            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
-            addPlanningMessage('assistant', answer);
-          } else {
-            setStatus('failed', task.errors.join('; '));
-            addPlanningMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
-          }
-          document.getElementById('planning-send-btn').disabled = false;
-          await loadPlanningState();
-        } else {
-          const runningStep = task.steps.find(s => s.status === 'running');
-          if (runningStep) {
-            setStatus('calling', runningStep.description);
-          } else {
-            setStatus('thinking');
-          }
-        }
-      } catch (e) {
-        console.error('poll planning error', e);
-      }
-    }
-
-    async function confirmPlanningTask(confirm) {
-      if (!planningTaskId) return;
-      document.getElementById('planning-confirm-box').classList.remove('active');
-      setStatus('thinking');
-      document.getElementById('planning-send-btn').disabled = true;
-      try {
-        const res = await fetch(`/api/tasks/${planningTaskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: confirm })
-        });
-        if (!res.ok) throw new Error('确认请求失败');
-        const task = await res.json();
-        if (task.status === 'waiting_confirmation') {
-          setStatus('waiting');
-          document.getElementById('planning-confirm-box').classList.add('active');
-          return;
-        }
-        planningPollInterval = setInterval(pollPlanningTask, 1000);
-        pollPlanningTask();
-      } catch (e) {
-        addPlanningMessage('system', '确认失败：' + e.message, 'error');
-        setStatus('failed', e.message);
-        document.getElementById('planning-send-btn').disabled = false;
-      }
-    }
-
-    // ---------------- Software Development ----------------
-
-    let developmentTaskId = null;
-    let developmentPollInterval = null;
-
-    function enterDevelopment() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}/development`;
-    }
-
-    function leaveDevelopment() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}`;
-    }
-
-    function addDevelopmentMessage(role, content, type = role) {
-      const chat = document.getElementById('development-messages');
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
-      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
-    }
-
-    async function loadDevelopmentState() {
-      if (!currentProjectId) return;
-      try {
-        const res = await fetch(`/api/projects/${currentProjectId}/development/state`);
-        if (!res.ok) return;
-        const data = await res.json();
-        renderDevelopmentState(data);
-      } catch (e) {
-        console.error('loadDevelopmentState error', e);
-      }
-    }
-
-    function renderDevelopmentState(data) {
-      const plan = data.technical_plan || {};
-      document.getElementById('development-plan').innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Type:</span> ${escapeHtml(plan.application_type || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Architecture:</span> ${escapeHtml(plan.architecture || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Frontend:</span> ${escapeHtml(plan.frontend || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Backend:</span> ${escapeHtml(plan.backend || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Database:</span> ${escapeHtml(plan.database || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Deployment:</span> ${escapeHtml(plan.deployment || 'none')}</div>
-        <div><span style="color:#8b949e;">Dependencies:</span> ${escapeHtml((plan.dependencies || []).join(', ') || 'none')}</div>
-      `;
-
-      const features = data.feature_records || [];
-      const featuresEl = document.getElementById('development-features');
-      if (features.length === 0) {
-        featuresEl.innerHTML = '<span style="color:#6e7681;">暂无</span>';
-      } else {
-        featuresEl.innerHTML = features.map(r =>
-          `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-          `<div style="font-weight:600;margin-bottom:4px;color:#00f0ff;">${escapeHtml(r.prd_feature || 'Unnamed')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">Status: ${escapeHtml(r.status || 'pending')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">Files: ${(r.files || []).map(f => escapeHtml(f)).join(', ') || 'none'}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">Tests: ${(r.tests || []).map(t => escapeHtml(t)).join(', ') || 'none'}</div>` +
-          `</div>`
-        ).join('');
-      }
-
-      const report = data.test_report || {};
-      document.getElementById('development-tests').innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Total:</span> ${report.total || 0}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Passed:</span> <span style="color:#00ff88;">${report.passed || 0}</span></div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Failed:</span> <span style="color:#ff4466;">${report.failed || 0}</span></div>
-        <div><span style="color:#8b949e;">Skipped:</span> ${report.skipped || 0}</div>
-      `;
-
-      const guide = data.deployment_guide || {};
-      document.getElementById('development-deployment').innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Run:</span></div>
-        <pre style="background:#0d1117;padding:8px;border-radius:4px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(guide.run_instructions || 'none')}</pre>
-        <div style="margin-top:8px;margin-bottom:6px;"><span style="color:#8b949e;">Deploy:</span></div>
-        <pre style="background:#0d1117;padding:8px;border-radius:4px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(guide.deployment_instructions || 'none')}</pre>
-      `;
-
-      const gitLog = data.git_log || [];
-      const gitEl = document.getElementById('development-git');
-      if (gitLog.length === 0) {
-        gitEl.innerHTML = '<span style="color:#6e7681;">暂无提交</span>';
-      } else {
-        gitEl.innerHTML = gitLog.map(line => `<div style="margin-bottom:4px;font-family:monospace;">${escapeHtml(line)}</div>`).join('');
-      }
-    }
-
-    function renderDevelopmentConfirmDetail(step) {
-      const detailEl = document.getElementById('development-confirm-detail');
-      if (!step || !step.metadata || !step.metadata.tool) {
-        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
-        return;
-      }
-      const { tool, action, parameters } = step.metadata;
-      let paramsText = '';
-      if (parameters && Object.keys(parameters).length > 0) {
-        paramsText = '\n参数：\n' + Object.entries(parameters)
-          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-          .join('\n');
-      }
-      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
-    }
-
-    async function sendDevelopmentMessage() {
-      const input = document.getElementById('development-input');
-      const btn = document.getElementById('development-send-btn');
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      input.value = '';
-      btn.disabled = true;
-      setStatus('thinking');
-      document.getElementById('development-confirm-box').classList.remove('active');
-      addDevelopmentMessage('user', msg);
-      addDevelopmentMessage('system', '已创建 software development 任务，等待 Kyrozen 处理...', 'system');
-
-      developmentTaskId = null;
-      clearInterval(developmentPollInterval);
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'development' })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
-        developmentTaskId = data.task_id;
-        pollDevelopmentTask();
-        developmentPollInterval = setInterval(pollDevelopmentTask, 1000);
-      } catch (e) {
-        addDevelopmentMessage('system', '错误：' + e.message, 'error');
-        setStatus('failed', e.message);
-        btn.disabled = false;
-      }
-    }
-
-    async function pollDevelopmentTask() {
-      if (!developmentTaskId) return;
-      try {
-        const res = await fetch(`/api/tasks/${developmentTaskId}`);
-        if (!res.ok) return;
-        const task = await res.json();
-
-        if (task.status === 'waiting_confirmation') {
-          clearInterval(developmentPollInterval);
-          setStatus('waiting');
-          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
-          renderDevelopmentConfirmDetail(pending);
-          document.getElementById('development-confirm-box').classList.add('active');
-          document.getElementById('development-send-btn').disabled = false;
-          return;
-        }
-
-        if (task.status === 'completed' || task.status === 'failed') {
-          clearInterval(developmentPollInterval);
-          if (task.status === 'completed') {
-            setStatus('completed');
-            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
-            addDevelopmentMessage('assistant', answer);
-          } else {
-            setStatus('failed', task.errors.join('; '));
-            addDevelopmentMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
-          }
-          document.getElementById('development-send-btn').disabled = false;
-          await loadDevelopmentState();
-        } else {
-          const runningStep = task.steps.find(s => s.status === 'running');
-          if (runningStep) {
-            setStatus('calling', runningStep.description);
-          } else {
-            setStatus('thinking');
-          }
-        }
-      } catch (e) {
-        console.error('poll development error', e);
-      }
-    }
-
-    async function confirmDevelopmentTask(confirm) {
-      if (!developmentTaskId) return;
-      document.getElementById('development-confirm-box').classList.remove('active');
-      setStatus('thinking');
-      document.getElementById('development-send-btn').disabled = true;
-      try {
-        const res = await fetch(`/api/tasks/${developmentTaskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: confirm })
-        });
-        if (!res.ok) throw new Error('确认请求失败');
-        const task = await res.json();
-        if (task.status === 'waiting_confirmation') {
-          setStatus('waiting');
-          document.getElementById('development-confirm-box').classList.add('active');
-          return;
-        }
-        developmentPollInterval = setInterval(pollDevelopmentTask, 1000);
-        pollDevelopmentTask();
-      } catch (e) {
-        addDevelopmentMessage('system', '确认失败：' + e.message, 'error');
-        setStatus('failed', e.message);
-        document.getElementById('development-send-btn').disabled = false;
-      }
-    }
-
-    // ---------------- Testing & Validation ----------------
-
-    let testingTaskId = null;
-    let testingPollInterval = null;
-
-    function enterTesting() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}/testing`;
-    }
-
-    function leaveTesting() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}`;
-    }
-
-    function addTestingMessage(role, content, type = role) {
-      const chat = document.getElementById('testing-messages');
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
-      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
-    }
-
-    async function loadTestingState() {
-      if (!currentProjectId) return;
-      try {
-        const res = await fetch(`/api/projects/${currentProjectId}/testing/state`);
-        if (!res.ok) return;
-        const data = await res.json();
-        renderTestingState(data);
-      } catch (e) {
-        console.error('loadTestingState error', e);
-      }
-    }
-
-    function renderTestingState(data) {
-      const plan = data.test_plan || {};
-      const planEl = document.getElementById('testing-plan');
-      const requirements = plan.requirements || [];
-      const cases = plan.test_cases || [];
-      planEl.innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Name:</span> ${escapeHtml(plan.name || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Objective:</span> ${escapeHtml(plan.objective || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Status:</span> ${escapeHtml(plan.status || 'draft')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Success Criteria:</span> ${escapeHtml(plan.success_criteria || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Environment:</span> ${escapeHtml(plan.environment || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Requirements (${requirements.length}):</span></div>
-        ${requirements.length === 0 ? '<div style="color:#6e7681;">none</div>' : requirements.map(r => `<div style="margin-bottom:4px;color:#c9d1d9;">• ${escapeHtml(r)}</div>`).join('')}
-        <div style="margin-top:8px;margin-bottom:6px;"><span style="color:#8b949e;">Test Cases (${cases.length}):</span></div>
-        ${cases.length === 0 ? '<div style="color:#6e7681;">none</div>' : cases.map(tc =>
-          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-          `<div style="font-weight:600;color:#00f0ff;">${escapeHtml(tc.id || 'TC-?')} · ${escapeHtml(tc.name || 'Unnamed')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">Type: ${escapeHtml(tc.type || '?')} · Priority: ${escapeHtml(tc.priority || '?')} · Status: ${escapeHtml(tc.status || '?')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">Req: ${escapeHtml(tc.related_requirement || 'none')}</div>` +
-          `</div>`
-        ).join('')}
-      `;
-
-      const results = data.test_results || [];
-      const resultsEl = document.getElementById('testing-results');
-      const summary = {};
-      for (const r of results) {
-        summary[r.result] = (summary[r.result] || 0) + 1;
-      }
-      resultsEl.innerHTML = `
-        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Total:</span> ${results.length} · ${Object.entries(summary).map(([k, v]) => `${escapeHtml(k)}: ${v}`).join(' · ') || 'none'}</div>
-        ${results.length === 0 ? '<span style="color:#6e7681;">暂无结果</span>' : results.slice(-5).map(r =>
-          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-          `<div style="font-weight:600;">${escapeHtml(r.test_case_id || '?')} → <span style="color:${r.result === 'passed' ? '#00ff88' : r.result === 'failed' ? '#ff4466' : '#ffaa00'};">${escapeHtml(r.result || '?')}</span></div>` +
-          `<div style="color:#8b949e;font-size:11px;">Actual: ${escapeHtml(r.actual || 'none')}</div>` +
-          (r.errors ? `<div style="color:#ff4466;font-size:11px;">Error: ${escapeHtml(r.errors)}</div>` : '') +
-          `</div>`
-        ).join('')}
-      `;
-
-      const feedback = data.user_feedback || [];
-      const feedbackEl = document.getElementById('testing-feedback');
-      feedbackEl.innerHTML = feedback.length === 0 ? '<span style="color:#6e7681;">暂无反馈</span>' : feedback.slice(-5).map(fb =>
-        `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-        `<div style="font-weight:600;color:#00f0ff;">${escapeHtml(fb.source_type || '?')} · <span style="color:${fb.sentiment === 'positive' ? '#00ff88' : fb.sentiment === 'negative' ? '#ff4466' : '#ffaa00'};">${escapeHtml(fb.sentiment || '?')}</span></div>` +
-        `<div style="color:#c9d1d9;">${escapeHtml(fb.content || '')}</div>` +
-        (fb.problems && fb.problems.length ? `<div style="color:#ffaa00;font-size:11px;">Problems: ${fb.problems.map(p => escapeHtml(p)).join(', ')}</div>` : '') +
-        `</div>`
-      ).join('');
-
-      const report = data.validation_report || {};
-      document.getElementById('testing-validation').innerHTML = `
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Conclusion:</span> <span style="color:${report.conclusion === 'pass' ? '#00ff88' : report.conclusion === 'fail' ? '#ff4466' : report.conclusion === 'partial' ? '#ffaa00' : '#8b949e'};font-weight:600;">${escapeHtml(report.conclusion || 'none')}</span></div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Original Problem:</span> ${escapeHtml(report.original_problem || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Tested Solution:</span> ${escapeHtml(report.tested_solution || 'none')}</div>
-        <div style="margin-bottom:6px;"><span style="color:#8b949e;">Success Metrics:</span> ${escapeHtml(report.success_metrics || 'none')}</div>
-        <div><span style="color:#8b949e;">Feedback Count:</span> ${(report.user_feedback || []).length}</div>
-      `;
-
-      const iteration = data.iteration_plan || {};
-      const items = iteration.items || [];
-      document.getElementById('testing-iteration').innerHTML = `
-        <div style="margin-bottom:8px;"><span style="color:#8b949e;">Recommendation:</span> ${escapeHtml(iteration.overall_recommendation || 'none')}</div>
-        ${items.length === 0 ? '<span style="color:#6e7681;">暂无迭代建议</span>' : items.map(item =>
-          `<div style="margin-bottom:6px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-          `<div style="font-weight:600;color:#00f0ff;">${escapeHtml(item.category || '?')} · ${escapeHtml(item.target || 'Unnamed')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">${escapeHtml(item.reason || '')}</div>` +
-          `<div style="color:#8b949e;font-size:11px;">Priority: ${escapeHtml(item.priority || 'medium')}</div>` +
-          `</div>`
-        ).join('')}
-      `;
-    }
-
-    function renderTestingConfirmDetail(step) {
-      const detailEl = document.getElementById('testing-confirm-detail');
-      if (!step || !step.metadata || !step.metadata.tool) {
-        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
-        return;
-      }
-      const { tool, action, parameters } = step.metadata;
-      let paramsText = '';
-      if (parameters && Object.keys(parameters).length > 0) {
-        paramsText = '\n参数：\n' + Object.entries(parameters)
-          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-          .join('\n');
-      }
-      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
-    }
-
-    async function sendTestingMessage() {
-      const input = document.getElementById('testing-input');
-      const btn = document.getElementById('testing-send-btn');
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      input.value = '';
-      btn.disabled = true;
-      setStatus('thinking');
-      document.getElementById('testing-confirm-box').classList.remove('active');
-      addTestingMessage('user', msg);
-      addTestingMessage('system', '已创建 testing & validation 任务，等待 Kyrozen 处理...', 'system');
-
-      testingTaskId = null;
-      clearInterval(testingPollInterval);
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'testing' })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
-        testingTaskId = data.task_id;
-        pollTestingTask();
-        testingPollInterval = setInterval(pollTestingTask, 1000);
-      } catch (e) {
-        addTestingMessage('system', '错误：' + e.message, 'error');
-        setStatus('failed', e.message);
-        btn.disabled = false;
-      }
-    }
-
-    async function pollTestingTask() {
-      if (!testingTaskId) return;
-      try {
-        const res = await fetch(`/api/tasks/${testingTaskId}`);
-        if (!res.ok) return;
-        const task = await res.json();
-
-        if (task.status === 'waiting_confirmation') {
-          clearInterval(testingPollInterval);
-          setStatus('waiting');
-          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
-          renderTestingConfirmDetail(pending);
-          document.getElementById('testing-confirm-box').classList.add('active');
-          document.getElementById('testing-send-btn').disabled = false;
-          return;
-        }
-
-        if (task.status === 'completed' || task.status === 'failed') {
-          clearInterval(testingPollInterval);
-          if (task.status === 'completed') {
-            setStatus('completed');
-            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
-            addTestingMessage('assistant', answer);
-          } else {
-            setStatus('failed', task.errors.join('; '));
-            addTestingMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
-          }
-          document.getElementById('testing-send-btn').disabled = false;
-          await loadTestingState();
-        } else {
-          const runningStep = task.steps.find(s => s.status === 'running');
-          if (runningStep) {
-            setStatus('calling', runningStep.description);
-          } else {
-            setStatus('thinking');
-          }
-        }
-      } catch (e) {
-        console.error('poll testing error', e);
-      }
-    }
-
-    async function confirmTestingTask(confirm) {
-      if (!testingTaskId) return;
-      document.getElementById('testing-confirm-box').classList.remove('active');
-      setStatus('thinking');
-      document.getElementById('testing-send-btn').disabled = true;
-      try {
-        const res = await fetch(`/api/tasks/${testingTaskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: confirm })
-        });
-        if (!res.ok) throw new Error('确认请求失败');
-        const task = await res.json();
-        if (task.status === 'waiting_confirmation') {
-          setStatus('waiting');
-          document.getElementById('testing-confirm-box').classList.add('active');
-          return;
-        }
-        testingPollInterval = setInterval(pollTestingTask, 1000);
-        pollTestingTask();
-      } catch (e) {
-        addTestingMessage('system', '确认失败：' + e.message, 'error');
-        setStatus('failed', e.message);
-        document.getElementById('testing-send-btn').disabled = false;
-      }
-    }
-
-    // ---------------- Learning & Proactive Improvement ----------------
-
-    let learningTaskId = null;
-    let learningPollInterval = null;
-
-    function enterLearning() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}/learning`;
-    }
-
-    function leaveLearning() {
-      if (!currentProjectId) return;
-      location.hash = `#/projects/${currentProjectId}`;
-    }
-
-    function addLearningMessage(role, content, type = role) {
-      const chat = document.getElementById('learning-messages');
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      const label = role === 'user' ? 'You' : role === 'assistant' ? 'Kyrozen' : role;
-      div.innerHTML = `<div class="role">${label}</div><div class="content">${escapeHtml(content)}</div>`;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
-    }
-
-    function renderLearningBadge(value, colorMap) {
-      const color = colorMap[value] || '#8b949e';
-      return `<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:10px;background:${color}22;color:${color};border:1px solid ${color}44;">${escapeHtml(value || 'unknown')}</span>`;
-    }
-
-    function renderLearningRecord(record) {
-      const typeColors = {
-        user_preference: '#58a6ff',
-        user_capability: '#a371f7',
-        project_fact: '#00f0ff',
-        product_decision: '#ffaa00',
-        validated_success: '#00ff88',
-        validated_failure: '#ff4466',
-        external_knowledge: '#8b949e'
-      };
-      const confidenceColors = { low: '#ffaa00', medium: '#58a6ff', high: '#00ff88' };
-      const verificationColors = {
-        unverified: '#8b949e',
-        user_provided: '#58a6ff',
-        externally_verified: '#00f0ff',
-        experiment_verified: '#ffaa00',
-        repeatedly_verified: '#00ff88'
-      };
-      const scopeColors = { private: '#ff4466', user: '#ffaa00', public: '#00ff88' };
-      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-        `<div style="font-weight:600;margin-bottom:4px;">${escapeHtml(record.memory || '')}</div>` +
-        `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">` +
-        renderLearningBadge(record.memory_type, typeColors) +
-        renderLearningBadge(record.confidence, confidenceColors) +
-        renderLearningBadge(record.verification_status, verificationColors) +
-        renderLearningBadge(record.scope, scopeColors) +
-        `</div>` +
-        `<div style="color:#8b949e;font-size:11px;">来源: ${escapeHtml(record.source || 'unknown')} · ${formatTime(record.created_at)}</div>` +
-        `</div>`;
-    }
-
-    function renderFailureKnowledge(failure) {
-      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #ff446644;border-radius:4px;">` +
-        `<div style="font-weight:600;color:#ff4466;margin-bottom:4px;">${escapeHtml(failure.problem || '')}</div>` +
-        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">原因:</span> ${escapeHtml(failure.cause || '')}</div>` +
-        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">解决:</span> ${escapeHtml(failure.solution || '')}</div>` +
-        `<div style="color:#8b949e;font-size:11px;">适用范围: ${escapeHtml(failure.affected_scope || '')} · 验证: ${escapeHtml(failure.verification || '')}</div>` +
-        `</div>`;
-    }
-
-    function renderSuccessKnowledge(success) {
-      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #00ff8844;border-radius:4px;">` +
-        `<div style="font-weight:600;color:#00ff88;margin-bottom:4px;">${escapeHtml(success.goal || '')}</div>` +
-        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">方案:</span> ${escapeHtml(success.solution || '')}</div>` +
-        `<div style="color:#c9d1d9;margin-bottom:4px;"><span style="color:#8b949e;">条件:</span> ${escapeHtml(success.conditions || '')}</div>` +
-        `<div style="color:#8b949e;font-size:11px;">结果: ${escapeHtml(success.result || '')}</div>` +
-        `</div>`;
-    }
-
-    function renderSuggestion(suggestion) {
-      const priorityColors = { low: '#8b949e', medium: '#58a6ff', high: '#ff4466' };
-      const statusColors = {
-        new: '#00f0ff',
-        accepted: '#00ff88',
-        rejected: '#ff4466',
-        later: '#ffaa00',
-        ignored: '#8b949e'
-      };
-      return `<div style="margin-bottom:10px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;">` +
-        `<div style="font-weight:600;margin-bottom:4px;">${escapeHtml(suggestion.suggestion || '')}</div>` +
-        `<div style="color:#8b949e;font-size:11px;margin-bottom:4px;">${escapeHtml(suggestion.reason || '')}</div>` +
-        `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">` +
-        renderLearningBadge(suggestion.priority, priorityColors) +
-        renderLearningBadge(suggestion.status, statusColors) +
-        `<span style="color:#8b949e;font-size:11px;">${escapeHtml(suggestion.category || '')}</span>` +
-        `</div>` +
-        `<div style="color:#8b949e;font-size:11px;">影响: ${escapeHtml(suggestion.impact || '')}</div>` +
-        `</div>`;
-    }
-
-    async function loadLearningState() {
-      if (!currentProjectId) return;
-      try {
-        const res = await fetch(`/api/projects/${currentProjectId}/learning/state`);
-        if (!res.ok) return;
-        const data = await res.json();
-        renderLearningState(data);
-      } catch (e) {
-        console.error('loadLearningState error', e);
-      }
-    }
-
-    async function loadImprovementState() {
-      if (!currentProjectId) return;
-      try {
-        const res = await fetch(`/api/projects/${currentProjectId}/improvement/state`);
-        if (!res.ok) return;
-        const data = await res.json();
-        renderImprovementState(data);
-      } catch (e) {
-        console.error('loadImprovementState error', e);
-      }
-    }
-
-    function renderLearningState(data) {
-      const records = data.learning_records || [];
-      document.getElementById('learning-records').innerHTML = records.length === 0
-        ? '<span style="color:#6e7681;">暂无学习记录</span>'
-        : records.map(renderLearningRecord).join('');
-
-      const failures = data.failure_knowledge || [];
-      document.getElementById('learning-failures').innerHTML = failures.length === 0
-        ? '<span style="color:#6e7681;">暂无失败知识</span>'
-        : failures.map(renderFailureKnowledge).join('');
-
-      const successes = data.success_knowledge || [];
-      document.getElementById('learning-successes').innerHTML = successes.length === 0
-        ? '<span style="color:#6e7681;">暂无成功经验</span>'
-        : successes.map(renderSuccessKnowledge).join('');
-    }
-
-    function renderImprovementState(data) {
-      const suggestions = data.suggestions || [];
-      document.getElementById('learning-suggestions').innerHTML = suggestions.length === 0
-        ? '<span style="color:#6e7681;">暂无改进建议</span>'
-        : suggestions.map(renderSuggestion).join('');
-    }
-
-    function renderLearningConfirmDetail(step) {
-      const detailEl = document.getElementById('learning-confirm-detail');
-      if (!step || !step.metadata || !step.metadata.tool) {
-        detailEl.textContent = 'Agent 请求执行可能影响文件或系统的操作。';
-        return;
-      }
-      const { tool, action, parameters } = step.metadata;
-      let paramsText = '';
-      if (parameters && Object.keys(parameters).length > 0) {
-        paramsText = '\n参数：\n' + Object.entries(parameters)
-          .map(([k, v]) => `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-          .join('\n');
-      }
-      detailEl.textContent = `工具：${tool}.${action}${paramsText}`;
-    }
-
-    async function sendLearningMessage() {
-      const input = document.getElementById('learning-input');
-      const btn = document.getElementById('learning-send-btn');
-      const msg = input.value.trim();
-      if (!msg) return;
-
-      input.value = '';
-      btn.disabled = true;
-      setStatus('thinking');
-      document.getElementById('learning-confirm-box').style.display = 'none';
-      addLearningMessage('user', msg);
-      addLearningMessage('system', '已创建 learning 任务，等待 Kyrozen 处理...', 'system');
-
-      learningTaskId = null;
-      clearInterval(learningPollInterval);
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, project_id: currentProjectId, mode: 'learning' })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
-        learningTaskId = data.task_id;
-        pollLearningTask();
-        learningPollInterval = setInterval(pollLearningTask, 1000);
-      } catch (e) {
-        addLearningMessage('system', '错误：' + e.message, 'error');
-        setStatus('failed', e.message);
-        btn.disabled = false;
-      }
-    }
-
-    async function pollLearningTask() {
-      if (!learningTaskId) return;
-      try {
-        const res = await fetch(`/api/tasks/${learningTaskId}`);
-        if (!res.ok) return;
-        const task = await res.json();
-
-        if (task.status === 'waiting_confirmation') {
-          clearInterval(learningPollInterval);
-          setStatus('waiting');
-          const pending = task.steps.find(s => s.status === 'waiting_confirmation');
-          renderLearningConfirmDetail(pending);
-          document.getElementById('learning-confirm-box').style.display = 'flex';
-          document.getElementById('learning-send-btn').disabled = false;
-          return;
-        }
-
-        if (task.status === 'completed' || task.status === 'failed') {
-          clearInterval(learningPollInterval);
-          if (task.status === 'completed') {
-            setStatus('completed');
-            const answer = task.result && task.result.answer ? task.result.answer : '任务已完成，无最终回复。';
-            addLearningMessage('assistant', answer);
-          } else {
-            setStatus('failed', task.errors.join('; '));
-            addLearningMessage('system', '任务失败：' + task.errors.join('\n'), 'error');
-          }
-          document.getElementById('learning-send-btn').disabled = false;
-          await loadLearningState();
-          await loadImprovementState();
-        } else {
-          const runningStep = task.steps.find(s => s.status === 'running');
-          if (runningStep) {
-            setStatus('calling', runningStep.description);
-          } else {
-            setStatus('thinking');
-          }
-        }
-      } catch (e) {
-        console.error('poll learning error', e);
-      }
-    }
-
-    async function confirmLearningTask(confirm) {
-      if (!learningTaskId) return;
-      document.getElementById('learning-confirm-box').style.display = 'none';
-      setStatus('thinking');
-      document.getElementById('learning-send-btn').disabled = true;
-      try {
-        const res = await fetch(`/api/tasks/${learningTaskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: confirm })
-        });
-        if (!res.ok) throw new Error('确认请求失败');
-        const task = await res.json();
-        if (task.status === 'waiting_confirmation') {
-          setStatus('waiting');
-          document.getElementById('learning-confirm-box').style.display = 'flex';
-          return;
-        }
-        learningPollInterval = setInterval(pollLearningTask, 1000);
-        pollLearningTask();
-      } catch (e) {
-        addLearningMessage('system', '确认失败：' + e.message, 'error');
-        setStatus('failed', e.message);
-        document.getElementById('learning-send-btn').disabled = false;
-      }
-    }
-
-    window.addEventListener('hashchange', route);
-    checkHealth();
-    setInterval(checkHealth, 10000);
-    route();
+    });
   </script>
 </body>
 </html>

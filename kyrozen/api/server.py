@@ -47,6 +47,7 @@ from kyrozen.testing.agent import TestingAgent
 from kyrozen.learning.agent import LearningAgent
 from kyrozen.learning.repository import LearningRepository
 from kyrozen.tools import get_default_registry
+from kyrozen.web.waitlist import WaitlistStore
 
 
 # Global state managed via lifespan
@@ -58,6 +59,7 @@ _context_builder: ProjectContextBuilder | None = None
 _learning_repository: LearningRepository | None = None
 _desktop_manager: DesktopClientManager | None = None
 _quota_manager: QuotaManager | None = None
+_waitlist_store: WaitlistStore | None = None
 
 
 _KYROZEN_QUESTION_RE = re.compile(r"```kyrozen-question\s*([\s\S]*?)\s*```")
@@ -825,7 +827,7 @@ def _recommend_next_action(project: Any) -> dict[str, str] | None:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository, _desktop_manager, _quota_manager
+        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository, _desktop_manager, _quota_manager, _waitlist_store
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -843,6 +845,9 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         _context_builder = ProjectContextBuilder(_project_manager, InMemoryMemory())
         os.makedirs(_config.workspace_root, exist_ok=True)
         _learning_repository = LearningRepository(_db)
+
+        waitlist_db_path = str(Path(_config.workspace_root) / "waitlist.db")
+        _waitlist_store = WaitlistStore(waitlist_db_path)
 
         _agent_factory = AgentFactory(
             config=_config,
@@ -935,6 +940,20 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if html_path.exists():
             return HTMLResponse(html_path.read_text(encoding="utf-8"))
         return HTMLResponse("<h1>Kyrozen Core</h1><p>Web UI not found.</p>")
+
+    class WaitlistRequest(BaseModel):
+        email: str = Field(..., min_length=1)
+        source: str = Field("website", max_length=100)
+
+    @app.post("/api/waitlist")
+    async def join_waitlist(request: Request, payload: WaitlistRequest):
+        if _waitlist_store is None:
+            raise HTTPException(status_code=503, detail="Waitlist is not available")
+        client_host = request.client.host if request.client else None
+        result = _waitlist_store.add(payload.email, source=payload.source, ip=client_host)
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Invalid request"))
+        return {"success": True, "message": "已成功加入等待列表"}
 
     # ------------------------------------------------------------------
     # Auth

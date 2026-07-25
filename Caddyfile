@@ -1,14 +1,9 @@
 # Self-hosted Kyrozen reverse proxy.
 #
-# Replace :80 with your domain for automatic HTTPS, e.g.:
-#   kyrozen.example.com {
-#       reverse_proxy kyrozen-backend:8000
-#   }
-#
-# For local testing on a server without a domain, Caddy will serve a self-signed certificate.
-# The desktop client may warn about the certificate; use a real domain + DNS for production.
+# Replace kyrozen.chat with your domain for automatic HTTPS.
+# Caddy will automatically request and renew a Let's Encrypt certificate.
 
-:80 {
+kyrozen.chat {
 	encode gzip
 
 	# WebSocket upgrade support

@@ -6,6 +6,10 @@
 kyrozen.chat {
 	encode gzip
 
+	# Self-signed certificate for now; replace with Let's Encrypt once DNS
+	# filtering / domain registration issues are resolved.
+	tls internal
+
 	# WebSocket upgrade support
 	@websockets {
 		header Connection *Upgrade*

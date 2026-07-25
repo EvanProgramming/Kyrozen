@@ -24,7 +24,7 @@ document.getElementById('capture').addEventListener('click', async () => {
   try {
     setStatus('Capturing...');
     const result = await sendBackgroundMessage('capture');
-    setStatus(`Captured: ${result?.title || 'ok'}`);
+    setStatus(`Captured (${result?.source || 'unknown'}): ${result?.title || 'ok'}`);
   } catch (err) {
     setStatus(err.message, true);
   }
@@ -35,7 +35,9 @@ document.getElementById('testApp').addEventListener('click', async () => {
     setStatus('Testing...');
     const result = await sendBackgroundMessage('test');
     if (result?.success) {
-      setStatus(`Test passed (${result.data?.status_code || 200})`);
+      const report = result.report || {};
+      const interactions = report.interactions?.length || 0;
+      setStatus(`Test passed (${result.source}, ${interactions} interactions)`);
     } else {
       setStatus(`Test failed: ${result?.error || 'unknown error'}`, true);
     }

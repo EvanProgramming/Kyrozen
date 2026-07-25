@@ -31,6 +31,13 @@ export interface KyrozenAPI {
   listFiles: (projectId: string) => Promise<{ files: string[]; error?: string }>;
   readFile: (projectId: string, relativePath: string) => Promise<{ content: string; error?: string }>;
   saveFile: (projectId: string, relativePath: string, content: string) => Promise<{ success: boolean; error?: string }>;
+  searchAcrossProjects: (
+    query: string,
+    options?: { maxResults?: number; includeContent?: boolean }
+  ) => Promise<{
+    results: Array<{ projectId: string; relativePath: string; matchType: 'filename' | 'content'; snippet?: string }>;
+    error?: string;
+  }>;
 
   requestInitialToken: () => void;
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => void;
@@ -40,7 +47,7 @@ export interface KyrozenAPI {
   cancelTask: () => void;
   startPairing: (serverUrl: string) => Promise<{ success: boolean; code?: string; expiresIn?: number; error?: string }>;
   pollPairing: (serverUrl: string, code: string) => Promise<{ success: boolean; ready?: boolean; wsToken?: string; error?: string }>;
-  onChatMessage: (callback: (message: { role: string; content: string }) => void) => void;
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) => void;
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => void;
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;
   onOpenPreviewUrl: (callback: (url: string) => void) => void;

@@ -127,10 +127,19 @@ async function forwardToDesktop(message: NativeMessage): Promise<unknown> {
 }
 
 async function runHost() {
+  // Send a ready message so the extension knows the host is listening.
+  writeMessage({ type: 'host_ready' });
+
   // eslint-disable-next-line @typescript-eslint/no-misused-promises
   new NativeMessagingReader(async (message) => {
     const response = await forwardToDesktop(message);
-    writeMessage({ success: true, request: message, response });
+    writeMessage({
+      type: 'response',
+      request_id: message.request_id,
+      success: true,
+      request: message,
+      response,
+    });
   });
 
   // Keep the process alive while stdin is open.

@@ -298,7 +298,13 @@ function updateConnection(state: 'disconnected' | 'connecting' | 'connected' | '
   mainWindow?.webContents.send('kyrozen:connection-change', state, message);
 }
 
-function sendChatMessage(message: { role: string; content: string }) {
+interface ChatMessage {
+  role: string;
+  content: string;
+  raw?: string;
+}
+
+function sendChatMessage(message: ChatMessage) {
   mainWindow?.webContents.send('kyrozen:chat-message', message);
 }
 
@@ -519,9 +525,13 @@ app.whenReady().then(async () => {
           const errorText = errors.length
             ? errors.map((e: any) => `- ${e.message}${e.source ? ` (${e.source}:${e.line})` : ''}`).join('\n')
             : '无错误';
+          const interactions = Array.isArray(message.interactions)
+            ? message.interactions.map((i: any) => `[${i.action}] ${i.target || i.tag || ''}${i.value ? ` = ${i.value}` : ''}`).join('\n')
+            : '';
+          const metrics = (message.metrics || {}) as Record<string, unknown>;
           sendChatMessage({
             role: 'system',
-            content: `本地测试页面报告：${message.url}\n错误：\n${errorText}`,
+            content: `本地测试页面报告：${message.url}\nDOM 节点：${metrics.domNodes || '未知'}\n执行操作：\n${interactions || '无'}\n错误：\n${errorText}`,
           });
         } else {
           sendChatMessage({ role: 'system', content: `收到浏览器扩展消息：${JSON.stringify(message)}` });
@@ -971,6 +981,73 @@ ipcMain.handle('kyrozen:list-files', async (_event, projectId: string) => {
   } catch (err: any) {
     logError(`Failed to list files: ${err.message || err}`);
     return { files: [], error: err.message || String(err) };
+  }
+});
+
+interface SearchResult {
+  projectId: string;
+  relativePath: string;
+  matchType: 'filename' | 'content';
+  snippet?: string;
+}
+
+async function searchAcrossProjects(query: string, options?: { maxResults?: number; includeContent?: boolean }): Promise<SearchResult[]> {
+  const normalizedQuery = query.toLowerCase().trim();
+  if (!normalizedQuery) return [];
+  const maxResults = options?.maxResults ?? 50;
+  const includeContent = options?.includeContent ?? true;
+  const results: SearchResult[] = [];
+
+  for (const [projectId, root] of Object.entries(workspaceMap)) {
+    if (results.length >= maxResults) break;
+    try {
+      const files = await listWorkspaceFiles(projectId);
+      for (const relativePath of files) {
+        if (results.length >= maxResults) break;
+        if (IGNORED_PATH_RE.test(relativePath)) continue;
+
+        if (relativePath.toLowerCase().includes(normalizedQuery)) {
+          results.push({ projectId, relativePath, matchType: 'filename' });
+          continue;
+        }
+
+        if (!includeContent) continue;
+        const absolutePath = path.join(root, relativePath);
+        try {
+          const stats = await fs.stat(absolutePath);
+          if (!stats.isFile() || stats.size > 1024 * 1024) continue;
+          const content = await fs.readFile(absolutePath, 'utf-8');
+          const lowerContent = content.toLowerCase();
+          const index = lowerContent.indexOf(normalizedQuery);
+          if (index !== -1) {
+            const start = Math.max(0, index - 60);
+            const end = Math.min(content.length, index + normalizedQuery.length + 60);
+            results.push({
+              projectId,
+              relativePath,
+              matchType: 'content',
+              snippet: `...${content.slice(start, end)}...`,
+            });
+          }
+        } catch {
+          // ignore unreadable files
+        }
+      }
+    } catch (err: any) {
+      logError(`Failed to search project ${projectId}: ${err.message || err}`);
+    }
+  }
+
+  return results;
+}
+
+ipcMain.handle('kyrozen:search-across-projects', async (_event, query: string, options?: { maxResults?: number; includeContent?: boolean }) => {
+  try {
+    const results = await searchAcrossProjects(query, options);
+    return { results };
+  } catch (err: any) {
+    logError(`Cross-project search failed: ${err.message || err}`);
+    return { results: [], error: err.message || String(err) };
   }
 });
 
@@ -1787,7 +1864,11 @@ function handlePythonAgentLine(line: string) {
     if (message.method === 'task_step') {
       const step = message.params.step || {};
       sendToCloud({ type: 'task_step', task_id: message.params.task_id, step });
-      sendChatMessage({ role: 'assistant', content: `[${step.status}] ${step.description}` });
+      sendChatMessage({
+        role: 'assistant',
+        content: `[${step.status}] ${step.description}`,
+        raw: JSON.stringify(message, null, 2),
+      });
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);
@@ -1836,7 +1917,11 @@ function handlePythonAgentLine(line: string) {
       });
       const status = message.params.status;
       const answer = message.params.result?.answer || '任务完成';
-      sendChatMessage({ role: 'assistant', content: answer });
+      sendChatMessage({
+        role: 'assistant',
+        content: answer,
+        raw: JSON.stringify(message, null, 2),
+      });
       if (status === 'failed') {
         showNotification('Kyrozen', '任务执行失败');
       } else if (status === 'cancelled') {

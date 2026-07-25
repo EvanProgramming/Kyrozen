@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
 
   listFiles: (projectId: string) => ipcRenderer.invoke('kyrozen:list-files', projectId),
   readFile: (projectId: string, relativePath: string) => ipcRenderer.invoke('kyrozen:read-file', projectId, relativePath),
+  searchAcrossProjects: (query: string, options?: { maxResults?: number; includeContent?: boolean }) =>
+    ipcRenderer.invoke('kyrozen:search-across-projects', query, options),
   saveFile: (projectId: string, relativePath: string, content: string) =>
     ipcRenderer.invoke('kyrozen:save-file', projectId, relativePath, content),
 
@@ -45,7 +47,7 @@ contextBridge.exposeInMainWorld('kyrozen', {
   startPairing: (serverUrl: string) => ipcRenderer.invoke('kyrozen:start-pairing', serverUrl),
   pollPairing: (serverUrl: string, code: string) => ipcRenderer.invoke('kyrozen:poll-pairing', serverUrl, code),
 
-  onChatMessage: (callback: (message: { role: string; content: string }) => void) =>
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) =>
     ipcRenderer.on('kyrozen:chat-message', (_event, message) => callback(message)),
 
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) =>

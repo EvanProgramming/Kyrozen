@@ -3,7 +3,7 @@
   "name": "Kyrozen Web Capture",
   "version": "0.1.0",
   "description": "Capture web pages and test local web apps for Kyrozen projects.",
-  "permissions": ["activeTab", "storage", "scripting", "notifications", "contextMenus"],
+  "permissions": ["activeTab", "storage", "scripting", "notifications", "contextMenus", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",

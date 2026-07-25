@@ -8,6 +8,7 @@ import { FileTree } from './components/FileTree';
 import { GitPanel } from './components/GitPanel';
 import { HardwarePanel } from './components/HardwarePanel';
 import { PreviewPanel } from './components/PreviewPanel';
+import { SearchPanel } from './components/SearchPanel';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -167,6 +168,13 @@ function App() {
     setPreviewUrl(url);
   };
 
+  const handleOpenFileFromSearch = async (projectId: string, relativePath: string) => {
+    if (projectId !== currentProjectId) {
+      await handleSelectProject(projectId);
+    }
+    setEditingFile(relativePath);
+  };
+
   if (onboardingStatus === 'loading') {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-950 text-slate-200">
@@ -254,6 +262,8 @@ function App() {
                 高危操作将自动执行，不再确认。
               </div>
             )}
+
+            <SearchPanel onOpenFile={handleOpenFileFromSearch} />
 
             <div className="border-t border-slate-700 pt-2">
               <div className="px-2 font-medium text-slate-300 mb-1">本地文件</div>

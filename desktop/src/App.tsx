@@ -56,7 +56,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string }>({ connected: false, scope: '' });
-  const [serverUrl, setServerUrl] = useState('http://localhost:8000');
+  const [serverUrl, setServerUrl] = useState('https://kyrozen.chat');
 
   const loadProjects = async () => {
     if (!window.kyrozen) return;

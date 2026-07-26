@@ -3,13 +3,14 @@ version: "3.8"
 # Self-hosted Kyrozen backend deployment.
 #
 # This stack runs the Kyrozen API backend + a local PostgreSQL instance.
-# The desktop client connects directly to the backend over HTTPS/WSS.
+# Public access is provided via Cloudflare Tunnel, so no inbound 80/443 ports
+# or local TLS certificates are required on the host.
 #
 # Quick start:
 #   1. Copy .env.example to .env and fill in your Supabase + AI keys.
 #   2. Set KYROZEN_DB_BACKEND=postgres and KYROZEN_POSTGRES_DSN.
-#   3. (Optional) Place your TLS certificate/key in ./caddy/certs/ or use Caddy's automatic HTTPS.
-#   4. docker compose -f docker-compose.selfhosted.yml up -d --build
+#   3. Add TUNNEL_TOKEN from Cloudflare Zero Trust (see docs/CLOUDFLARE_TUNNEL.md).
+#   4. docker compose -f docker-compose.selfhosted.yml up -d --build --remove-orphans
 
 services:
   kyrozen-postgres:
@@ -77,20 +78,39 @@ services:
           cpus: "0.5"
           memory: 512M
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: kyrozen-caddy
+  # Caddy is disabled when using Cloudflare Tunnel. Cloudflare handles TLS
+  # termination at the edge and forwards traffic through the tunnel.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   container_name: kyrozen-caddy
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #     - "443:443/udp"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+  #   networks:
+  #     - kyrozen-network
+  #   depends_on:
+  #     - kyrozen-backend
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "0.5"
+  #         memory: 256M
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kyrozen-cloudflared
     restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+    command: tunnel run --token ${TUNNEL_TOKEN:?TUNNEL_TOKEN is required}
     networks:
       - kyrozen-network
+    env_file:
+      - .env
     depends_on:
       - kyrozen-backend
     deploy:
@@ -103,10 +123,6 @@ volumes:
   kyrozen_workspace:
     driver: local
   kyrozen_postgres_data:
-    driver: local
-  caddy_data:
-    driver: local
-  caddy_config:
     driver: local
 
 networks:

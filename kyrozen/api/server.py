@@ -48,6 +48,7 @@ from kyrozen.learning.agent import LearningAgent
 from kyrozen.learning.repository import LearningRepository
 from kyrozen.tools import get_default_registry
 from kyrozen.web.waitlist import WaitlistStore
+from kyrozen.api.rate_limit import auth_limiter, waitlist_limiter, _client_ip
 
 
 # Global state managed via lifespan
@@ -947,7 +948,11 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         return HTMLResponse("<h1>Kyrozen Core</h1><p>Web UI not found.</p>")
 
     @app.post("/api/waitlist")
-    async def join_waitlist(request: Request, payload: WaitlistRequest):
+    async def join_waitlist(
+        request: Request,
+        payload: WaitlistRequest,
+        _rate_limit: None = Depends(waitlist_limiter.dependency(_client_ip)),
+    ):
         if _waitlist_store is None:
             raise HTTPException(status_code=503, detail="Waitlist is not available")
         client_host = request.client.host if request.client else None
@@ -980,7 +985,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         }
 
     @app.post("/api/auth/signup")
-    async def api_auth_signup(request: SignupRequest):
+    async def api_auth_signup(
+        request: SignupRequest,
+        _rate_limit: None = Depends(auth_limiter.dependency(_client_ip)),
+    ):
         config = get_config()
         if not config.supabase_url or not config.supabase_service_role_key:
             raise HTTPException(status_code=500, detail="Supabase auth is not configured on the server")
@@ -1008,7 +1016,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(status_code=400, detail=f"Registration failed: {exc}") from exc
 
     @app.post("/api/auth/signin")
-    async def api_auth_signin(request: SigninRequest):
+    async def api_auth_signin(
+        request: SigninRequest,
+        _rate_limit: None = Depends(auth_limiter.dependency(_client_ip)),
+    ):
         config = get_config()
         if not config.supabase_url or not config.supabase_anon_key:
             raise HTTPException(status_code=500, detail="Supabase auth is not configured on the server")

@@ -30,11 +30,26 @@ export function SettingsPage({
   const [serverUrlSaving, setServerUrlSaving] = useState(false);
   const [serverUrlError, setServerUrlError] = useState<string | null>(null);
 
+  const isValidServerUrl = (url: string): boolean => {
+    try {
+      const u = new URL(url);
+      return u.protocol === 'https:' || u.protocol === 'http:';
+    } catch {
+      return false;
+    }
+  };
+
   const handleSaveServerUrl = async () => {
     setServerUrlSaving(true);
     setServerUrlError(null);
+    const trimmed = serverUrlInput.trim();
+    if (!isValidServerUrl(trimmed)) {
+      setServerUrlError('请输入有效的 http:// 或 https:// 服务器地址');
+      setServerUrlSaving(false);
+      return;
+    }
     try {
-      await onChangeServerUrl(serverUrlInput.trim());
+      await onChangeServerUrl(trimmed);
     } catch (err: any) {
       setServerUrlError(err.message || '保存失败');
     } finally {

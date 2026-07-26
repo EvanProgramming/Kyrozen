@@ -148,6 +148,16 @@ function LoginStep({
       setState((prev) => ({ ...prev, loginError: t.errorRequired }));
       return;
     }
+    try {
+      const u = new URL(state.serverUrl);
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+        setState((prev) => ({ ...prev, loginError: '服务器地址必须以 http:// 或 https:// 开头' }));
+        return;
+      }
+    } catch {
+      setState((prev) => ({ ...prev, loginError: '请输入有效的服务器地址' }));
+      return;
+    }
     setLoading(true);
     setState((prev) => ({ ...prev, loginError: '' }));
     try {
@@ -230,8 +240,7 @@ function PythonStep({
       }
     });
     return () => {
-      // ipcRenderer.on returns no unsubscribe; best-effort cleanup is a no-op here.
-      void unsubscribe;
+      unsubscribe();
     };
   }, [kyrozen, setState]);
 

@@ -118,12 +118,12 @@ function App() {
         setOnboardingStatus('completed');
       });
 
-    window.kyrozen.onConnectionChange((state: ConnectionState, message: string) => {
+    const unsubConnection = window.kyrozen.onConnectionChange((state: ConnectionState, message: string) => {
       setConnection(state);
       setStatusMessage(message);
     });
 
-    window.kyrozen.onProtocolUrl(async (url: string) => {
+    const unsubProtocolUrl = window.kyrozen.onProtocolUrl(async (url: string) => {
       const params = new URL(url).searchParams;
       const openToken = params.get('token');
       const projectId = params.get('project_id');
@@ -141,7 +141,7 @@ function App() {
       }
     });
 
-    window.kyrozen.onSessionResumed(async (token: string, url: string) => {
+    const unsubSessionResumed = window.kyrozen.onSessionResumed(async (token: string, url: string) => {
       setToken(token);
       setStatusMessage(`已恢复会话：${url}`);
       await loadProjects();
@@ -151,7 +151,7 @@ function App() {
       await loadGitHubStatus();
     });
 
-    window.kyrozen.onSessionEnded(() => {
+    const unsubSessionEnded = window.kyrozen.onSessionEnded(() => {
       setToken(null);
       setProjects([]);
       setCurrentProjectId(null);
@@ -160,7 +160,7 @@ function App() {
       setGithubStatus({ connected: false, scope: '' });
     });
 
-    window.kyrozen.onOpenSettings(() => {
+    const unsubOpenSettings = window.kyrozen.onOpenSettings(() => {
       setShowSettings(true);
     });
 
@@ -170,19 +170,19 @@ function App() {
       // ignore
     });
 
-    window.kyrozen.onOpenPreviewUrl((url: string) => {
+    const unsubOpenPreviewUrl = window.kyrozen.onOpenPreviewUrl((url: string) => {
       setPreviewUrl(url);
     });
 
-    window.kyrozen.onFullTrustChange((status) => {
+    const unsubFullTrustChange = window.kyrozen.onFullTrustChange((status) => {
       setFullTrust(status.enabled);
     });
 
-    window.kyrozen.onGitHubStatus((status) => {
+    const unsubGitHubStatus = window.kyrozen.onGitHubStatus((status) => {
       setGithubStatus({ connected: status.connected, scope: status.scope || '' });
     });
 
-    window.kyrozen.onUpdateStatus((status) => {
+    const unsubUpdateStatus = window.kyrozen.onUpdateStatus((status) => {
       setUpdateStatus(status);
     });
 
@@ -197,6 +197,15 @@ function App() {
 
     return () => {
       clearTimeout(updateTimer);
+      unsubConnection();
+      unsubProtocolUrl();
+      unsubSessionResumed();
+      unsubSessionEnded();
+      unsubOpenSettings();
+      unsubOpenPreviewUrl();
+      unsubFullTrustChange();
+      unsubGitHubStatus();
+      unsubUpdateStatus();
     };
   }, []);
 
@@ -264,16 +273,24 @@ function App() {
 
   const handleImportLocalProject = async () => {
     if (!window.kyrozen) return;
-    const imported = await window.kyrozen.importLocalProject();
-    if (!imported) return;
-    const project: Project = {
-      id: imported.projectId,
-      name: imported.name,
-      current_stage: '本地导入',
-      localOnly: true,
-    };
-    setProjects((prev) => [...prev, project]);
-    await handleSelectProject(project.id);
+    try {
+      const imported = await window.kyrozen.importLocalProject();
+      if (!imported) {
+        setStatusMessage('导入取消或未选择有效目录');
+        return;
+      }
+      const project: Project = {
+        id: imported.projectId,
+        name: imported.name,
+        current_stage: '本地导入',
+        localOnly: true,
+      };
+      setProjects((prev) => [...prev, project]);
+      await handleSelectProject(project.id);
+      setStatusMessage(`已导入项目：${imported.name}`);
+    } catch (err: any) {
+      setStatusMessage(`导入失败：${err.message || '未知错误'}`);
+    }
   };
 
   const handleChangeLanguage = async (lang: 'zh' | 'en') => {

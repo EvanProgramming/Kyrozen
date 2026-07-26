@@ -42,22 +42,22 @@ export interface KyrozenAPI {
   }>;
 
   requestInitialToken: () => void;
-  onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => void;
-  onProtocolUrl: (callback: (url: string) => void) => void;
-  onSessionResumed: (callback: (token: string, serverUrl: string) => void) => void;
-  onSessionEnded: (callback: () => void) => void;
-  onOpenSettings: (callback: () => void) => void;
+  onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => () => void;
+  onProtocolUrl: (callback: (url: string) => void) => () => void;
+  onSessionResumed: (callback: (token: string, serverUrl: string) => void) => () => void;
+  onSessionEnded: (callback: () => void) => () => void;
+  onOpenSettings: (callback: () => void) => () => void;
   sendChat: (message: string) => void;
   cancelTask: () => void;
   startPairing: (serverUrl: string) => Promise<{ success: boolean; code?: string; expiresIn?: number; error?: string }>;
   pollPairing: (serverUrl: string, code: string) => Promise<{ success: boolean; ready?: boolean; wsToken?: string; error?: string }>;
-  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) => void;
-  onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => void;
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) => () => void;
+  onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => () => void;
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;
-  onOpenPreviewUrl: (callback: (url: string) => void) => void;
+  onOpenPreviewUrl: (callback: (url: string) => void) => () => void;
 
   checkForUpdates: () => Promise<{ success: boolean; error?: string }>;
-  onUpdateStatus: (callback: (status: { status: string; message: string }) => void) => void;
+  onUpdateStatus: (callback: (status: { status: string; message: string }) => void) => () => void;
   ensureHardwareToolchain: () => Promise<{
     success: boolean;
     arduino?: { path: string | null; version: string | null };
@@ -113,7 +113,7 @@ export interface KyrozenAPI {
   pickOnboardingWorkspace: () => Promise<{ workspaceRoot: string | null }>;
   importLocalProject: () => Promise<{ projectId: string; name: string; workspaceRoot: string } | null>;
 
-  onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) => void;
+  onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) => () => void;
 }
 
 declare global {

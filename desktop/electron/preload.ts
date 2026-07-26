@@ -35,42 +35,69 @@ contextBridge.exposeInMainWorld('kyrozen', {
 
   requestInitialToken: () => ipcRenderer.send('kyrozen:request-initial-token'),
 
-  onConnectionChange: (callback: (state: ConnectionState, message: string) => void) =>
-    ipcRenderer.on('kyrozen:connection-change', (_event, state, message) => callback(state, message)),
+  onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => {
+    const handler = (_event: unknown, state: ConnectionState, message: string) => callback(state, message);
+    ipcRenderer.on('kyrozen:connection-change', handler);
+    return () => ipcRenderer.removeListener('kyrozen:connection-change', handler);
+  },
 
-  onProtocolUrl: (callback: (url: string) => void) =>
-    ipcRenderer.on('kyrozen:protocol-url', (_event, url) => callback(url)),
+  onProtocolUrl: (callback: (url: string) => void) => {
+    const handler = (_event: unknown, url: string) => callback(url);
+    ipcRenderer.on('kyrozen:protocol-url', handler);
+    return () => ipcRenderer.removeListener('kyrozen:protocol-url', handler);
+  },
 
-  onSessionResumed: (callback: (token: string, serverUrl: string) => void) =>
-    ipcRenderer.on('kyrozen:session-resumed', (_event, token, serverUrl) => callback(token, serverUrl)),
+  onSessionResumed: (callback: (token: string, serverUrl: string) => void) => {
+    const handler = (_event: unknown, token: string, serverUrl: string) => callback(token, serverUrl);
+    ipcRenderer.on('kyrozen:session-resumed', handler);
+    return () => ipcRenderer.removeListener('kyrozen:session-resumed', handler);
+  },
 
-  onSessionEnded: (callback: () => void) =>
-    ipcRenderer.on('kyrozen:session-ended', () => callback()),
+  onSessionEnded: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('kyrozen:session-ended', handler);
+    return () => ipcRenderer.removeListener('kyrozen:session-ended', handler);
+  },
 
-  onOpenSettings: (callback: () => void) =>
-    ipcRenderer.on('kyrozen:open-settings', () => callback()),
+  onOpenSettings: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('kyrozen:open-settings', handler);
+    return () => ipcRenderer.removeListener('kyrozen:open-settings', handler);
+  },
 
   sendChat: (message: string) => ipcRenderer.send('kyrozen:send-chat', message),
   cancelTask: () => ipcRenderer.send('kyrozen:cancel-task'),
   startPairing: (serverUrl: string) => ipcRenderer.invoke('kyrozen:start-pairing', serverUrl),
   pollPairing: (serverUrl: string, code: string) => ipcRenderer.invoke('kyrozen:poll-pairing', serverUrl, code),
 
-  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) =>
-    ipcRenderer.on('kyrozen:chat-message', (_event, message) => callback(message)),
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) => {
+    const handler = (_event: unknown, message: { role: string; content: string; raw?: string }) => callback(message);
+    ipcRenderer.on('kyrozen:chat-message', handler);
+    return () => ipcRenderer.removeListener('kyrozen:chat-message', handler);
+  },
 
-  onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) =>
-    ipcRenderer.on('kyrozen:execution-plan', (_event, plan) => callback(plan)),
+  onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => {
+    const handler = (_event: unknown, plan: { task_id: string; steps: string[] }) => callback(plan);
+    ipcRenderer.on('kyrozen:execution-plan', handler);
+    return () => ipcRenderer.removeListener('kyrozen:execution-plan', handler);
+  },
 
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') =>
     ipcRenderer.invoke('kyrozen:open-preview', url, mode),
 
-  onOpenPreviewUrl: (callback: (url: string) => void) =>
-    ipcRenderer.on('kyrozen:open-preview-url', (_event, url) => callback(url)),
+  onOpenPreviewUrl: (callback: (url: string) => void) => {
+    const handler = (_event: unknown, url: string) => callback(url);
+    ipcRenderer.on('kyrozen:open-preview-url', handler);
+    return () => ipcRenderer.removeListener('kyrozen:open-preview-url', handler);
+  },
 
   checkForUpdates: () => ipcRenderer.invoke('kyrozen:check-for-updates'),
 
-  onUpdateStatus: (callback: (status: { status: string; message: string }) => void) =>
-    ipcRenderer.on('kyrozen:update-status', (_event, status) => callback(status)),
+  onUpdateStatus: (callback: (status: { status: string; message: string }) => void) => {
+    const handler = (_event: unknown, status: { status: string; message: string }) => callback(status);
+    ipcRenderer.on('kyrozen:update-status', handler);
+    return () => ipcRenderer.removeListener('kyrozen:update-status', handler);
+  },
 
   onGitHubStatus: (callback: (status: { connected: boolean; scope?: string }) => void) => {
     const handler = (_event: unknown, status: { connected: boolean; scope?: string }) => callback(status);
@@ -110,6 +137,9 @@ contextBridge.exposeInMainWorld('kyrozen', {
   pickOnboardingWorkspace: () => ipcRenderer.invoke('kyrozen:pick-onboarding-workspace'),
   importLocalProject: () => ipcRenderer.invoke('kyrozen:import-local-project'),
 
-  onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) =>
-    ipcRenderer.on('kyrozen:onboarding-progress', (_event, progress) => callback(progress)),
+  onOnboardingProgress: (callback: (progress: { step: string; message: string }) => void) => {
+    const handler = (_event: unknown, progress: { step: string; message: string }) => callback(progress);
+    ipcRenderer.on('kyrozen:onboarding-progress', handler);
+    return () => ipcRenderer.removeListener('kyrozen:onboarding-progress', handler);
+  },
 });

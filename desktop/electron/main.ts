@@ -1081,8 +1081,14 @@ ipcMain.handle('kyrozen:get-workspace-root', async (_event, projectId: string) =
   return { workspaceRoot: await getWorkspaceRoot(projectId) };
 });
 
-function isPathInside(parent: string, target: string): boolean {
-  const relative = path.relative(parent, target);
+async function isPathInside(parent: string, target: string): Promise<boolean> {
+  // Resolve symlinks to prevent directory traversal via symlinks pointing
+  // outside the workspace. Fall back to the original path if it does not exist.
+  const [realParent, realTarget] = await Promise.all([
+    fs.realpath(parent).catch(() => parent),
+    fs.realpath(target).catch(() => target),
+  ]);
+  const relative = path.relative(realParent, realTarget);
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
@@ -1187,7 +1193,7 @@ ipcMain.handle('kyrozen:read-file', async (_event, projectId: string, relativePa
     const root = workspaceMap[projectId];
     if (!root) return { content: '', error: 'No workspace mapped' };
     const target = path.resolve(root, relativePath);
-    if (!isPathInside(root, target)) {
+    if (!(await isPathInside(root, target))) {
       return { content: '', error: 'Path outside workspace' };
     }
     const content = await fs.readFile(target, 'utf-8');
@@ -1244,7 +1250,7 @@ ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePa
     }
 
     const target = path.resolve(root, targetRelative);
-    if (!isPathInside(root, target)) {
+    if (!(await isPathInside(root, target))) {
       return { success: false, error: 'Path outside workspace' };
     }
     await fs.mkdir(path.dirname(target), { recursive: true });

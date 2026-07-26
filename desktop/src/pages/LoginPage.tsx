@@ -12,6 +12,7 @@ export function LoginPage({ onLogin }: Props) {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [pairingError, setPairingError] = useState<string | null>(null);
   const [isPairing, setIsPairing] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -35,17 +36,57 @@ export function LoginPage({ onLogin }: Props) {
     return () => clearPollTimer();
   }, []);
 
+  const validateInputs = (): string | null => {
+    try {
+      const u = new URL(serverUrl);
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+        return '服务器地址必须以 http:// 或 https:// 开头';
+      }
+    } catch {
+      return '请输入有效的服务器地址';
+    }
+    if (!email.trim()) return '请输入邮箱';
+    if (!password) return '请输入密码';
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!window.kyrozen) return;
+    const err = validateInputs();
+    if (err) {
+      setFormError(err);
+      return;
+    }
+    setFormError(null);
     const result = await window.kyrozen.login(email, password, serverUrl);
     if (result.success && result.wsToken) {
       onLogin(result.wsToken, serverUrl);
+    } else {
+      setFormError(result.error || '登录失败');
     }
+  };
+
+  const validateServerUrl = (): string | null => {
+    try {
+      const u = new URL(serverUrl);
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+        return '服务器地址必须以 http:// 或 https:// 开头';
+      }
+    } catch {
+      return '请输入有效的服务器地址';
+    }
+    return null;
   };
 
   const startPairing = async () => {
     if (!window.kyrozen) return;
+    const err = validateServerUrl();
+    if (err) {
+      setFormError(err);
+      return;
+    }
+    setFormError(null);
     setIsPairing(true);
     setPairingError(null);
     setPairingCode(null);
@@ -108,6 +149,11 @@ export function LoginPage({ onLogin }: Props) {
         </div>
 
         <div className="space-y-4">
+          {formError && (
+            <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
+              {formError}
+            </div>
+          )}
           {mode === 'password' ? (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
@@ -115,7 +161,10 @@ export function LoginPage({ onLogin }: Props) {
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (formError) setFormError(null);
+                  }}
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
                   required
                 />
@@ -125,7 +174,10 @@ export function LoginPage({ onLogin }: Props) {
                 <input
                   type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (formError) setFormError(null);
+                  }}
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
                   required
                 />

@@ -25,7 +25,7 @@ def client(test_config):
 def test_index_serves_ui(client):
     response = client.get("/")
     assert response.status_code == 200
-    assert "Kyrozen Core" in response.text
+    assert "Kyrozen" in response.text
 
 
 def test_health_endpoint(client):

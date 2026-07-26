@@ -165,7 +165,7 @@ function App() {
     });
 
     window.kyrozen.getServerUrl().then((url) => {
-      setServerUrl(url || 'http://localhost:8000');
+      setServerUrl(url || 'https://kyrozen.chat');
     }).catch(() => {
       // ignore
     });

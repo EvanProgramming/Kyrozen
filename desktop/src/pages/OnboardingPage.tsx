@@ -434,7 +434,7 @@ export function OnboardingPage({ onComplete }: Props) {
   const [state, setState] = useState<OnboardingState>({
     step: 'language',
     language: 'zh',
-    serverUrl: 'http://localhost:8000',
+    serverUrl: 'https://kyrozen.chat',
     email: '',
     password: '',
     loginError: '',

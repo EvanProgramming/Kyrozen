@@ -209,10 +209,9 @@ function App() {
     };
   }, []);
 
-  const handleOnboardingComplete = async (wsToken: string) => {
+  const handleOnboardingComplete = async () => {
     setOnboardingStatus('completed');
-    setToken(wsToken);
-    setStatusMessage('登录成功');
+    setStatusMessage('设置完成');
     await loadProjects();
     await loadQuota();
     await loadFullTrust();
@@ -305,10 +304,10 @@ function App() {
 
   if (onboardingStatus === 'loading') {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-slate-950 text-slate-200">
+      <div className="h-screen w-screen flex items-center justify-center bg-paper text-ink">
         <div className="text-center">
-          <div className="text-lg font-medium">Kyrozen</div>
-          <div className="text-sm text-slate-400 mt-2">正在初始化...</div>
+          <div className="font-hand text-3xl">Kyrozen</div>
+          <div className="text-sm text-ink-faint mt-2">正在初始化...</div>
         </div>
       </div>
     );
@@ -330,16 +329,16 @@ function App() {
   const currentProject = projects.find((p) => p.id === currentProjectId);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-slate-900 text-slate-100">
+    <div className="h-screen w-screen flex flex-col bg-paper text-ink">
       <ConnectionStatus state={connection} message={statusMessage} />
-      <header className="h-12 border-b border-slate-700 bg-slate-800 flex items-center justify-between px-4 flex-shrink-0">
+      <header className="h-12 border-b border-line bg-surface flex items-center justify-between px-4 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <span className="font-semibold text-slate-100">Kyrozen</span>
+          <span className="font-hand text-2xl leading-none text-ink">Kyrozen</span>
           {currentProject && (
             <select
               value={currentProjectId || ''}
               onChange={(e) => handleSelectProject(e.target.value)}
-              className="bg-slate-900 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500"
+              className="bg-surface border border-line-strong text-ink-soft text-xs rounded px-2 py-1 focus:outline-none focus:border-accent"
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -353,11 +352,11 @@ function App() {
           <button
             type="button"
             onClick={() => setShowSettings(true)}
-            className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
+            className="btn-secondary text-xs px-3 py-1.5"
           >
             设置
           </button>
-          <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-medium">
+          <div className="w-7 h-7 rounded bg-accent flex items-center justify-center text-xs font-medium text-white">
             K
           </div>
         </div>

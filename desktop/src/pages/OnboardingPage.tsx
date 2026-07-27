@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export type OnboardingStep = 'language' | 'login' | 'python' | 'project' | 'complete';
+export type OnboardingStep = 'language' | 'python' | 'project' | 'complete';
 
 interface Project {
   id: string;
@@ -12,11 +12,6 @@ interface Project {
 interface OnboardingState {
   step: OnboardingStep;
   language: 'zh' | 'en';
-  serverUrl: string;
-  email: string;
-  password: string;
-  loginError: string;
-  wsToken: string | null;
   pythonStatus: 'idle' | 'checking' | 'ready' | 'installing' | 'error';
   pythonPath: string | null;
   pythonError: string;
@@ -32,19 +27,13 @@ const dict = {
     welcome: '欢迎使用 Kyrozen',
     languageTitle: '选择语言',
     next: '下一步',
-    loginTitle: '登录账号',
-    serverUrl: '服务器地址',
-    email: '邮箱',
-    password: '密码',
-    login: '登录',
-    loggingIn: '登录中...',
     pythonTitle: '准备 Python 运行时',
     pythonReady: 'Python 运行时已就绪',
     pythonNotReady: '尚未安装 Python 运行时',
     pythonCheck: '检查状态',
     pythonDownload: '下载并安装',
     pythonOffline: '离线安装',
-    pythonOfflineTip: '若下载失败，可访问 python-build-standalone  releases 手动下载对应版本并解压。',
+    pythonOfflineTip: '若下载失败，可访问 python-build-standalone releases 手动下载对应版本并解压。',
     projectTitle: '选择项目目录',
     projectSubtitle: '从云端项目列表中选择一个项目，或先使用默认目录。',
     noProjects: '暂无云端项目，将使用默认目录。',
@@ -53,18 +42,11 @@ const dict = {
     pickedWorkspace: '已选择目录',
     completeTitle: '准备就绪',
     enterApp: '进入 Kyrozen',
-    errorRequired: '请填写所有必填项',
   },
   en: {
     welcome: 'Welcome to Kyrozen',
     languageTitle: 'Choose Language',
     next: 'Next',
-    loginTitle: 'Sign In',
-    serverUrl: 'Server URL',
-    email: 'Email',
-    password: 'Password',
-    login: 'Sign In',
-    loggingIn: 'Signing in...',
     pythonTitle: 'Prepare Python Runtime',
     pythonReady: 'Python runtime is ready',
     pythonNotReady: 'Python runtime is not installed',
@@ -80,7 +62,6 @@ const dict = {
     pickedWorkspace: 'Directory selected',
     completeTitle: 'Ready',
     enterApp: 'Enter Kyrozen',
-    errorRequired: 'Please fill in all required fields',
   },
 };
 
@@ -125,98 +106,6 @@ function LanguageStep({
         </button>
       </div>
     </div>
-  );
-}
-
-function LoginStep({
-  state,
-  setState,
-  onNext,
-  t,
-}: {
-  state: OnboardingState;
-  setState: React.Dispatch<React.SetStateAction<OnboardingState>>;
-  onNext: () => void;
-  t: (typeof dict)['zh'];
-}) {
-  const [loading, setLoading] = useState(false);
-  const kyrozen = useKyrozen();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!state.serverUrl || !state.email || !state.password) {
-      setState((prev) => ({ ...prev, loginError: t.errorRequired }));
-      return;
-    }
-    try {
-      const u = new URL(state.serverUrl);
-      if (u.protocol !== 'https:' && u.protocol !== 'http:') {
-        setState((prev) => ({ ...prev, loginError: '服务器地址必须以 http:// 或 https:// 开头' }));
-        return;
-      }
-    } catch {
-      setState((prev) => ({ ...prev, loginError: '请输入有效的服务器地址' }));
-      return;
-    }
-    setLoading(true);
-    setState((prev) => ({ ...prev, loginError: '' }));
-    try {
-      const result = await kyrozen.login(state.email, state.password, state.serverUrl);
-      if (result.success && result.wsToken) {
-        setState((prev) => ({ ...prev, wsToken: result.wsToken! }));
-        onNext();
-      } else {
-        setState((prev) => ({ ...prev, loginError: result.error || 'Login failed' }));
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <h2 className="text-xl font-semibold text-center">{t.loginTitle}</h2>
-      <div>
-        <label className="block text-sm text-slate-300 mb-1">{t.serverUrl}</label>
-        <input
-          type="url"
-          value={state.serverUrl}
-          onChange={(e) => setState((prev) => ({ ...prev, serverUrl: e.target.value }))}
-          className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
-          required
-        />
-      </div>
-      <div>
-        <label className="block text-sm text-slate-300 mb-1">{t.email}</label>
-        <input
-          type="email"
-          value={state.email}
-          onChange={(e) => setState((prev) => ({ ...prev, email: e.target.value }))}
-          className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
-          required
-        />
-      </div>
-      <div>
-        <label className="block text-sm text-slate-300 mb-1">{t.password}</label>
-        <input
-          type="password"
-          value={state.password}
-          onChange={(e) => setState((prev) => ({ ...prev, password: e.target.value }))}
-          className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
-          required
-        />
-      </div>
-      {state.loginError && (
-        <div className="text-sm text-red-400">{state.loginError}</div>
-      )}
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white rounded-lg font-medium transition-colors"
-      >
-        {loading ? t.loggingIn : t.login}
-      </button>
-    </form>
   );
 }
 
@@ -436,18 +325,13 @@ function CompleteStep({ t, onFinish }: { t: (typeof dict)['zh']; onFinish: () =>
 }
 
 interface Props {
-  onComplete: (wsToken: string) => void;
+  onComplete: () => void;
 }
 
 export function OnboardingPage({ onComplete }: Props) {
   const [state, setState] = useState<OnboardingState>({
     step: 'language',
     language: 'zh',
-    serverUrl: 'https://kyrozen.chat',
-    email: '',
-    password: '',
-    loginError: '',
-    wsToken: null,
     pythonStatus: 'idle',
     pythonPath: null,
     pythonError: '',
@@ -466,19 +350,16 @@ export function OnboardingPage({ onComplete }: Props) {
   const selectLanguage = async (language: 'zh' | 'en') => {
     setState((prev) => ({ ...prev, language }));
     await kyrozen.saveOnboardingLanguage(language);
-    goTo('login');
+    goTo('python');
   };
 
   const finish = async () => {
     await kyrozen.completeOnboarding(state.language);
-    if (state.wsToken) {
-      onComplete(state.wsToken);
-    }
+    onComplete();
   };
 
   const steps: { key: OnboardingStep; label: string }[] = [
     { key: 'language', label: state.language === 'zh' ? '语言' : 'Language' },
-    { key: 'login', label: state.language === 'zh' ? '登录' : 'Sign In' },
     { key: 'python', label: 'Python' },
     { key: 'project', label: state.language === 'zh' ? '目录' : 'Directory' },
   ];
@@ -513,9 +394,6 @@ export function OnboardingPage({ onComplete }: Props) {
 
         {state.step === 'language' && (
           <LanguageStep language={state.language} onSelect={selectLanguage} t={t} />
-        )}
-        {state.step === 'login' && (
-          <LoginStep state={state} setState={setState} onNext={() => goTo('python')} t={t} />
         )}
         {state.step === 'python' && (
           <PythonStep state={state} setState={setState} onNext={() => goTo('project')} t={t} />

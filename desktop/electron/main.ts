@@ -696,13 +696,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-async function apiGet(endpoint: string) {
+async function apiGet(endpoint: string, auth = true) {
   const headers: Record<string, string> = {};
-  if (accessToken) {
+  if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
   const response = await fetch(`${serverUrl}${endpoint}`, { headers });
   if (!response.ok) {
+    // Token expired or invalid — clear it so we don't keep using it.
+    if (response.status === 401 || response.status === 403) {
+      accessToken = null;
+    }
     const text = await response.text();
     throw new Error(text || `HTTP ${response.status}`);
   }
@@ -720,6 +724,9 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      accessToken = null;
+    }
     const text = await response.text();
     throw new Error(text || `HTTP ${response.status}`);
   }
@@ -1418,7 +1425,7 @@ ipcMain.handle('kyrozen:get-hardware-tool-status', async () => {
 
 ipcMain.handle('kyrozen:start-github-login', async () => {
   try {
-    const data = await apiGet('/api/auth/github/login');
+    const data = await apiGet('/api/auth/github/login', false);
     if (data.authorize_url) {
       shell.openExternal(data.authorize_url);
       logInfo('Opened GitHub OAuth login URL in browser');

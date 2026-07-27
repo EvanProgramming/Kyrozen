@@ -87,11 +87,11 @@
         ]
       }
     ],
-    "publish": {
-      "provider": "github",
-      "owner": "kyrozen",
-      "repo": "kyrozen",
-      "releaseType": "release"
-    }
+  "publish": {
+    "provider": "github",
+    "owner": "EvanProgramming",
+    "repo": "Kyrozen",
+    "releaseType": "release"
+  }
   }
 }

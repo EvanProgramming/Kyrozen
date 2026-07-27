@@ -31,3 +31,9 @@ kyrozen_tasks.json
 .kyrozen_config.json
 .kyrozen_jwks_cache.json
 .secrets/
+
+# Agent tooling (WorkBuddy local memory, not for the repo)
+.workbuddy/
+
+# Vite TypeScript config temp artifacts
+*.timestamp-*.mjs

@@ -94,7 +94,7 @@ export function SettingsPage({
                 type="text"
                 value={serverUrlInput}
                 onChange={(e) => setServerUrlInput(e.target.value)}
-                placeholder="https://your-server.com"
+                placeholder="https://kyrozen.chat"
                 className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded text-sm text-slate-200 focus:outline-none focus:border-blue-500"
               />
               {serverUrlError && <div className="text-xs text-red-400">{serverUrlError}</div>}

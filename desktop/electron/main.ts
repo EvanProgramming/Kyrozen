@@ -8,6 +8,11 @@ import http from 'http';
 import { watch, FSWatcher } from 'fs';
 import WebSocket from 'ws';
 import {
+  getWebSocketUrlFromHttp,
+  normalizeServerUrl,
+  resolveDefaultServerUrl,
+} from './serverUrl';
+import {
   checkAndUpdateHardwareToolchain,
   ensureArduinoCLI,
   ensurePlatformIO,
@@ -75,8 +80,12 @@ let mainWindow: BrowserWindow | null = null;
 let wsClient: WebSocket | null = null;
 let pythonAgent: ChildProcessWithoutNullStreams | null = null;
 let currentProjectId: string | null = null;
-let serverUrl = 'https://kyrozen.chat';
-let wsUrl = 'wss://kyrozen.chat/ws/desktop';
+// Default server URL. resolveDefaultServerUrl() seeds this from the
+// KYROZEN_DESKTOP_SERVER_URL env var (so a packaged build can target a server
+// by IP) and falls back to localhost. A persisted server URL (from a previous
+// login) overrides this at startup via loadCredentials().
+let serverUrl = resolveDefaultServerUrl();
+let wsUrl = getWebSocketUrlFromHttp(serverUrl);
 let reconnectTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let workspaceMap: WorkspaceMap = {};
@@ -216,7 +225,7 @@ async function loadCredentials(): Promise<{
         wsToken: data.wsToken,
         refreshToken: data.refreshToken || null,
         accessToken: data.accessToken || null,
-        serverUrl: data.serverUrl || 'http://localhost:8000',
+        serverUrl: data.serverUrl || resolveDefaultServerUrl(),
       };
     }
   } catch (err: any) {
@@ -254,28 +263,11 @@ function showNotification(title: string, body: string) {
   }
 }
 
-function isLocalhostUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
-  } catch {
-    return false;
-  }
-}
-
-function normalizeServerUrl(url: string): string {
-  const clean = url.replace(/\/$/, '');
-  if (isLocalhostUrl(clean)) return clean;
-  // Enforce TLS/WSS for non-local servers.
-  return clean.replace(/^http:\/\//, 'https://');
-}
-
-function getWebSocketUrlFromHttp(httpUrl: string): string {
-  if (isLocalhostUrl(httpUrl)) {
-    return httpUrl.replace(/^http/, 'ws') + '/ws/desktop';
-  }
-  return httpUrl.replace(/^http/, 'wss') + '/ws/desktop';
-}
+// Server URL normalization and WebSocket-URL derivation now live in
+// ./serverUrl.ts (imported at the top of this file) so they can be unit-tested
+// and shared. They intentionally do NOT force TLS for non-localhost hosts,
+// which lets the client reach a server directly by IP over plain HTTP when no
+// domain / TLS certificate is available.
 
 async function pickWorkspaceRoot(projectId: string): Promise<string | null> {
   const defaultPath = path.join(app.getPath('home'), 'KyrozenProjects', projectId);

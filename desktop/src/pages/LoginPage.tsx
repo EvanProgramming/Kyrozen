@@ -1,217 +1,78 @@
 import { useEffect, useRef, useState } from 'react';
 
-interface Props {
-  onLogin: (wsToken: string, serverUrl: string) => void;
-}
-
-export function LoginPage({ onLogin }: Props) {
-  const [mode, setMode] = useState<'password' | 'pairing'>('password');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+export function LoginPage() {
   const [serverUrl, setServerUrl] = useState('https://kyrozen.chat');
-  const [pairingCode, setPairingCode] = useState<string | null>(null);
-  const [pairingError, setPairingError] = useState<string | null>(null);
-  const [isPairing, setIsPairing] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (window.kyrozen) {
       window.kyrozen.getServerUrl().then((url) => {
         if (url) setServerUrl(url);
-      }).catch(() => {
-        // keep default
-      });
+      }).catch(() => { /* keep default */ });
     }
-  }, []);
-
-  const clearPollTimer = () => {
-    if (pollTimer.current) {
-      clearTimeout(pollTimer.current);
-      pollTimer.current = null;
-    }
-  };
-
-  useEffect(() => {
-    return () => clearPollTimer();
-  }, []);
-
-  const validateInputs = (): string | null => {
-    try {
-      const u = new URL(serverUrl);
-      if (u.protocol !== 'https:' && u.protocol !== 'http:') {
-        return '服务器地址必须以 http:// 或 https:// 开头';
-      }
-    } catch {
-      return '请输入有效的服务器地址';
-    }
-    if (!email.trim()) return '请输入邮箱';
-    if (!password) return '请输入密码';
-    return null;
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!window.kyrozen) return;
-    const err = validateInputs();
-    if (err) {
-      setFormError(err);
-      return;
-    }
-    setFormError(null);
-    const result = await window.kyrozen.login(email, password, serverUrl);
-    if (result.success && result.wsToken) {
-      onLogin(result.wsToken, serverUrl);
-    } else {
-      setFormError(result.error || '登录失败');
-    }
-  };
-
-  const validateServerUrl = (): string | null => {
-    try {
-      const u = new URL(serverUrl);
-      if (u.protocol !== 'https:' && u.protocol !== 'http:') {
-        return '服务器地址必须以 http:// 或 https:// 开头';
-      }
-    } catch {
-      return '请输入有效的服务器地址';
-    }
-    return null;
-  };
-
-  const startPairing = async () => {
-    if (!window.kyrozen) return;
-    const err = validateServerUrl();
-    if (err) {
-      setFormError(err);
-      return;
-    }
-    setFormError(null);
-    setIsPairing(true);
-    setPairingError(null);
-    setPairingCode(null);
-    clearPollTimer();
-    const result = await window.kyrozen.startPairing(serverUrl);
-    if (!result.success || !result.code) {
-      setPairingError(result.error || '获取配对码失败');
-      setIsPairing(false);
-      return;
-    }
-    setPairingCode(result.code);
-    schedulePoll(result.code);
-  };
-
-  const schedulePoll = (code: string) => {
-    const pollOnce = async () => {
-      if (!window.kyrozen) return;
-      const result = await window.kyrozen.pollPairing(serverUrl, code);
-      if (!result.success) {
-        setPairingError(result.error || '轮询失败');
-        setIsPairing(false);
-        return;
-      }
-      if (result.ready && result.wsToken) {
-        clearPollTimer();
-        onLogin(result.wsToken, serverUrl);
-        return;
-      }
-      pollTimer.current = setTimeout(() => pollOnce(), 2000);
+    return () => {
+      if (resetTimer.current) clearTimeout(resetTimer.current);
     };
-    pollOnce();
+  }, []);
+
+  const handleGithubLogin = async () => {
+    if (!window.kyrozen) return;
+    setIsLoggingIn(true);
+    setError(null);
+
+    // Reset the "logging in" state after 60s so the user can retry.
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setIsLoggingIn(false), 60_000);
+
+    try {
+      const result = await window.kyrozen.startGithubLogin();
+      if (!result.success) {
+        setError(result.error || 'GitHub 登录启动失败');
+        setIsLoggingIn(false);
+      }
+    } catch (err: any) {
+      setError(err.message || 'GitHub 登录失败');
+      setIsLoggingIn(false);
+    }
   };
 
   return (
     <div className="flex-1 flex items-center justify-center p-6">
-      <div className="w-full max-w-sm bg-slate-800 rounded-2xl p-8 shadow-2xl border border-slate-700">
-        <h1 className="text-2xl font-bold mb-2 text-center">Kyrozen</h1>
-        <p className="text-slate-400 text-center mb-2">登录到 Kyrozen</p>
-        <p className="text-xs text-slate-500 text-center mb-6">服务器：{serverUrl}</p>
+      <div className="w-full max-w-sm bg-slate-800 rounded-2xl p-8 shadow-2xl border border-slate-700 text-center">
+        <h1 className="text-2xl font-bold mb-1">Kyrozen</h1>
+        <p className="text-slate-400 text-sm mb-8">AI 产品创造者 & 管家</p>
 
-        <div className="flex rounded-lg bg-slate-900 p-1 mb-6">
-          <button
-            type="button"
-            onClick={() => setMode('password')}
-            className={`flex-1 py-1.5 text-sm rounded-md transition-colors ${
-              mode === 'password' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            账号密码
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('pairing')}
-            className={`flex-1 py-1.5 text-sm rounded-md transition-colors ${
-              mode === 'pairing' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            配对码
-          </button>
-        </div>
+        {error && (
+          <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2 mb-4">
+            {error}
+          </div>
+        )}
 
-        <div className="space-y-4">
-          {formError && (
-            <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
-              {formError}
-            </div>
-          )}
-          {mode === 'password' ? (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm text-slate-300 mb-1">邮箱</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (formError) setFormError(null);
-                  }}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-slate-300 mb-1">密码</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (formError) setFormError(null);
-                  }}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:border-blue-500"
-                  required
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors"
-              >
-                登录
-              </button>
-            </form>
-          ) : (
-            <div className="space-y-4">
-              {pairingCode ? (
-                <div className="text-center space-y-3">
-                  <div className="text-sm text-slate-300">在已登录的网站端输入以下配对码</div>
-                  <div className="text-3xl font-mono font-bold tracking-widest text-blue-400 bg-slate-900 py-3 rounded-lg border border-slate-600">
-                    {pairingCode}
-                  </div>
-                  <div className="text-xs text-slate-500">配对码 10 分钟内有效，等待网站确认中...</div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={startPairing}
-                  disabled={isPairing}
-                  className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 text-white rounded-lg font-medium transition-colors"
-                >
-                  {isPairing ? '正在获取配对码...' : '生成配对码'}
-                </button>
-              )}
-              {pairingError && <div className="text-sm text-red-400">{pairingError}</div>}
-            </div>
-          )}
+        <button
+          onClick={handleGithubLogin}
+          disabled={isLoggingIn}
+          className="w-full flex items-center justify-center gap-2 py-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-lg font-medium transition-colors mb-4"
+        >
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+          </svg>
+          {isLoggingIn ? '正在跳转 GitHub...' : '使用 GitHub 登录'}
+        </button>
+
+        <p className="text-xs text-slate-500 mb-6">
+          将打开浏览器跳转到 GitHub 进行授权，授权后自动返回应用
+        </p>
+
+        <div className="pt-4 border-t border-slate-700">
+          <input
+            type="text"
+            value={serverUrl}
+            onChange={(e) => setServerUrl(e.target.value)}
+            placeholder="https://kyrozen.chat"
+            className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-blue-500 text-center"
+          />
         </div>
       </div>
     </div>

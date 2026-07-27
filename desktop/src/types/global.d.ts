@@ -81,6 +81,8 @@ export interface KyrozenAPI {
     tools: Record<string, { command: string; path: string | null; bundled: boolean; version: string | null }>;
   }>;
   connectGitHub: () => Promise<{ success: boolean; error?: string }>;
+  startGithubLogin: () => Promise<{ success: boolean; error?: string }>;
+  createGitHubRepo: (name: string, description?: string, isPrivate?: boolean) => Promise<{ success: boolean; url?: string; cloneUrl?: string; error?: string }>;
   getGitHubStatus: () => Promise<{ connected: boolean; scope?: string }>;
   initGitRepo: (remoteUrl?: string) => Promise<{ success: boolean; error?: string }>;
   getGitStatus: () => Promise<{

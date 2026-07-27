@@ -220,16 +220,6 @@ function App() {
     await loadGitHubStatus();
   };
 
-  const handleLogin = async (wsToken: string, _serverUrl: string) => {
-    setStatusMessage('登录成功');
-    setToken(wsToken);
-    await loadProjects();
-    await loadQuota();
-    await loadFullTrust();
-    await loadLanguage();
-    await loadGitHubStatus();
-  };
-
   const handleChangeServerUrl = async (url: string) => {
     if (!window.kyrozen) return;
     const result = await window.kyrozen.setServerUrl(url);
@@ -332,7 +322,7 @@ function App() {
     return (
       <div className="h-screen w-screen flex flex-col">
         <ConnectionStatus state={connection} message={statusMessage} />
-        <LoginPage onLogin={handleLogin} />
+        <LoginPage />
       </div>
     );
   }

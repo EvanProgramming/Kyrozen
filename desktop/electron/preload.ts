@@ -116,7 +116,10 @@ contextBridge.exposeInMainWorld('kyrozen', {
   checkHardwareUpdates: () => ipcRenderer.invoke('kyrozen:check-hardware-updates'),
   getHardwareToolStatus: () => ipcRenderer.invoke('kyrozen:get-hardware-tool-status'),
   connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),
+  startGithubLogin: () => ipcRenderer.invoke('kyrozen:start-github-login'),
   getGitHubStatus: () => ipcRenderer.invoke('kyrozen:get-github-status'),
+  createGitHubRepo: (name: string, description?: string, isPrivate?: boolean) =>
+    ipcRenderer.invoke('kyrozen:create-github-repo', name, description, isPrivate),
   initGitRepo: (remoteUrl?: string) => ipcRenderer.invoke('kyrozen:init-git-repo', remoteUrl),
   getGitStatus: () => ipcRenderer.invoke('kyrozen:get-git-status'),
   commitAndPush: (message: string) => ipcRenderer.invoke('kyrozen:commit-and-push', message),

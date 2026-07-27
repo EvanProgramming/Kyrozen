@@ -116,10 +116,10 @@ app.on('second-instance', (_event, argv) => {
     logInfo(`Received protocol URL from second instance: ${url}`);
     if (mainWindow.webContents.isLoading()) {
       mainWindow.webContents.once('did-finish-load', () => {
-        handleProtocolUrl(url);
+        void handleProtocolUrl(url);
       });
     } else {
-      handleProtocolUrl(url);
+      void handleProtocolUrl(url);
     }
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
@@ -475,7 +475,7 @@ function getProtocolUrl() {
   return args.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`)) || null;
 }
 
-function handleProtocolUrl(url: string) {
+async function handleProtocolUrl(url: string) {
   logInfo(`Handling protocol URL: ${url}`);
   try {
     const parsed = new URL(url);
@@ -485,6 +485,40 @@ function handleProtocolUrl(url: string) {
         mainWindow.webContents.once('did-finish-load', () => {
           mainWindow?.webContents.send('kyrozen:protocol-url', url);
         });
+      }
+    } else if (parsed.hostname === 'auth' && parsed.pathname === '/login') {
+      // GitHub OAuth login callback: kyrozen://auth/login?kyrozen_token=...&github_token=...
+      const kyrozenToken = parsed.searchParams.get('kyrozen_token');
+      const refreshTok = parsed.searchParams.get('refresh_token');
+      const ghToken = parsed.searchParams.get('github_token');
+      const scope = parsed.searchParams.get('scope') || '';
+      if (kyrozenToken && ghToken) {
+        accessToken = kyrozenToken;
+        githubAccessToken = ghToken;
+        githubTokenScope = scope;
+        void storeGitHubToken(ghToken, scope);
+        sendGitHubStatus();
+        setUpdateApiBaseUrl(serverUrl);
+        wsUrl = getWebSocketUrlFromHttp(serverUrl);
+        // Exchange the Kyrozen JWT for a WS token and connect.
+        try {
+          const verify = await apiPost('/api/desktop/verify-token', {
+            access_token: kyrozenToken,
+            device_name: os.hostname(),
+          });
+          if (verify.ws_token) {
+            await saveCredentials(
+              verify.ws_token,
+              refreshTok || undefined,
+              kyrozenToken,
+            );
+            connectWebSocket(verify.ws_token);
+            mainWindow?.webContents.send('kyrozen:session-resumed', verify.ws_token, serverUrl);
+            logInfo('GitHub login completed successfully');
+          }
+        } catch (err: any) {
+          logError(`GitHub login verify-token failed: ${err.message || err}`);
+        }
       }
     } else if (parsed.hostname === 'auth' && parsed.pathname === '/github') {
       const token = parsed.searchParams.get('token');
@@ -601,7 +635,7 @@ app.whenReady().then(async () => {
   logInfo(`Protocol URL: ${protocolUrl || 'none'}`);
   if (protocolUrl && mainWindow) {
     mainWindow.webContents.once('did-finish-load', () => {
-      handleProtocolUrl(protocolUrl);
+      void handleProtocolUrl(protocolUrl);
     });
   } else if (onboardingConfig.completed) {
     // Onboarding already completed: try to resume the previous session from encrypted storage.
@@ -641,10 +675,10 @@ app.whenReady().then(async () => {
 app.on('open-url', (_event, url) => {
   if (mainWindow?.webContents.isLoading()) {
     mainWindow.webContents.once('did-finish-load', () => {
-      handleProtocolUrl(url);
+      void handleProtocolUrl(url);
     });
   } else {
-    handleProtocolUrl(url);
+    void handleProtocolUrl(url);
   }
 });
 
@@ -1382,6 +1416,20 @@ ipcMain.handle('kyrozen:get-hardware-tool-status', async () => {
   };
 });
 
+ipcMain.handle('kyrozen:start-github-login', async () => {
+  try {
+    const data = await apiGet('/api/auth/github/login');
+    if (data.authorize_url) {
+      shell.openExternal(data.authorize_url);
+      logInfo('Opened GitHub OAuth login URL in browser');
+      return { success: true };
+    }
+    return { success: false, error: 'No authorize URL returned' };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
 ipcMain.handle('kyrozen:connect-github', async () => {
   if (!accessToken) {
     return { success: false, error: 'Not logged in' };
@@ -1436,6 +1484,42 @@ ipcMain.handle('kyrozen:commit-and-push', async (_event, message: string) => {
     return { success: false, error: '未绑定 GitHub 账号' };
   }
   return commitAndPush(root, githubAccessToken, message);
+});
+
+ipcMain.handle('kyrozen:create-github-repo', async (_event, name: string, description?: string, isPrivate?: boolean) => {
+  if (!githubAccessToken) {
+    return { success: false, error: '未绑定 GitHub 账号' };
+  }
+  try {
+    const resp = await fetch('https://api.github.com/user/repos', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${githubAccessToken}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name,
+        description: description || '',
+        private: isPrivate !== undefined ? isPrivate : false,
+        auto_init: true,
+      }),
+    });
+    const repoData = await resp.json();
+    if (resp.ok) {
+      const cloneUrl = (repoData as any).clone_url || (repoData as any).ssh_url;
+      // Initialize local git repo with the newly created remote
+      const root = getCurrentWorkspaceRoot();
+      if (root && cloneUrl) {
+        await initGitRepo(root, cloneUrl);
+      }
+      logInfo(`Created GitHub repo ${name}: ${cloneUrl}`);
+      return { success: true, url: (repoData as any).html_url, cloneUrl };
+    }
+    return { success: false, error: (repoData as any).message || `HTTP ${resp.status}` };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
 });
 
 ipcMain.handle('kyrozen:set-auto-commit', async (_event, enabled: boolean) => {

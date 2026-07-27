@@ -1152,6 +1152,179 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         }
 
     # ------------------------------------------------------------------
+    # GitHub Login (no prior Kyrozen account required)
+    # ------------------------------------------------------------------
+    _github_login_states: dict[str, dict[str, Any]] = {}
+
+    def _cleanup_github_login_states() -> None:
+        now = datetime.now(timezone.utc).timestamp()
+        expired = [k for k, v in _github_login_states.items() if v.get("expires_at", 0) < now]
+        for k in expired:
+            _github_login_states.pop(k, None)
+
+    @app.get("/api/auth/github/login")
+    async def api_github_login(request: Request):
+        """Start GitHub OAuth login. No prior Kyrozen account is required.
+
+        Returns a GitHub authorize URL.  After the user authorizes, GitHub
+        redirects to /api/auth/github/login-callback, which creates (or finds)
+        a Kyrozen account and redirects the desktop app via kyrozen://.
+        """
+        config = get_config()
+        if not config.github_oauth_client_id or not config.github_oauth_client_secret:
+            raise HTTPException(status_code=503, detail="GitHub OAuth is not configured on the server")
+
+        _cleanup_github_login_states()
+        state = uuid.uuid4().hex
+        callback_uri = (
+            config.github_oauth_redirect_uri
+            or str(request.base_url).rstrip("/") + "/api/auth/github/login-callback"
+        )
+        _github_login_states[state] = {
+            "redirect_uri": callback_uri,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp(),
+        }
+
+        params = {
+            "client_id": config.github_oauth_client_id,
+            "redirect_uri": callback_uri,
+            "state": state,
+            "scope": "repo read:user user:email",
+        }
+        authorize_url = "https://github.com/login/oauth/authorize?" + "&".join(
+            f"{k}={v}" for k, v in params.items()
+        )
+        return {"authorize_url": authorize_url}
+
+    @app.get("/api/auth/github/login-callback")
+    async def api_github_login_callback(code: str, state: str):
+        """GitHub OAuth callback – create (or find) a Kyrozen user, then
+        redirect the desktop client with both a Kyrozen JWT and a GitHub token.
+        """
+        _cleanup_github_login_states()
+        state_data = _github_login_states.pop(state, None)
+        if not state_data:
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
+        config = get_config()
+        if not config.github_oauth_client_id or not config.github_oauth_client_secret:
+            raise HTTPException(status_code=503, detail="GitHub OAuth is not configured")
+
+        try:
+            import requests
+        except ImportError as exc:
+            raise HTTPException(status_code=500, detail=f"requests is not installed: {exc}") from exc
+
+        # 1. Exchange code for GitHub access token
+        token_response = requests.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": config.github_oauth_client_id,
+                "client_secret": config.github_oauth_client_secret,
+                "code": code,
+                "redirect_uri": state_data["redirect_uri"],
+            },
+            timeout=30,
+        )
+        if token_response.status_code != 200:
+            raise HTTPException(status_code=502, detail="GitHub token exchange failed")
+        token_data = token_response.json()
+        github_token = token_data.get("access_token")
+        if not github_token:
+            raise HTTPException(status_code=502, detail=f"GitHub returned no token: {token_data}")
+        scope = token_data.get("scope", "")
+
+        # 2. Get GitHub user info
+        user_resp = requests.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {github_token}", "Accept": "application/vnd.github+json"},
+            timeout=15,
+        )
+        user_resp.raise_for_status()
+        github_user = user_resp.json()
+        github_username = github_user.get("login", "")
+        github_name = github_user.get("name") or github_username
+
+        emails_resp = requests.get(
+            "https://api.github.com/user/emails",
+            headers={"Authorization": f"Bearer {github_token}", "Accept": "application/vnd.github+json"},
+            timeout=15,
+        )
+        emails_resp.raise_for_status()
+        emails = emails_resp.json()
+        primary = next((e for e in emails if e.get("primary")), None)
+        email = (
+            primary["email"]
+            if primary
+            else (emails[0]["email"] if emails else f"{github_username}@github.com")
+        )
+
+        # 3. Create or find Kyrozen user
+        admin_client = create_client(config.supabase_url, config.supabase_service_role_key)
+        random_password = uuid.uuid4().hex
+
+        try:
+            new_user = admin_client.auth.admin.create_user({
+                "email": email,
+                "password": random_password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "name": github_name,
+                    "github_access_token": github_token,
+                    "github_token_scopes": scope,
+                },
+            })
+            user_id = new_user.user.id
+        except Exception:
+            # User likely already exists – query by email and update
+            r = requests.get(
+                f"{config.supabase_url}/auth/v1/admin/users",
+                headers={
+                    "Authorization": f"Bearer {config.supabase_service_role_key}",
+                    "apikey": config.supabase_service_role_key,
+                },
+                timeout=15,
+            )
+            r.raise_for_status()
+            users_list = r.json().get("users", [])
+            match = next((u for u in users_list if u.get("email") == email), None)
+            if not match:
+                raise HTTPException(status_code=500, detail="Failed to create or find user")
+            user_id = match["id"]
+            admin_client.auth.admin.update_user_by_id(
+                user_id,
+                {
+                    "password": random_password,
+                    "user_metadata": {
+                        "name": github_name,
+                        "github_access_token": github_token,
+                        "github_token_scopes": scope,
+                    },
+                },
+            )
+
+        # 4. Sign in to obtain a Kyrozen JWT
+        auth_client = create_client(config.supabase_url, config.supabase_anon_key)
+        session = auth_client.auth.sign_in_with_password({
+            "email": email,
+            "password": random_password,
+        })
+        kyrozen_token = session.session.access_token
+        refresh_token = session.session.refresh_token
+
+        # 5. Redirect desktop via kyrozen:// custom URL scheme
+        redirect_url = (
+            f"kyrozen://auth/login?"
+            f"kyrozen_token={kyrozen_token}&"
+            f"refresh_token={refresh_token}&"
+            f"github_token={github_token}&"
+            f"scope={scope}&"
+            f"user_id={user_id}"
+        )
+        return RedirectResponse(url=redirect_url)
+
+    # ------------------------------------------------------------------
     # Desktop update signatures
     # ------------------------------------------------------------------
     _UPDATE_SIGNATURES_PATH = Path(__file__).resolve().parents[2] / "releases" / "signatures.json"

@@ -1,28 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
 export function LoginPage() {
-  const [serverUrl, setServerUrl] = useState('https://kyrozen.chat');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (window.kyrozen) {
-      window.kyrozen.getServerUrl().then((url) => {
-        if (url) setServerUrl(url);
-      }).catch(() => { /* keep default */ });
-    }
-    return () => {
-      if (resetTimer.current) clearTimeout(resetTimer.current);
-    };
-  }, []);
 
   const handleGithubLogin = async () => {
     if (!window.kyrozen) return;
     setIsLoggingIn(true);
     setError(null);
 
-    // Reset the "logging in" state after 60s so the user can retry.
     if (resetTimer.current) clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(() => setIsLoggingIn(false), 60_000);
 
@@ -61,19 +48,9 @@ export function LoginPage() {
           {isLoggingIn ? '正在跳转 GitHub...' : '使用 GitHub 登录'}
         </button>
 
-        <p className="text-xs text-slate-500 mb-6">
-          将打开浏览器跳转到 GitHub 进行授权，授权后自动返回应用
+        <p className="text-xs text-slate-500">
+          将打开浏览器跳转到 GitHub 授权，完成后自动返回
         </p>
-
-        <div className="pt-4 border-t border-slate-700">
-          <input
-            type="text"
-            value={serverUrl}
-            onChange={(e) => setServerUrl(e.target.value)}
-            placeholder="https://kyrozen.chat"
-            className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-blue-500 text-center"
-          />
-        </div>
       </div>
     </div>
   );

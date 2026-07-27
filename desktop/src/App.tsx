@@ -56,7 +56,6 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string }>({ connected: false, scope: '' });
-  const [serverUrl, setServerUrl] = useState('https://kyrozen.chat');
 
   const loadProjects = async () => {
     if (!window.kyrozen) return;
@@ -164,12 +163,6 @@ function App() {
       setShowSettings(true);
     });
 
-    window.kyrozen.getServerUrl().then((url) => {
-      setServerUrl(url || 'https://kyrozen.chat');
-    }).catch(() => {
-      // ignore
-    });
-
     const unsubOpenPreviewUrl = window.kyrozen.onOpenPreviewUrl((url: string) => {
       setPreviewUrl(url);
     });
@@ -217,15 +210,6 @@ function App() {
     await loadFullTrust();
     await loadLanguage();
     await loadGitHubStatus();
-  };
-
-  const handleChangeServerUrl = async (url: string) => {
-    if (!window.kyrozen) return;
-    const result = await window.kyrozen.setServerUrl(url);
-    if (!result.success) {
-      throw new Error(result.error || '保存服务器地址失败');
-    }
-    setServerUrl(result.serverUrl || url);
   };
 
   const handleToggleFullTrust = async () => {
@@ -362,50 +346,50 @@ function App() {
         </div>
       </header>
       <div className="flex-1 flex overflow-hidden">
-        <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800 flex flex-col">
-          <div className="p-4 border-b border-slate-700 flex items-center justify-between">
-            <h2 className="font-semibold text-sm">我的项目</h2>
+        <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-line bg-paper-sink flex flex-col">
+          <div className="p-4 border-b border-line flex items-center justify-between">
+            <h2 className="font-hand text-lg leading-none text-ink">我的项目</h2>
             <button
               type="button"
               onClick={handleImportLocalProject}
               title="导入已有本地目录"
-              className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
+              className="btn-ghost text-xs px-2 py-1"
             >
               导入
             </button>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {projects.length === 0 && (
-              <div className="text-xs text-slate-400 p-2">暂无项目</div>
+              <div className="text-xs text-ink-faint p-2">暂无项目</div>
             )}
             {projects.map((project) => (
               <button
                 key={project.id}
                 onClick={() => handleSelectProject(project.id)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                className={`w-full text-left px-3 py-2 rounded-sm text-sm transition-colors border-l-2 ${
                   project.id === currentProjectId
-                    ? 'bg-blue-600 text-white'
-                    : 'hover:bg-slate-700 text-slate-200'
+                    ? 'bg-accent-soft border-accent text-ink'
+                    : 'border-transparent text-ink-soft hover:bg-paper-edge'
                 }`}
               >
                 <div className="font-medium truncate">{project.name}</div>
-                <div className="text-xs opacity-80 truncate">
+                <div className="text-xs text-ink-faint truncate">
                   {project.current_stage}
                 </div>
               </button>
             ))}
           </div>
 
-          <div className="p-3 border-t border-slate-700 space-y-3 text-xs">
+          <div className="p-3 border-t border-line space-y-3 text-xs">
             {quota && (
-              <div className="text-slate-300" title={quota.reason}>
+              <div className="text-ink-soft" title={quota.reason}>
                 <div className="font-medium mb-1">云端 Token 额度</div>
-                <div className="text-slate-400">{formatQuota(quota)}</div>
+                <div className="text-ink-faint">{formatQuota(quota)}</div>
               </div>
             )}
 
             <label className="flex items-center justify-between cursor-pointer group">
-              <span className={`${fullTrust ? 'text-orange-400' : 'text-slate-300'}`}>
+              <span className={`${fullTrust ? 'text-warning font-medium' : 'text-ink-soft'}`}>
                 完全信任模式
               </span>
               <input
@@ -415,23 +399,23 @@ function App() {
                 className="sr-only peer"
               />
               <span className={`w-8 h-4 rounded-full relative transition-colors ${
-                fullTrust ? 'bg-orange-500' : 'bg-slate-600'
+                fullTrust ? 'bg-warning' : 'bg-paper-edge'
               }`}>
-                <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${
+                <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-surface border border-line-strong rounded-full transition-transform ${
                   fullTrust ? 'translate-x-4' : ''
                 }`} />
               </span>
             </label>
             {fullTrust && (
-              <div className="text-orange-400">
+              <div className="text-warning">
                 高危操作将自动执行，不再确认。
               </div>
             )}
 
             <SearchPanel onOpenFile={handleOpenFileFromSearch} />
 
-            <div className="border-t border-slate-700 pt-2">
-              <div className="px-2 font-medium text-slate-300 mb-1">本地文件</div>
+            <div className="border-t border-line pt-2">
+              <div className="px-2 font-medium text-ink-soft mb-1">本地文件</div>
               <FileTree projectId={currentProjectId} onSelectFile={setEditingFile} />
             </div>
 
@@ -440,12 +424,12 @@ function App() {
         </aside>
         <main className="flex-1 flex flex-col overflow-hidden relative">
           {updateStatus && updateStatus.status !== 'up-to-date' && (
-            <div className="px-4 py-2 bg-blue-900/40 border-b border-blue-800 text-sm flex items-center justify-between">
-              <div className="text-blue-100 text-xs">{updateStatus.message}</div>
+            <div className="px-4 py-2 bg-accent-soft border-b border-line text-sm flex items-center justify-between">
+              <div className="text-accent text-xs">{updateStatus.message}</div>
               <button
                 type="button"
                 onClick={() => setUpdateStatus(null)}
-                className="text-blue-200 hover:text-white text-xs"
+                className="text-accent hover:text-accent-deep text-xs"
                 aria-label="关闭更新提示"
               >
                 ×
@@ -453,9 +437,9 @@ function App() {
             </div>
           )}
           {currentProject && (
-            <div className="px-4 py-2 bg-slate-800 border-b border-slate-700 text-sm">
-              当前项目：<span className="font-medium">{currentProject.name}</span>
-              <span className="ml-2 text-slate-400 text-xs">{currentProject.current_stage}</span>
+            <div className="px-4 py-2 bg-surface border-b border-line text-sm text-ink-soft">
+              当前项目：<span className="font-medium text-ink">{currentProject.name}</span>
+              <span className="ml-2 text-ink-faint text-xs">{currentProject.current_stage}</span>
             </div>
           )}
           <div className="flex-1 flex overflow-hidden">
@@ -470,7 +454,7 @@ function App() {
             />
           )}
         </main>
-        <div className="w-72 flex-shrink-0 h-full border-l border-slate-700 bg-slate-900">
+        <div className="w-72 flex-shrink-0 h-full border-l border-line bg-surface">
           <GitPanel />
         </div>
       </div>
@@ -484,8 +468,6 @@ function App() {
           language={language}
           onChangeLanguage={handleChangeLanguage}
           onLogout={handleLogout}
-          serverUrl={serverUrl}
-          onChangeServerUrl={handleChangeServerUrl}
         />
       )}
     </div>

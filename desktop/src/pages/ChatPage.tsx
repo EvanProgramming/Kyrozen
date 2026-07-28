@@ -1131,7 +1131,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           const parsed = questionByMessage[index];
           const expanded = expandedOperations.has(index);
           return (
-            <div key={index} className={`max-w-[84%] rounded-sm px-4 py-3 text-sm ${
+            <div key={index} data-testid={`chat-message-${message.role}`} className={`max-w-[84%] rounded-sm px-4 py-3 text-sm ${
               message.role === 'user' ? 'bg-accent text-white ml-auto' : message.role === 'system' ? 'bg-warning-soft border border-line text-warning' : 'bg-surface border border-line text-ink'
             }`}>
               {parsed.markdown && <Markdown content={parsed.markdown} onOpenPreview={onOpenPreview} />}

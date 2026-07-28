@@ -370,7 +370,7 @@ export function OnboardingPage({ onComplete }: Props) {
   ];
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-paper p-6">
+    <div className="h-screen w-screen flex items-center justify-center bg-paper p-6" data-testid="onboarding-page">
       <div className="w-full max-w-md panel p-8">
         <h1 className="font-hand text-3xl leading-none mb-6 text-center text-ink">{t.welcome}</h1>
 

@@ -29,7 +29,7 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex-1 flex items-center justify-center p-6 bg-paper">
+    <div className="flex-1 flex items-center justify-center p-6 bg-paper" data-testid="login-page">
       <div className="w-full max-w-sm panel p-8 text-center">
         <h1 className="font-hand text-4xl leading-none mb-1 text-ink">Kyrozen</h1>
         <p className="text-ink-faint text-sm mb-8">AI 产品创造者 & 管家</p>

@@ -170,7 +170,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   };
 
   return (
-    <div className="flex flex-col overflow-y-auto border-t border-line p-4">
+    <div className="flex flex-col overflow-y-auto border-t border-line p-4" data-testid="git-panel">
       <h3 className="font-hand text-lg text-ink mb-3">GitHub / Git</h3>
       {!projectId && <div className="text-xs text-ink-faint">选择项目后管理仓库</div>}
 

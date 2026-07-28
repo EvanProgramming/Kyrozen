@@ -47,3 +47,8 @@ docs/*
 !docs/CLOUDFLARE_TUNNEL.md
 !docs/DEPLOYMENT.md
 !docs/SELFHOSTED_DEPLOYMENT.md
+
+# Playwright / E2E artifacts
+desktop/test-results/
+desktop/playwright-report/
+desktop/e2e/release-runs/

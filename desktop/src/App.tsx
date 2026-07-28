@@ -7,6 +7,7 @@ import { ConnectionStatus } from './components/ConnectionStatus';
 import { EditorPanel } from './components/EditorPanel';
 import { FileTree } from './components/FileTree';
 import { GitPanel } from './components/GitPanel';
+import { ProgressPanel } from './components/ProgressPanel';
 import { HardwarePanel } from './components/HardwarePanel';
 import { PreviewPanel } from './components/PreviewPanel';
 import { SearchPanel } from './components/SearchPanel';
@@ -56,11 +57,33 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string }>({ connected: false, scope: '' });
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectDesc, setNewProjectDesc] = useState('');
+  const [newProjectGoal, setNewProjectGoal] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
 
   const loadProjects = async () => {
     if (!window.kyrozen) return;
     const list = await window.kyrozen.getProjects();
     setProjects(Array.isArray(list) ? list : []);
+  };
+
+  const handleCreateProject = async () => {
+    if (!window.kyrozen || !newProjectName.trim()) return;
+    setCreatingProject(true);
+    try {
+      const result = await window.kyrozen.createProject(newProjectName.trim(), newProjectDesc.trim(), newProjectGoal.trim());
+      if (result.success && result.project) {
+        setNewProjectName('');
+        setNewProjectDesc('');
+        setNewProjectGoal('');
+        setShowCreateProject(false);
+        await loadProjects();
+        setCurrentProjectId(result.project.id);
+      }
+    } catch { /* error handled by UI */ }
+    finally { setCreatingProject(false); }
   };
 
   const loadQuota = async () => {
@@ -349,14 +372,24 @@ function App() {
         <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-line bg-paper-sink flex flex-col">
           <div className="p-4 border-b border-line flex items-center justify-between">
             <h2 className="font-hand text-lg leading-none text-ink">我的项目</h2>
-            <button
-              type="button"
-              onClick={handleImportLocalProject}
-              title="导入已有本地目录"
-              className="btn-ghost text-xs px-2 py-1"
-            >
-              导入
-            </button>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => setShowCreateProject(true)}
+                title="创建新项目"
+                className="btn-primary text-xs px-2 py-1"
+              >
+                新建
+              </button>
+              <button
+                type="button"
+                onClick={handleImportLocalProject}
+                title="导入已有本地目录"
+                className="btn-ghost text-xs px-2 py-1"
+              >
+                导入
+              </button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {projects.length === 0 && (
@@ -454,10 +487,69 @@ function App() {
             />
           )}
         </main>
-        <div className="w-72 flex-shrink-0 h-full border-l border-line bg-surface">
+        <div className="w-72 flex-shrink-0 h-full border-l border-line bg-surface overflow-y-auto flex flex-col">
+          {currentProjectId && <ProgressPanel projectId={currentProjectId} />}
           <GitPanel />
         </div>
       </div>
+      {showCreateProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-sm bg-slate-800 rounded-lg shadow-xl border border-slate-700 p-6">
+            <h2 className="text-lg font-semibold text-slate-100 mb-4">新建项目</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">项目名称 *</label>
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder="例如：AI 写作助手"
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+                  autoFocus
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">描述（可选）</label>
+                <input
+                  type="text"
+                  value={newProjectDesc}
+                  onChange={(e) => setNewProjectDesc(e.target.value)}
+                  placeholder="简短描述这个项目"
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">目标（可选）</label>
+                <textarea
+                  value={newProjectGoal}
+                  onChange={(e) => setNewProjectGoal(e.target.value)}
+                  placeholder="你想用这个项目达成什么目标？"
+                  rows={2}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500 resize-none"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => { setShowCreateProject(false); setNewProjectName(''); setNewProjectDesc(''); setNewProjectGoal(''); }}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateProject}
+                disabled={creatingProject || !newProjectName.trim()}
+                className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 text-white rounded-lg font-medium transition-colors"
+              >
+                {creatingProject ? '创建中...' : '创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showSettings && (
         <SettingsPage
           onClose={() => setShowSettings(false)}

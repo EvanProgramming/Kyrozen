@@ -1316,6 +1316,34 @@ ipcMain.handle('kyrozen:get-projects', async () => {
   }
 });
 
+ipcMain.handle('kyrozen:create-project', async (_event, name: string, description?: string, goal?: string) => {
+  if (!accessToken) {
+    return { success: false, error: '未登录' };
+  }
+  try {
+    const project = await apiPost('/api/projects', {
+      name,
+      description: description || '',
+      goal: goal || '',
+      initial_idea: goal || description || '',
+    });
+    logInfo(`Created project: ${project.id} - ${project.name}`);
+    return { success: true, project };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:get-project-state', async (_event, projectId: string) => {
+  if (!accessToken) return null;
+  try {
+    return await apiGet(`/api/projects/${projectId}/state`);
+  } catch (err: any) {
+    logError(`Failed to get project state: ${err.message || err}`);
+    return null;
+  }
+});
+
 ipcMain.handle('kyrozen:get-quota', async () => {
   if (!accessToken) return { allowed: false, reason: 'Not logged in', used: 0, limit: 0, remaining: 0 };
   try {

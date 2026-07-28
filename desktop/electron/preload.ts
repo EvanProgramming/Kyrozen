@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('kyrozen', {
   pickWorkspace: (projectId: string) => ipcRenderer.invoke('kyrozen:pick-workspace', projectId),
   getWorkspaceRoot: (projectId: string) => ipcRenderer.invoke('kyrozen:get-workspace-root', projectId),
   getProjects: () => ipcRenderer.invoke('kyrozen:get-projects'),
+  createProject: (name: string, description?: string, goal?: string) =>
+    ipcRenderer.invoke('kyrozen:create-project', name, description, goal),
+  getProjectState: (projectId: string) => ipcRenderer.invoke('kyrozen:get-project-state', projectId),
 
   getQuota: () => ipcRenderer.invoke('kyrozen:get-quota'),
   getServerUrl: () => ipcRenderer.invoke('kyrozen:get-server-url'),

@@ -216,6 +216,17 @@
     padding-bottom: 3px;
   }
 
+  /* macOS 拖拽区：仅在 Electron 的 `titleBarStyle: 'hiddenInset'` 窗口下生效。
+     给最外层容器加 .app-drag，交互控件（按钮/输入/下拉）加 .app-no-drag。 */
+  .app-drag {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+
   /* 状态文本色 */
   .text-success { color: var(--success); }
   .text-warning { color: var(--warning); }

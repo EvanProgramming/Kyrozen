@@ -3,7 +3,6 @@ import { ChatPage } from './pages/ChatPage';
 import { LoginPage } from './pages/LoginPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { ConnectionStatus } from './components/ConnectionStatus';
 import { EditorPanel } from './components/EditorPanel';
 import { FileTree } from './components/FileTree';
 import { GitPanel } from './components/GitPanel';
@@ -52,8 +51,6 @@ function formatQuota(quota: QuotaInfo) {
 
 function App() {
   const [token, setToken] = useState<string | null>(null);
-  const [connection, setConnection] = useState<ConnectionState>('disconnected');
-  const [statusMessage, setStatusMessage] = useState('等待连接');
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
@@ -164,17 +161,11 @@ function App() {
         setOnboardingStatus('completed');
       });
 
-    const unsubConnection = window.kyrozen.onConnectionChange((state: ConnectionState, message: string) => {
-      setConnection(state);
-      setStatusMessage(message);
-    });
-
     const unsubProtocolUrl = window.kyrozen.onProtocolUrl(async (url: string) => {
       const params = new URL(url).searchParams;
       const openToken = params.get('token');
       const projectId = params.get('project_id');
       if (openToken && window.kyrozen) {
-        setStatusMessage('正在验证唤起令牌...');
         const verified = await window.kyrozen.verifyOpenToken(openToken);
         if (verified) {
           setToken(verified.wsToken);
@@ -188,9 +179,8 @@ function App() {
       }
     });
 
-    const unsubSessionResumed = window.kyrozen.onSessionResumed(async (token: string, url: string) => {
+    const unsubSessionResumed = window.kyrozen.onSessionResumed(async (token: string) => {
       setToken(token);
-      setStatusMessage(`已恢复会话：${url}`);
       await loadProjects();
       await loadQuota();
       await loadFullTrust();
@@ -237,8 +227,6 @@ function App() {
     }, 5000);
 
     window.kyrozen.getInitialSession().then(async (session) => {
-      setConnection(session.connection);
-      setStatusMessage(session.message);
       if (session.wsToken) {
         setToken(session.wsToken);
         await loadProjects();
@@ -255,7 +243,6 @@ function App() {
 
     return () => {
       clearTimeout(updateTimer);
-      unsubConnection();
       unsubProtocolUrl();
       unsubSessionResumed();
       unsubSessionEnded();
@@ -269,7 +256,6 @@ function App() {
 
   const handleOnboardingComplete = async () => {
     setOnboardingStatus('completed');
-    setStatusMessage('设置完成');
     await loadProjects();
     await loadQuota();
     await loadFullTrust();
@@ -321,7 +307,6 @@ function App() {
     try {
       const imported = await window.kyrozen.importLocalProject();
       if (!imported) {
-        setStatusMessage('导入取消或未选择有效目录');
         return;
       }
       const project: Project = {
@@ -332,9 +317,8 @@ function App() {
       };
       setProjects((prev) => [...prev, project]);
       await handleSelectProject(project.id);
-      setStatusMessage(`已导入项目：${imported.name}`);
-    } catch (err: any) {
-      setStatusMessage(`导入失败：${err.message || '未知错误'}`);
+    } catch {
+      // import failure is non-critical; nothing to display in UI
     }
   };
 
@@ -375,8 +359,7 @@ function App() {
 
   if (!token) {
     return (
-      <div className="h-screen w-screen flex flex-col">
-        <ConnectionStatus state={connection} message={statusMessage} />
+      <div className="h-screen w-screen flex flex-col bg-paper">
         <LoginPage />
       </div>
     );
@@ -387,9 +370,8 @@ function App() {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-paper text-ink">
-      <ConnectionStatus state={connection} message={statusMessage} />
-      <header className="h-12 border-b border-line bg-surface flex items-center justify-between px-4 flex-shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="app-drag h-12 border-b border-line bg-surface flex items-center justify-between pl-20 pr-4 flex-shrink-0">
+        <div className="flex items-center gap-3 app-no-drag">
           <span className="font-hand text-2xl leading-none text-ink">Kyrozen</span>
           {currentProject && (
             <select
@@ -405,7 +387,7 @@ function App() {
             </select>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 app-no-drag">
           {currentProjectId && (
             <button
               type="button"

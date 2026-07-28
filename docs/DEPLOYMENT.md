@@ -57,7 +57,7 @@ docker compose up -d --build
   - `SUPABASE_SERVICE_ROLE_KEY`
   - `JWT Secret` (used as `SUPABASE_JWT_SECRET`)
 - Apply the Kyrozen schema to your Supabase database:
-  - Use the SQL Editor to run [`migrations/supabase_schema.sql`](./migrations/supabase_schema.sql).
+  - Use the SQL Editor to run [`migrations/supabase_schema.sql`](../migrations/supabase_schema.sql).
   - Or connect with `psql` and run the same file.
 
 ### 2. Configure Environment

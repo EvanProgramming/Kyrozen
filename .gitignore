@@ -38,10 +38,13 @@ kyrozen_tasks.json
 # Vite TypeScript config temp artifacts
 *.timestamp-*.mjs
 
-# Local-only design & planning documents (kept on disk, never pushed to GitHub).
-# 项目方案 / 设计 / 架构 / 阶段报告 / 测试报告等内部文档统一放这里，仅本地保留。
-docs/
-# 但保留 docs/ 下的部署说明文档（运维类，非设计文档，公开仓库需要）
+# Local-only design and planning documents stay under docs/ and are not
+# published unless explicitly allow-listed below.
+docs/*
+# Public documentation and operational guides.
+!docs/README.md
+!docs/KYROZEN_MISSING_FEATURES_THREE_PHASE_PLAN.md
 !docs/CLOUDFLARE_TUNNEL.md
+!docs/DEPLOYMENT.md
 !docs/PRODUCTION_SERVER.md
 !docs/SELFHOSTED_DEPLOYMENT.md

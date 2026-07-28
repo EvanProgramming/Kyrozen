@@ -36,6 +36,10 @@ from kyrozen.core.stagegate import (
 from kyrozen.core.task import Task
 from kyrozen.core import featuregen as featuregen_mod
 from kyrozen.core import deliverable_templates as deliverable_mod
+from kyrozen.core import attachments as attachments_mod
+from kyrozen.core import status_state as status_mod
+from kyrozen.core import operation_log as operation_mod
+from kyrozen.core import confirmation as confirmation_mod
 from kyrozen.desktop import CloudProxyModelProvider
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory
@@ -49,6 +53,7 @@ class PendingConfirmation:
         self.event = threading.Event()
         self.result: bool = False
         self.trust_for_session: bool = False
+        self.store_id: str | None = None
 
 
 class PlanDetectingModelProvider:
@@ -158,6 +163,8 @@ class DesktopAgentRuntime:
                 self._handle_stage_action(params, req_id)
             elif method == "software_feature":
                 self._handle_software_feature(params, req_id)
+            elif method == "interaction":
+                self._handle_interaction(params, req_id)
             else:
                 self._send_response(req_id, error=f"Unknown method: {method}")
         except Exception as exc:
@@ -217,6 +224,10 @@ class DesktopAgentRuntime:
         # server-reported lifecycle stage, scan deliverables, and push the gate
         # to the desktop UI so the panel always reflects real progress.
         self._sync_and_push_stage(root_path, stage, project_id)
+
+        # Feature 3.4 (#5): re-show any confirmations that were pending when the
+        # app last shut down. They are NOT auto-executed.
+        self._restore_confirmations(root_path)
 
         self.router.log_path = state_dir / "routing_log.jsonl"
         agent, effective_registry, decision = self.router.route(
@@ -481,6 +492,96 @@ class DesktopAgentRuntime:
             self.logger.error("software_feature failed: %s", exc, exc_info=True)
             self._send_response(req_id, error=str(exc))
 
+    def _handle_interaction(self, params: dict[str, object], req_id: object) -> None:
+        """Handle a 3.4 interaction request (attachments / status / logs / confirmations).
+
+        Triggered from the desktop UI (kyzen:interaction). All engines persist to
+        <workspace>/.kyrozen/ so the UI panels and restart-restore work.
+        """
+        action = str(params.get("action", ""))
+        workspace_root = str(params.get("workspace_root", "."))
+        root_path = Path(workspace_root).resolve()
+        try:
+            if action == "attach":
+                path = str(params.get("path") or "")
+                try:
+                    manager = attachments_mod.AttachmentsManager(root_path)
+                    attachment = manager.add(path)
+                    payload = {"action": "attach", "attachment": attachment.to_dict()}
+                except attachments_mod.AttachmentError as exc:
+                    payload = {"action": "attach", "error": exc.args[0] if exc.args else str(exc), "reason": exc.reason}
+            elif action == "delete_attachment":
+                manager = attachments_mod.AttachmentsManager(root_path)
+                ok = manager.delete(str(params.get("attachment_id") or ""))
+                payload = {"action": "delete_attachment", "deleted": ok}
+            elif action == "attach_list":
+                manager = attachments_mod.AttachmentsManager(root_path)
+                payload = {"action": "attach_list", "attachments": [a.to_dict() for a in manager.list()]}
+            elif action == "status_set":
+                mgr = status_mod.StatusManager(root_path)
+                try:
+                    payload = {"action": "status_set", "status": mgr.set(str(params.get("state")), detail=params.get("detail"))}
+                except ValueError as exc:
+                    payload = {"action": "status_set", "error": str(exc)}
+            elif action == "status_get":
+                payload = {"action": "status_get", "status": status_mod.StatusManager(root_path).current()}
+            elif action == "op_start":
+                log = operation_mod.OperationLog(root_path)
+                payload = {"action": "op_start", "record_id": log.start(str(params.get("action")), input_summary=str(params.get("input_summary") or ""))}
+            elif action == "op_end":
+                log = operation_mod.OperationLog(root_path)
+                log.end(str(params.get("record_id")), output_summary=str(params.get("output_summary") or ""),
+                        status=str(params.get("status") or "success"), error_reason=str(params.get("error_reason") or ""))
+                payload = {"action": "op_end", "ok": True}
+            elif action == "op_list":
+                log = operation_mod.OperationLog(root_path)
+                limit = params.get("limit")
+                payload = {"action": "op_list", "records": log.list(limit=int(limit) if limit is not None else None)}
+            elif action == "diagnostic":
+                kind = str(params.get("kind") or "")
+                raw = params.get("payload")
+                try:
+                    payload_obj = json.loads(raw) if isinstance(raw, str) else raw
+                except Exception:
+                    payload_obj = raw
+                try:
+                    operation_mod.DiagnosticsLog(root_path).append(kind, payload_obj)
+                    payload = {"action": "diagnostic", "ok": True}
+                except ValueError as exc:
+                    payload = {"action": "diagnostic", "error": str(exc)}
+            elif action == "confirm_create":
+                store = confirmation_mod.ConfirmationStore(root_path)
+                conf = store.create(
+                    operation_type=str(params.get("operation_type") or ""),
+                    action_label=str(params.get("action_label") or params.get("operation_type") or ""),
+                    params=(json.loads(params["params"]) if isinstance(params.get("params"), str) else (params.get("params") or {})),
+                    reason=str(params.get("reason") or ""),
+                )
+                payload = {"action": "confirm_create", "confirmation": conf.to_dict()}
+            elif action == "confirm_resolve":
+                store = confirmation_mod.ConfirmationStore(root_path)
+                try:
+                    conf = store.resolve(str(params.get("confirmation_id")), str(params.get("choice")))
+                except ValueError as exc:
+                    conf = None
+                    payload = {"action": "confirm_resolve", "error": str(exc)}
+                if conf is not None:
+                    payload = {"action": "confirm_resolve", "confirmation": conf.to_dict()}
+            elif action == "confirm_pending":
+                store = confirmation_mod.ConfirmationStore(root_path)
+                payload = {"action": "confirm_pending", "pending": [c.to_dict() for c in store.pending()]}
+            elif action == "confirm_is_trusted":
+                store = confirmation_mod.ConfirmationStore(root_path)
+                payload = {"action": "confirm_is_trusted", "trusted": store.is_trusted(str(params.get("operation_type") or ""))}
+            else:
+                self._send_response(req_id, error=f"Unknown interaction action: {action}")
+                return
+            self._send_response(req_id, result=payload)
+            self._notify("interaction", payload)
+        except Exception as exc:
+            self.logger.error("interaction failed: %s", exc, exc_info=True)
+            self._send_response(req_id, error=str(exc))
+
     def _cancel_task_timeout_timer(self) -> None:
         """Stop the task timeout timer if it is still running."""
         timer = self._task_timeout_timer
@@ -502,12 +603,48 @@ class DesktopAgentRuntime:
             "result": {"answer": "任务执行超时，已自动终止。"},
         })
 
+    def _workspace_path(self) -> "Path | None":
+        ws = getattr(self.config, "workspace_root", None)
+        if not ws or ws in (".", ""):
+            return None
+        p = Path(ws)
+        if not p.is_absolute():
+            return None
+        return p
+
+    @staticmethod
+    def _status_for_tool(tool_name: str, action: str) -> "status_mod.StatusState":
+        if tool_name in {"read_file", "file_read", "list_dir", "find_files"}:
+            return status_mod.StatusState.READING
+        if tool_name in {"write_file", "file_write", "edit_file"}:
+            return status_mod.StatusState.EDITING
+        if tool_name in {"web_search", "search_github"} or tool_name.startswith("github"):
+            return status_mod.StatusState.SEARCHING
+        if tool_name.startswith("git") or tool_name == "git":
+            return status_mod.StatusState.RUNNING
+        return status_mod.StatusState.RUNNING
+
     def _wrap_tool_execution(self, tools: object) -> None:
-        """Report concise tool activity and detect local preview URLs."""
+        """Report concise tool activity, keep the status bar and operation log,
+        and route raw tool JSON to the diagnostics sink (requirements #2, #3, #6)."""
         original_execute = getattr(tools, "execute")
 
         def wrapped(tool_name: str, action: str, parameters: dict[str, object]) -> object:
             description = self._describe_tool_operation(tool_name, action, parameters)
+            ws = self._workspace_path()
+            op_id: str | None = None
+            if ws is not None:
+                try:
+                    op_id = operation_mod.OperationLog(ws).start(description, input_summary=description)
+                except Exception:
+                    op_id = None
+                try:
+                    st = self._status_for_tool(tool_name, action)
+                    status_mod.StatusManager(ws).set(st)
+                    self._notify("status_updated", {"state": st.value, "detail": description})
+                except Exception:
+                    pass
+
             self._notify("task_operation", {
                 "task_id": self.current_task_id,
                 "description": description,
@@ -516,12 +653,34 @@ class DesktopAgentRuntime:
             try:
                 result = original_execute(tool_name, action, parameters)
             except Exception:
-                self._notify("task_operation", {
-                    "task_id": self.current_task_id,
-                    "description": description,
-                    "status": "failed",
-                })
-                raise
+                # Surface a retry, then retry once for non-destructive tools.
+                retryable = tool_name not in ("terminal",) and not tool_name.startswith("git")
+                if retryable and ws is not None:
+                    try:
+                        status_mod.StatusManager(ws).set(status_mod.StatusState.RETRYING)
+                        self._notify("status_updated", {"state": "retrying", "detail": description})
+                        result = original_execute(tool_name, action, parameters)
+                    except Exception:
+                        self._finalize_op(ws, op_id, description, False, "工具执行异常")
+                        self._notify("task_operation", {
+                            "task_id": self.current_task_id,
+                            "description": description,
+                            "status": "failed",
+                        })
+                        raise
+                else:
+                    self._finalize_op(ws, op_id, description, False, "工具执行异常")
+                    self._notify("task_operation", {
+                        "task_id": self.current_task_id,
+                        "description": description,
+                        "status": "failed",
+                    })
+                    raise
+
+            # Requirement #6: raw tool JSON goes ONLY to the diagnostics sink.
+            if ws is not None:
+                self._record_diagnostic(ws, tool_name, action, parameters, result)
+
             if tool_name == "terminal" and action == "execute":
                 output = ""
                 if hasattr(result, "data") and result.data:
@@ -529,15 +688,69 @@ class DesktopAgentRuntime:
                 url = self._extract_local_url(output)
                 if url:
                     self._notify("open_preview", {"url": url})
+
             succeeded = bool(getattr(result, "success", True))
+            self._finalize_op(ws, op_id, description, succeeded, "" if succeeded else "工具返回失败")
             self._notify("task_operation", {
                 "task_id": self.current_task_id,
                 "description": description,
                 "status": "completed" if succeeded else "failed",
             })
+            if ws is not None:
+                try:
+                    status_mod.StatusManager(ws).clear()
+                    self._notify("status_updated", {"state": None, "detail": None})
+                except Exception:
+                    pass
             return result
 
         setattr(tools, "execute", wrapped)
+
+    def _finalize_op(
+        self,
+        ws: "Path | None",
+        op_id: str | None,
+        description: str,
+        succeeded: bool,
+        error_reason: str,
+    ) -> None:
+        if ws is None or not op_id:
+            return
+        try:
+            operation_mod.OperationLog(ws).end(
+                op_id,
+                output_summary=description,
+                status="success" if succeeded else "failed",
+                error_reason=error_reason,
+            )
+            # Requirement #3: keep the collapsible operation record above the
+            # final answer in sync. Push the refreshed list after each op ends.
+            records = operation_mod.OperationLog(ws).list(limit=None)
+            self._notify(
+                "interaction",
+                {"action": "op_list", "records": [r.to_dict() for r in records]},
+            )
+        except Exception:
+            pass
+
+    def _record_diagnostic(
+        self,
+        ws: "Path",
+        tool_name: str,
+        action: str,
+        parameters: dict[str, object],
+        result: object,
+    ) -> None:
+        try:
+            payload = {
+                "tool": tool_name,
+                "action": action,
+                "parameters": parameters,
+                "result": getattr(result, "data", None),
+            }
+            operation_mod.DiagnosticsLog(ws).append("tool_json", payload)
+        except Exception:
+            pass
 
     @staticmethod
     def _describe_tool_operation(tool_name: str, action: str, parameters: dict[str, object]) -> str:
@@ -584,20 +797,40 @@ class DesktopAgentRuntime:
     ) -> bool:
         """Called by BaseAgent when a tool requires user confirmation.
 
-        Sends a request to Electron and blocks until the user responds.
+        Sends a request to Electron and blocks until the user responds. The
+        pending confirmation is also persisted to the durable store so it can be
+        restored after an app restart (requirement #5).
         """
         confirmation_id = f"conf_{task.id}_{tool}_{action}_{int(time.time() * 1000)}"
         pending = PendingConfirmation()
+        operation_type = f"{tool}.{action}"
         with self._lock:
             self._pending_confirmations[confirmation_id] = pending
+
+        # Persist to the durable store so the card survives a restart.
+        ws = self._workspace_path()
+        if ws is not None:
+            try:
+                conf = confirmation_mod.ConfirmationStore(ws).create(
+                    operation_type=operation_type,
+                    action_label=f"{tool}.{action}",
+                    params=dict(parameters) if isinstance(parameters, dict) else {},
+                    reason=reason or "",
+                )
+                pending.store_id = conf.id
+            except Exception:
+                pending.store_id = None
 
         self._notify("request_confirmation", {
             "task_id": task.id,
             "confirmation_id": confirmation_id,
+            "store_id": pending.store_id,
+            "operation_type": operation_type,
             "tool": tool,
             "action": action,
             "parameters": parameters,
             "reason": reason,
+            "choices": ["allow_once", "trust_project", "reject"],
         })
 
         # Wait for Electron to respond (with a generous timeout).
@@ -605,6 +838,18 @@ class DesktopAgentRuntime:
 
         with self._lock:
             self._pending_confirmations.pop(confirmation_id, None)
+
+        # Persist the resolution into the durable store.
+        if ws is not None and pending.store_id:
+            try:
+                choice = (
+                    "trust_project" if pending.trust_for_session
+                    else "allow_once" if pending.result else "reject"
+                )
+                confirmation_mod.ConfirmationStore(ws).resolve(pending.store_id, choice)
+            except Exception:
+                pass
+
         if pending.trust_for_session:
             return {"confirmed": pending.result, "trust_for_session": True}
         return pending.result
@@ -613,13 +858,54 @@ class DesktopAgentRuntime:
         confirmation_id = str(params.get("confirmation_id", ""))
         confirmed = bool(params.get("confirmed", False))
         trust_for_session = bool(params.get("trust_for_session", False))
+        store_id = params.get("store_id")
         with self._lock:
             pending = self._pending_confirmations.get(confirmation_id)
-            if pending is None:
-                return
-            pending.result = confirmed
-            pending.trust_for_session = trust_for_session
-            pending.event.set()
+            if pending is not None:
+                pending.result = confirmed
+                pending.trust_for_session = trust_for_session
+                pending.event.set()
+        # Persist into the durable store too (covers restored cards resolved
+        # after a restart, where there is no live in-memory pending object).
+        ws = self._workspace_path()
+        if ws is not None:
+            try:
+                store = confirmation_mod.ConfirmationStore(ws)
+                choice = (
+                    "trust_project" if trust_for_session
+                    else "allow_once" if confirmed else "reject"
+                )
+                if store_id and store.status_of(str(store_id)) is not None:
+                    store.resolve(str(store_id), choice)
+                elif store.status_of(confirmation_id) is not None:
+                    store.resolve(confirmation_id, choice)
+            except Exception:
+                pass
+
+    def _restore_confirmations(self, root_path: Path) -> None:
+        """Re-show pending confirmations after an app restart (requirement #5).
+
+        The operations they gate are NOT auto-executed -- the user must decide
+        again. This only re-emits the cards to the desktop UI.
+        """
+        try:
+            store = confirmation_mod.ConfirmationStore(root_path)
+            for conf in store.restore():
+                op_parts = conf.operation_type.split(".", 1)
+                self._notify("request_confirmation", {
+                    "task_id": self.current_task_id,
+                    "confirmation_id": conf.id,
+                    "store_id": conf.id,
+                    "operation_type": conf.operation_type,
+                    "tool": op_parts[0] if op_parts else conf.operation_type,
+                    "action": op_parts[1] if len(op_parts) > 1 else "",
+                    "parameters": conf.params,
+                    "reason": conf.reason,
+                    "choices": ["allow_once", "trust_project", "reject"],
+                    "restored": True,
+                })
+        except Exception as exc:
+            self.logger.error("restore confirmations failed: %s", exc, exc_info=True)
 
     def _handle_cloud_model_response(self, params: dict[str, object]) -> None:
         if self.model is None:

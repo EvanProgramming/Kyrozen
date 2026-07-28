@@ -118,6 +118,47 @@ export interface SoftwareFeatureResult {
   markdown?: string;
 }
 
+// Feature 3.4: attachments, status bar, operation log, confirmations.
+export interface AttachmentInfo {
+  id: string;
+  kind: 'image' | 'video' | 'other';
+  filename: string;
+  path: string;
+  size_bytes: number;
+  mime: string;
+  thumbnail_path: string | null;
+  analysis: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export interface OperationLogEntry {
+  id: string;
+  action: string;
+  started_at: number;
+  ended_at: number | null;
+  duration_ms: number | null;
+  input_summary: string;
+  output_summary: string;
+  status: string;
+  error_reason: string;
+}
+
+export interface InteractionStatus {
+  state: string | null;
+  detail: string | null;
+  since: number | null;
+}
+
+export interface PendingConfirmationInfo {
+  id: string;
+  operation_type: string;
+  action_label: string;
+  params: Record<string, unknown>;
+  reason: string;
+  status: string;
+  restored?: boolean;
+}
+
 export interface KyrozenAPI {
   login: (email: string, password: string, serverUrl: string) => Promise<LoginResult>;
   verifyOpenToken: (token: string) => Promise<VerifyResult | null>;
@@ -186,8 +227,11 @@ export interface KyrozenAPI {
   onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => () => void;
   sendSoftwareFeature: (params: Record<string, unknown>) => void;
   sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) => Promise<{ ok: boolean }>;
-  onConfirmationRequest: (callback: (request: { confirmation_id: string; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string }) => void) => () => void;
-  respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean) => Promise<{ success: boolean; error?: string }>;
+  onConfirmationRequest: (callback: (request: { confirmation_id: string; store_id?: string | null; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string; choices?: string[] }) => void) => () => void;
+  respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean, storeId?: string | null) => Promise<{ success: boolean; error?: string }>;
+  onStatusUpdated: (callback: (status: InteractionStatus) => void) => () => void;
+  onInteraction: (callback: (payload: Record<string, unknown>) => void) => () => void;
+  sendInteraction: (params: Record<string, unknown>) => void;
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;
   onOpenPreviewUrl: (callback: (url: string) => void) => () => void;
 

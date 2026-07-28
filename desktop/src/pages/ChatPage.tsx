@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { StageGateStatus, SoftwareFeatureResult, SoftwareRunResult } from '../types/global';
+import type { StageGateStatus, SoftwareFeatureResult, SoftwareRunResult, AttachmentInfo, OperationLogEntry, InteractionStatus } from '../types/global';
 
 type OperationStatus = 'pending' | 'running' | 'failed' | 'completed';
 
@@ -29,6 +29,7 @@ interface ExecutionPlan {
 
 interface ConfirmationRequest {
   confirmation_id: string;
+  store_id?: string | null;
   task_id: string;
   tool: string;
   action: string;
@@ -677,6 +678,175 @@ function tick(result: SoftwareRunResult | null): string {
   return result.exit_code === 0 ? '✓' : '✗';
 }
 
+// Feature 3.4: attachments, status bar, operation log, confirmations.
+const STATUS_LABEL: Record<string, string> = {
+  reading: '读取中',
+  editing: '编辑中',
+  running: '运行中',
+  searching: '搜索中',
+  waiting: '等待中',
+  retrying: '重试中',
+};
+
+function InteractionPanel({ projectId }: { projectId: string | null }) {
+  const [status, setStatus] = useState<InteractionStatus | null>(null);
+  const [attachments, setAttachments] = useState<AttachmentInfo[]>([]);
+  const [records, setRecords] = useState<OperationLogEntry[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [attOpen, setAttOpen] = useState(true);
+  const [opOpen, setOpOpen] = useState(true);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const send = async (extra: Record<string, unknown>) => {
+    if (!window.kyrozen || !projectId) return;
+    const { workspaceRoot } = await window.kyrozen.getWorkspaceRoot(projectId);
+    window.kyrozen.sendInteraction({ ...extra, workspace_root: workspaceRoot });
+  };
+
+  useEffect(() => {
+    if (!window.kyrozen) return;
+    const unsubStatus = window.kyrozen.onStatusUpdated((s) => setStatus(s));
+    const unsubInt = window.kyrozen.onInteraction((payload) => {
+      const action = String(payload.action || '');
+      if (action === 'attach') {
+        if (payload.error) {
+          setUploadError(String(payload.error));
+        } else if (payload.attachment) {
+          const att = payload.attachment as AttachmentInfo;
+          setAttachments((prev) => [...prev.filter((a) => a.id !== att.id), att]);
+          setUploadError(null);
+        }
+        setUploading(false);
+      } else if (action === 'delete_attachment') {
+        // Refresh the list from disk so deletes always reflect.
+        void send({ action: 'attach_list' });
+      } else if (action === 'attach_list') {
+        setAttachments((payload.attachments as AttachmentInfo[]) ?? []);
+      } else if (action === 'op_list') {
+        setRecords((payload.records as OperationLogEntry[]) ?? []);
+      }
+    });
+    if (projectId) {
+      void send({ action: 'attach_list' });
+      void send({ action: 'op_list' });
+    }
+    return () => {
+      unsubStatus();
+      unsubInt();
+    };
+  }, [projectId]);
+
+  const onPick = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    setUploading(true);
+    setUploadError(null);
+    for (const file of files) {
+      // Electron exposes the real on-disk path on the File object.
+      const filePath = (file as unknown as { path?: string }).path || file.name;
+      await send({ action: 'attach', path: filePath });
+    }
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const onDelete = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    void send({ action: 'delete_attachment', attachment_id: id });
+  };
+
+  const statusText = status?.state ? (STATUS_LABEL[status.state] ?? status.state) : '就绪';
+
+  return (
+    <div className="bg-surface border-b border-line">
+      <div className="flex items-center justify-between px-4 py-2">
+        <button type="button" onClick={() => { setAttOpen((v) => !v); setOpOpen((v) => !v); }} className="flex items-center gap-2">
+          <span className="font-hand text-lg text-ink">附件 · 状态 · 操作</span>
+        </button>
+        <span className={`inline-flex items-center gap-1.5 rounded-sm border border-line-strong px-2 py-0.5 text-xs ${status?.state ? 'text-accent' : 'text-ink-faint'}`}>
+          <span className={`w-2 h-2 rounded-full ${status?.state ? 'bg-accent' : 'bg-ink-faint'}`} />
+          {statusText}
+        </span>
+      </div>
+
+      {attOpen && (
+        <div className="px-4 pb-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple className="hidden" onChange={onPick} />
+            <button type="button" disabled={uploading || !projectId} onClick={() => fileRef.current?.click()} className="btn-secondary text-xs">
+              {uploading ? '上传中…' : '添加附件'}
+            </button>
+            {uploadError && <span className="text-xs text-danger">{uploadError}</span>}
+          </div>
+
+          {attachments.length === 0 && !uploading && (
+            <div className="text-xs text-ink-faint">暂无附件。支持 PNG/JPEG/WebP/MP4/MOV，将生成缩略图与视觉分析。</div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {attachments.map((att) => (
+              <div key={att.id} className="panel p-2 border-l-2 border-l-accent bg-paper-sink space-y-1">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-ink truncate">{att.filename}</div>
+                    <div className="text-[11px] text-ink-faint">{att.kind} · {(att.size_bytes / 1024).toFixed(1)} KB</div>
+                  </div>
+                  <button type="button" onClick={() => onDelete(att.id)} className="text-xs text-ink-faint hover:text-danger">删除</button>
+                </div>
+                {att.kind === 'image' && att.thumbnail_path && (
+                  <img src={att.thumbnail_path} alt={att.filename} className="w-24 h-auto rounded-sm border border-line" />
+                )}
+                {att.kind === 'video' && (
+                  <div className="space-y-1">
+                    {att.thumbnail_path && <img src={att.thumbnail_path} alt={att.filename} className="w-24 h-auto rounded-sm border border-line" />}
+                    {Array.isArray(att.analysis?.keyframes) && (att.analysis?.keyframes as Array<{ timestamp: number; path: string }>).length > 0 && (
+                      <div className="flex gap-1 overflow-x-auto">
+                        {(att.analysis?.keyframes as Array<{ timestamp: number; path: string }>).map((kf, i) => (
+                          <div key={i} className="flex-shrink-0">
+                            <img src={kf.path} alt={`关键帧 ${kf.timestamp}s`} className="w-12 h-9 object-cover rounded-sm border border-line" />
+                            <div className="text-[10px] text-ink-faint text-center">{kf.timestamp}s</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {Boolean(att.analysis?.description) && <div className="text-xs text-ink-soft">{String(att.analysis?.description)}</div>}
+                {Boolean(att.analysis?.summary) && <div className="text-xs text-ink-soft">{String(att.analysis?.summary)}</div>}
+                {att.error && <div className="text-xs text-danger">{att.error}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {opOpen && (
+        <div className="px-4 pb-3">
+          <button type="button" onClick={() => setOpOpen((v) => !v)} className="text-xs text-ink-faint hover:text-accent">
+            操作记录（{records.length}）{opOpen ? '收起' : '展开'}
+          </button>
+          {opOpen && records.length > 0 && (
+            <div className="mt-2 max-h-48 overflow-auto bg-paper-sink border border-line rounded-sm p-2 space-y-1">
+              {records.map((rec) => (
+                <div key={rec.id} className="flex items-start gap-2 text-xs">
+                  <span className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${rec.status === 'failed' ? 'bg-danger' : 'bg-accent'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-ink-soft truncate">{rec.input_summary || rec.action}</div>
+                    {rec.error_reason && <div className="text-danger">{rec.error_reason}</div>}
+                  </div>
+                  <span className="text-ink-faint flex-shrink-0">
+                    {rec.duration_ms != null ? `${rec.duration_ms}ms` : '…'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -848,9 +1018,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     await sendMessage(input.trim() ? `${input.trim()}${attachmentText}` : attachmentText.trim());
   };
 
-  const respondConfirmation = async (confirmed: boolean, trust = false) => {
+  const respondConfirmation = async (confirmed: boolean, trust = false, storeId?: string | null) => {
     if (!confirmation || !window.kyrozen) return;
-    await window.kyrozen.respondConfirmation(confirmation.confirmation_id, confirmed, trust);
+    await window.kyrozen.respondConfirmation(confirmation.confirmation_id, confirmed, trust, storeId);
     setConfirmation(null);
     setActivity(confirmed ? '已确认，正在继续执行' : '已取消该操作');
   };
@@ -906,7 +1076,10 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       )}
 
       {projectId && (
-        <SoftwareFeaturePanel projectId={projectId} onOpenPreview={onOpenPreview} />
+        <>
+          <SoftwareFeaturePanel projectId={projectId} onOpenPreview={onOpenPreview} />
+          <InteractionPanel projectId={projectId} />
+        </>
       )}
 
       {routedAgent && (
@@ -1017,9 +1190,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
             <div className="text-xs text-ink-faint mt-2">{confirmation.reason || '此操作会修改项目或运行命令。'}</div>
             <pre className="mt-3 max-h-40 overflow-auto bg-paper-sink border border-line rounded-sm p-3 text-xs text-ink-soft font-mono whitespace-pre-wrap">{JSON.stringify(confirmation.parameters, null, 2)}</pre>
             <div className="flex flex-wrap gap-2 mt-3">
-              <button type="button" onClick={() => void respondConfirmation(true)} className="btn-primary text-xs">确认一次</button>
-              <button type="button" onClick={() => void respondConfirmation(true, true)} className="btn-secondary text-xs">本次会话信任此类操作</button>
-              <button type="button" onClick={() => void respondConfirmation(false)} className="btn-ghost text-xs">取消</button>
+              <button type="button" onClick={() => void respondConfirmation(true, false, confirmation?.store_id)} className="btn-primary text-xs">允许一次</button>
+              <button type="button" onClick={() => void respondConfirmation(true, true, confirmation?.store_id)} className="btn-secondary text-xs">本项目信任此操作类型</button>
+              <button type="button" onClick={() => void respondConfirmation(false, false, confirmation?.store_id)} className="btn-ghost text-xs">拒绝</button>
             </div>
           </div>
         )}

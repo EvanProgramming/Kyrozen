@@ -123,6 +123,22 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:stage-updated', handler);
   },
 
+  // 3.4 status bar: user-facing agent states (Reading/Editing/Running/...).
+  onStatusUpdated: (callback: (status: Record<string, unknown>) => void) => {
+    const handler = (_event: unknown, status: Record<string, unknown>) => callback(status);
+    ipcRenderer.on('kyzen:status-updated', handler);
+    return () => ipcRenderer.removeListener('kyzen:status-updated', handler);
+  },
+
+  // 3.4 attachments / operation log / confirmation results.
+  onInteraction: (callback: (payload: Record<string, unknown>) => void) => {
+    const handler = (_event: unknown, payload: Record<string, unknown>) => callback(payload);
+    ipcRenderer.on('kyzen:interaction', handler);
+    return () => ipcRenderer.removeListener('kyzen:interaction', handler);
+  },
+  sendInteraction: (params: Record<string, unknown>) =>
+    ipcRenderer.send('kyzen:interaction', params),
+
   // 3.3 real software generation / run / repair panel.
   onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => {
     const handler = (_event: unknown, result: SoftwareFeatureResult) => callback(result);
@@ -140,8 +156,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.on('kyrozen:confirmation-request', handler);
     return () => ipcRenderer.removeListener('kyrozen:confirmation-request', handler);
   },
-  respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession = false) =>
-    ipcRenderer.invoke('kyrozen:respond-confirmation', confirmationId, confirmed, trustForSession),
+  respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession = false, storeId?: string | null) =>
+    ipcRenderer.invoke('kyrozen:respond-confirmation', confirmationId, confirmed, trustForSession, storeId),
 
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') =>
     ipcRenderer.invoke('kyrozen:open-preview', url, mode),

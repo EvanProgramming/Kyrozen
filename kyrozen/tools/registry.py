@@ -112,6 +112,7 @@ def get_default_registry(
         UpdateSuggestionStatusTool,
     )
     from .software_feature_tools import SoftwareFeatureTool
+    from .interaction_tools import InteractionTool
 
     registry = ToolRegistry()
     registry.register(FileReadTool())
@@ -170,4 +171,5 @@ def get_default_registry(
     registry.register(ExtractLearningFromEventTool(project_manager, learning_repository))
     registry.register(RunProjectAnalysisTool(project_manager, learning_repository))
     registry.register(SoftwareFeatureTool(project_manager))
+    registry.register(InteractionTool(project_manager))
     return registry

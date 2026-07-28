@@ -1969,6 +1969,12 @@ ipcMain.on('kyzen:software-feature', (_event, params: unknown) => {
   sendToPythonAgent({ jsonrpc: '2.0', method: 'software_feature', params });
 });
 
+// Feature 3.4: attachments / status / operation logs / confirmations.
+ipcMain.on('kyzen:interaction', (_event, params: unknown) => {
+  logInfo('Forwarding interaction request to Python Agent');
+  sendToPythonAgent({ jsonrpc: '2.0', method: 'interaction', params });
+});
+
 ipcMain.on('kyrozen:request-initial-token', () => {
   const url = getProtocolUrl();
   logInfo(`Renderer requested initial token, protocolUrl=${url ? redactProtocolUrl(url) : 'none'}`);
@@ -2650,6 +2656,12 @@ function handlePythonAgentLine(line: string) {
     } else if (message.method === 'software_feature') {
       // 3.3 real software generation / run / repair results for the UI panel.
       mainWindow?.webContents.send('kyzen:software-feature', message.params);
+    } else if (message.method === 'status_updated') {
+      // 3.4 status bar: only the six user-facing states reach the renderer.
+      mainWindow?.webContents.send('kyzen:status-updated', message.params);
+    } else if (message.method === 'interaction') {
+      // 3.4 attachments / operation log / confirmation results for the UI panel.
+      mainWindow?.webContents.send('kyzen:interaction', message.params);
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);
@@ -2924,6 +2936,7 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
   pendingConfirmations.set(confirmationId, params);
   mainWindow?.webContents.send('kyrozen:confirmation-request', {
     confirmation_id: confirmationId,
+    store_id: String((params as Record<string, unknown>).store_id || ''),
     task_id: String(params.task_id || ''),
     tool: String(params.tool || ''),
     action: String(params.action || ''),
@@ -2935,20 +2948,26 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
 
 ipcMain.handle(
   'kyrozen:respond-confirmation',
-  async (_event, confirmationId: string, confirmed: boolean, trustForSession = false) => {
+  async (_event, confirmationId: string, confirmed: boolean, trustForSession = false, storeId?: string | null) => {
     const params = pendingConfirmations.get(confirmationId);
-    if (!params) return { success: false, error: '确认请求已失效' };
-    pendingConfirmations.delete(confirmationId);
-    const operationType = `${String(params.tool)}.${String(params.action)}`;
-    if (confirmed && trustForSession) trustedOperationTypes.add(operationType);
-    await logAuditEvent({
-      taskId: String(params.task_id || ''),
-      tool: String(params.tool || ''),
-      action: String(params.action || ''),
-      parameters: (params.parameters as Record<string, unknown>) || {},
-      confirmed,
-      fullTrust: fullTrustMode,
-    });
+    // For confirmations restored after a restart there is no live in-memory
+    // entry, but the durable store still holds the pending card; forward it
+    // when a store_id is supplied (requirement #5: do NOT auto-execute).
+    if (!params && !storeId) return { success: false, error: '确认请求已失效' };
+    if (params) pendingConfirmations.delete(confirmationId);
+    const operationType = params ? `${String(params.tool)}.${String(params.action)}` : '';
+    if (params && confirmed && trustForSession) trustedOperationTypes.add(operationType);
+    if (params) {
+      await logAuditEvent({
+        taskId: String(params.task_id || ''),
+        tool: String(params.tool || ''),
+        action: String(params.action || ''),
+        parameters: (params.parameters as Record<string, unknown>) || {},
+        confirmed,
+        fullTrust: fullTrustMode,
+      });
+    }
+    const resolvedStoreId = storeId ?? (params ? String((params as Record<string, unknown>).store_id ?? '') : '');
     sendToPythonAgent({
       jsonrpc: '2.0',
       method: 'confirmation_response',
@@ -2956,7 +2975,8 @@ ipcMain.handle(
         confirmation_id: confirmationId,
         confirmed,
         trust_for_session: trustForSession,
-        task_id: params.task_id,
+        store_id: resolvedStoreId,
+        task_id: params ? params.task_id : '',
       },
     });
     return { success: true };

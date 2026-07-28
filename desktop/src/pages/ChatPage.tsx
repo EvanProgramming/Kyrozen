@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { StageGateStatus } from '../types/global';
 
 type OperationStatus = 'pending' | 'running' | 'failed' | 'completed';
 
@@ -220,6 +221,169 @@ function AgentModeIcon({ mode, className }: { mode: string; className?: string }
   );
 }
 
+/** Small check / alert glyph for stage-gate conditions (single accent color). */
+function ConditionIcon({ satisfied, className }: { satisfied: boolean; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      {satisfied ? (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M8 12.5l2.5 2.5L16 9" />
+        </>
+      ) : (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7.5v5" />
+          <path d="M12 16.5v.5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+type StageAction = 'refresh' | 'advance_normal' | 'advance_risk' | 'return';
+
+function StageGatePanel({
+  status,
+  busy,
+  onAction,
+}: {
+  status: StageGateStatus;
+  busy: boolean;
+  onAction: (action: StageAction) => void;
+}) {
+  const { gate } = status;
+  const kindLabel: Record<string, string> = {
+    deliverable: '交付物',
+    confirmation: '确认',
+    verification: '验证',
+    task: '任务',
+  };
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="bg-surface border-b border-line">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="w-full px-4 py-2 flex items-center justify-between text-left"
+      >
+        <span className="flex items-center gap-2">
+          <span className="font-hand text-lg text-ink">阶段门禁 · {gate.stage_label}</span>
+          <span className="text-xs text-ink-faint">{gate.index + 1}/{gate.total}</span>
+        </span>
+        <span className="flex items-center gap-3">
+          <span className="text-xs tabular-nums text-ink-soft">{status.progress}%</span>
+          <span className="text-xs text-ink-faint">{open ? '收起' : '展开'}</span>
+        </span>
+      </button>
+      {/* Progress is computed from real signals, always visible. */}
+      <div className="px-4 pb-2">
+        <div className="h-1.5 w-full bg-paper-sink rounded-sm overflow-hidden">
+          <div className="h-full bg-accent transition-all" style={{ width: `${status.progress}%` }} />
+        </div>
+      </div>
+      {open && (
+      <div className="px-4 pb-3 space-y-3">
+        {gate.blocked_entry_reason && (
+          <div className="panel p-3 border-l-2 border-l-danger bg-danger-soft">
+            <div className="text-sm text-danger">{gate.blocked_entry_reason}</div>
+          </div>
+        )}
+        {gate.failed_tasks.length > 0 && (
+          <div className="panel p-3 border-l-2 border-l-danger bg-danger-soft space-y-1.5">
+            <div className="text-sm text-danger font-medium">存在失败任务，需先修复</div>
+            {gate.failed_tasks.map((task) => (
+              <div key={task.task_id} className="text-xs text-ink-soft">
+                <span className="text-danger font-medium">{task.task_id}</span> · {task.error}
+                <div className="text-ink-faint mt-0.5">修复：{task.repair}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {gate.missing.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-danger">尚未满足（{gate.missing.length}）</div>
+            {gate.missing.map((condition) => (
+              <div key={condition.item_id} className="flex items-start gap-2 text-sm text-ink-soft">
+                <ConditionIcon satisfied={false} className="w-4 h-4 flex-shrink-0 text-danger mt-0.5" />
+                <div className="flex-1">
+                  <span>{condition.label}</span>
+                  <span className="ml-1 text-xs text-ink-faint">[{kindLabel[condition.kind] ?? condition.kind}]</span>
+                  {condition.detail && <span className="text-xs text-ink-faint"> · {condition.detail}</span>}
+                  {condition.skippable && <span className="ml-1 text-xs text-ink-faint">（可跳过）</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {gate.satisfied.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-accent">已满足（{gate.satisfied.length}）</div>
+            {gate.satisfied.map((condition) => (
+              <div key={condition.item_id} className="flex items-start gap-2 text-sm text-ink-soft">
+                <ConditionIcon satisfied={condition.satisfied} className="w-4 h-4 flex-shrink-0 text-accent mt-0.5" />
+                <div className="flex-1">
+                  <span>{condition.label}</span>
+                  <span className="ml-1 text-xs text-ink-faint">[{kindLabel[condition.kind] ?? condition.kind}]</span>
+                  {condition.detail && <span className="text-xs text-ink-faint"> · {condition.detail}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2 pt-1">
+          <button
+            type="button"
+            disabled={!gate.can_advance || busy}
+            onClick={() => onAction('advance_normal')}
+            className="btn-primary text-xs"
+            title={gate.can_advance ? '当前阶段条件已满足，进入下一阶段' : '当前阶段仍有未满足条件'}
+          >
+            继续当前阶段
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onAction('advance_risk')}
+            className="btn-secondary text-xs"
+            title="跳过未满足的必需条件并进入下一阶段（会记录风险）"
+          >
+            带风险推进
+          </button>
+          <button
+            type="button"
+            disabled={busy || gate.index === 0}
+            onClick={() => onAction('return')}
+            className="btn-ghost text-xs"
+          >
+            返回上一阶段
+          </button>
+        </div>
+
+        {status.skips.length > 0 && (
+          <div className="text-xs text-ink-faint pt-1">
+            已带风险跳过 {status.skips.length} 项：
+            {status.skips.map((skip) => skip.item_id).join('、')}
+          </div>
+        )}
+      </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -233,6 +397,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [routedAgent, setRoutedAgent] = useState<RoutedAgent | null>(null);
   const [degraded, setDegraded] = useState<DegradedInfo | null>(null);
+  const [stageStatus, setStageStatus] = useState<StageGateStatus | null>(null);
+  const [stageBusy, setStageBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -248,6 +414,14 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     setConfirmation(null);
     setRoutedAgent(null);
     setDegraded(null);
+    setStageStatus(null);
+    // Proactively refresh the stage gate on project open so the panel reflects
+    // the persisted real progress even before any task runs.
+    if (window.kyrozen && projectId) {
+      window.kyrozen.getProjectState(projectId)
+        .then((state) => { window.kyrozen?.sendStageAction('refresh', state?.stage ?? ''); })
+        .catch(() => {});
+    }
   }, [projectId]);
 
   useEffect(() => {
@@ -307,6 +481,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     const unsubDegraded = window.kyrozen.onAgentDegraded((info) => {
       setDegraded(info);
     });
+    const unsubStage = window.kyrozen.onStageUpdated((status) => {
+      setStageStatus(status);
+    });
     return () => {
       unsubChat();
       unsubPlan();
@@ -314,6 +491,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       unsubConfirmation();
       unsubRouted();
       unsubDegraded();
+      unsubStage();
     };
   }, [onProjectChanged]);
 
@@ -349,6 +527,19 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         steps: current.steps.map((step) => ({ ...step, status: 'completed' })),
       } : null);
       onProjectChanged?.();
+    }
+  };
+
+  const handleStageAction = async (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return') => {
+    if (!window.kyrozen || !projectId) return;
+    setStageBusy(true);
+    try {
+      await window.kyrozen.sendStageAction(action, stageStatus?.stage ?? '');
+    } catch {
+      // The Python Agent pushes a fresh stage_updated event on success; ignore
+      // transport errors here so the UI stays responsive.
+    } finally {
+      setStageBusy(false);
     }
   };
 
@@ -415,6 +606,10 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
             </div>
           )}
         </div>
+      )}
+
+      {stageStatus && (
+        <StageGatePanel status={stageStatus} busy={stageBusy} onAction={handleStageAction} />
       )}
 
       {routedAgent && (

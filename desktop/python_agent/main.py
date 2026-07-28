@@ -24,6 +24,15 @@ from kyrozen.config import get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.handoff import HandoffStore, HandoffTool
 from kyrozen.core.router import AgentRouter, LocalCapabilities
+from kyrozen.core.stagegate import (
+    STAGES,
+    StageGateStore,
+    compute_gate,
+    compute_progress,
+    get_status,
+    refresh_gate,
+    stage_advance,
+)
 from kyrozen.core.task import Task
 from kyrozen.desktop import CloudProxyModelProvider
 from kyrozen.logs import get_logger
@@ -143,6 +152,8 @@ class DesktopAgentRuntime:
                 self._handle_confirmation_response(params)
             elif method == "cancel_task":
                 self._handle_cancel_task(params)
+            elif method == "stage_action":
+                self._handle_stage_action(params, req_id)
             else:
                 self._send_response(req_id, error=f"Unknown method: {method}")
         except Exception as exc:
@@ -197,6 +208,11 @@ class DesktopAgentRuntime:
         handoff_tool = HandoffTool(handoff_store)
         registry = get_default_registry()
         registry.register(handoff_tool)
+
+        # Stage gate (feature 3.2): keep the local gate in sync with the
+        # server-reported lifecycle stage, scan deliverables, and push the gate
+        # to the desktop UI so the panel always reflects real progress.
+        self._sync_and_push_stage(root_path, stage, project_id)
 
         self.router.log_path = state_dir / "routing_log.jsonl"
         agent, effective_registry, decision = self.router.route(
@@ -302,6 +318,72 @@ class DesktopAgentRuntime:
         self._task_thread = threading.Thread(target=execute, daemon=True)
         self._task_thread.start()
         self._send_response(req_id, result={"status": "ok"})
+
+    def _sync_and_push_stage(self, root_path: Path, stage: str, project_id: str) -> None:
+        """Sync the local gate store with the server stage and push it to UI."""
+        try:
+            state_dir = root_path / ".kyrozen"
+            store = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
+            if stage and stage in STAGES:
+                store.current_stage = stage
+                store.progress = compute_progress(store)
+                store.save()
+            gate = refresh_gate(store, str(root_path))
+            self._push_stage(store, gate)
+        except Exception as exc:
+            self.logger.error("Stage gate sync failed: %s", exc, exc_info=True)
+
+    def _push_stage(self, store: "StageGateStore", gate: "object" | None = None) -> None:
+        """Emit a `stage_updated` event with the full gate snapshot."""
+        try:
+            from kyrozen.core.stagegate import GateStatus
+            if gate is None or not isinstance(gate, GateStatus):
+                gate = compute_gate(store)
+            self._notify("stage_updated", {
+                "task_id": self.current_task_id,
+                "stage": store.current_stage,
+                "progress": store.progress,
+                "gate": gate.to_dict(),
+                "skips": [s.to_dict() for s in store.skips],
+            })
+        except Exception as exc:
+            self.logger.error("Failed to push stage_updated: %s", exc, exc_info=True)
+
+    def _handle_stage_action(self, params: dict[str, object], req_id: object) -> None:
+        """Handle a stage-gate action requested from the desktop UI.
+
+        actions:
+          * 'refresh'        -- re-scan deliverables and return the gate
+          * 'advance_normal' -- 继续当前阶段 (only if gate satisfied)
+          * 'advance_risk'   -- 带风险推进 (skip missing required items)
+          * 'return'         -- 返回上一阶段
+        """
+        action = str(params.get("action", "refresh"))
+        workspace_root = str(params.get("workspace_root", "."))
+        project_id = str(params.get("project_id", ""))
+        stage = str(params.get("stage", ""))
+        root_path = Path(workspace_root).resolve()
+        try:
+            store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=project_id)
+            if stage and stage in STAGES:
+                store.current_stage = stage
+            # Always re-scan so the gate reflects the latest workspace state
+            # before any transition decision.
+            gate = refresh_gate(store, str(root_path))
+            if action == "advance_normal":
+                result = stage_advance(store, "normal")
+            elif action == "advance_risk":
+                result = stage_advance(store, "risk")
+            elif action == "return":
+                result = stage_advance(store, "return")
+            else:
+                result = {"ok": True, **get_status(store, gate)}
+            self._send_response(req_id, result=result)
+            # Push the updated gate to the UI regardless of the action.
+            self._push_stage(store)
+        except Exception as exc:
+            self.logger.error("stage_action failed: %s", exc, exc_info=True)
+            self._send_response(req_id, error=str(exc))
 
     def _cancel_task_timeout_timer(self) -> None:
         """Stop the task timeout timer if it is still running."""

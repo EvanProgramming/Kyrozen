@@ -2071,6 +2071,21 @@ ipcMain.on('kyrozen:cancel-task', () => {
   }
 });
 
+// Stage gate (feature 3.2): forward the renderer's gate action to the Python
+// Agent. The agent re-scans deliverables, applies the transition and pushes a
+// fresh `stage_updated` event back to the UI.
+ipcMain.handle('kyrozen:stage-action', async (_event, action: string, stage: string) => {
+  const projectId = currentProjectId || '';
+  const workspaceRoot = await chooseWorkspaceRoot(projectId);
+  sendToPythonAgent({
+    jsonrpc: '2.0',
+    id: Date.now(),
+    method: 'stage_action',
+    params: { action, workspace_root: workspaceRoot, project_id: projectId, stage },
+  });
+  return { ok: true };
+});
+
 /** Establish or re-establish the WebSocket connection to the Kyrozen cloud. */
 function connectWebSocket(token: string) {
   disconnectWebSocket();
@@ -2625,6 +2640,8 @@ function handlePythonAgentLine(line: string) {
       logWarn(`Local agent degraded to read-only: ${String(message.params?.reason || '')}`);
       mainWindow?.webContents.send('kyrozen:agent-degraded', message.params);
       showNotification('Kyrozen', '本地 Agent 初始化失败，已降级为只读模式');
+    } else if (message.method === 'stage_updated') {
+      mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);

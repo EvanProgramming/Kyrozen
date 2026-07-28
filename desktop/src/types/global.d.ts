@@ -11,6 +11,48 @@ export interface VerifyResult {
   refreshToken: string;
 }
 
+// Stage gate (feature 3.2): real progress + per-condition gate status.
+export interface StageCondition {
+  item_id: string;
+  label: string;
+  kind: 'deliverable' | 'confirmation' | 'verification' | 'task';
+  satisfied: boolean;
+  skippable: boolean;
+  skipped: boolean;
+  detail: string;
+  required: boolean;
+}
+
+export interface StageGate {
+  stage: string;
+  stage_label: string;
+  index: number;
+  total: number;
+  satisfied: StageCondition[];
+  missing: StageCondition[];
+  can_advance: boolean;
+  blocked_entry_reason: string | null;
+  failed_tasks: Array<{ task_id: string; error: string; repair: string }>;
+  progress: number;
+}
+
+export interface StageSkip {
+  item_id: string;
+  reason: string;
+  impact: string;
+  approver: string;
+  recovery: string;
+  at: number;
+}
+
+export interface StageGateStatus {
+  task_id?: string;
+  stage: string;
+  progress: number;
+  gate: StageGate;
+  skips: StageSkip[];
+}
+
 export interface KyrozenAPI {
   login: (email: string, password: string, serverUrl: string) => Promise<LoginResult>;
   verifyOpenToken: (token: string) => Promise<VerifyResult | null>;
@@ -75,6 +117,8 @@ export interface KyrozenAPI {
   onTaskActivity: (callback: (activity: { task_id: string; description: string; status: string }) => void) => () => void;
   onAgentRouted: (callback: (decision: { task_id: string; mode: string; mode_label: string; agent_name: string; agent_display_name: string; reason: string; available_tools: string[]; restricted_tools: string[]; degraded: boolean }) => void) => () => void;
   onAgentDegraded: (callback: (info: { task_id: string; agent_display_name: string; reason: string; repair_steps: string[] }) => void) => () => void;
+  onStageUpdated: (callback: (status: StageGateStatus) => void) => () => void;
+  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) => Promise<{ ok: boolean }>;
   onConfirmationRequest: (callback: (request: { confirmation_id: string; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string }) => void) => () => void;
   respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean) => Promise<{ success: boolean; error?: string }>;
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;

@@ -115,6 +115,15 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:agent-degraded', handler);
   },
 
+  onStageUpdated: (callback: (status: Record<string, unknown>) => void) => {
+    const handler = (_event: unknown, status: Record<string, unknown>) => callback(status);
+    ipcRenderer.on('kyrozen:stage-updated', handler);
+    return () => ipcRenderer.removeListener('kyrozen:stage-updated', handler);
+  },
+
+  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) =>
+    ipcRenderer.invoke('kyrozen:stage-action', action, stage),
+
   onConfirmationRequest: (callback: (request: Record<string, unknown>) => void) => {
     const handler = (_event: unknown, request: Record<string, unknown>) => callback(request);
     ipcRenderer.on('kyrozen:confirmation-request', handler);

@@ -1,5 +1,9 @@
 # Cloudflare Tunnel 部署指南
 
+> **已退役：** Kyrozen 当前生产环境不再使用 Cloudflare Tunnel，也不再使用
+> `119.91.132.155`。当前服务器连接信息见
+> [`PRODUCTION_SERVER.md`](./PRODUCTION_SERVER.md)。本文仅保留为历史参考。
+
 使用 Cloudflare Tunnel 可以在没有海外服务器、不备案的情况下，让 `kyrozen.chat` 正常访问。
 
 ## 原理

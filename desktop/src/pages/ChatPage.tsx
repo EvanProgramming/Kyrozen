@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -122,6 +122,103 @@ const dotClass: Record<OperationStatus, string> = {
   failed: 'bg-danger',
   completed: 'bg-success',
 };
+
+// 九种路由模式的单色图标（统一使用 --accent，不引入第二套强调色）。
+// 图标仅用 currentColor 描边，颜色由父级 className 控制（正常=深蓝，降级=危险红）。
+const AGENT_MODE_ICONS: Record<string, ReactNode> = {
+  problem_discovery: (
+    <>
+      <circle cx="10.5" cy="10.5" r="6" />
+      <line x1="15" y1="15" x2="20" y2="20" />
+    </>
+  ),
+  market_research: (
+    <>
+      <line x1="4" y1="20" x2="20" y2="20" />
+      <rect x="5" y="11" width="3.5" height="9" />
+      <rect x="10.25" y="6" width="3.5" height="14" />
+      <rect x="15.5" y="14" width="3.5" height="6" />
+    </>
+  ),
+  product_definition: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="3.5" />
+      <circle cx="12" cy="12" r="0.6" fill="currentColor" stroke="none" />
+    </>
+  ),
+  solution_design: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 12 L15.5 8.5" />
+      <path d="M12 12 L8.5 15.5" />
+    </>
+  ),
+  development: (
+    <>
+      <path d="M9 8 L5 12 L9 16" />
+      <path d="M15 8 L19 12 L15 16" />
+      <line x1="13" y1="6" x2="11" y2="18" />
+    </>
+  ),
+  hardware_development: (
+    <>
+      <rect x="7" y="7" width="10" height="10" rx="1" />
+      <path d="M10 7 V4 M14 7 V4 M10 20 V17 M14 20 V17 M7 10 H4 M7 14 H4 M20 10 H17 M20 14 H17" />
+    </>
+  ),
+  testing: (
+    <>
+      <path d="M9 3 H15" />
+      <path d="M10 3 V11 L5.5 18 a1 1 0 0 0 .9 1.5 H17.6 a1 1 0 0 0 .9 -1.5 L14 11 V3" />
+      <line x1="8.5" y1="15" x2="15.5" y2="15" />
+    </>
+  ),
+  iteration: (
+    <>
+      <path d="M5 12 A7 7 0 0 1 18 8" />
+      <path d="M18 4 V8 H14" />
+      <path d="M19 12 A7 7 0 0 1 6 16" />
+      <path d="M6 20 V16 H10" />
+    </>
+  ),
+  learning: (
+    <>
+      <path d="M12 6 C10 4 6 4 4 5 V19 C6 18 10 18 12 20 C14 18 18 18 20 19 V5 C18 4 14 4 12 6 Z" />
+      <line x1="12" y1="6" x2="12" y2="20" />
+    </>
+  ),
+};
+
+// 九种模式的专属提示语（行内辅助说明，遵循设计系统：功能色仅表语义、单强调色）。
+const AGENT_MODE_HINTS: Record<string, string> = {
+  problem_discovery: '厘清真问题，界定范围与目标。',
+  market_research: '收集市场、用户与竞品情报。',
+  product_definition: '明确要做什么、为谁做、价值何在。',
+  solution_design: '评估可行方案并权衡取舍。',
+  development: '编写与运行软件代码。',
+  hardware_development: '固件、电路与硬件集成。',
+  testing: '设计用例、执行测试并验收。',
+  iteration: '在已有成果上持续打磨改进。',
+  learning: '总结经验、沉淀可复用知识。',
+};
+
+function AgentModeIcon({ mode, className }: { mode: string; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      {AGENT_MODE_ICONS[mode] ?? AGENT_MODE_ICONS.problem_discovery}
+    </svg>
+  );
+}
 
 export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -321,21 +418,40 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       )}
 
       {routedAgent && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-accent-soft border-b border-line text-sm text-ink-soft" title={routedAgent.reason}>
-          <span className={`w-2 h-2 rounded-full ${routedAgent.degraded ? 'bg-warning' : 'bg-accent'}`} />
-          <span>
-            由 <span className="font-medium text-ink">{routedAgent.agent_display_name}</span> 处理（模式：{routedAgent.mode_label}）
-          </span>
-          {routedAgent.restricted_tools.length > 0 && (
-            <span className="text-xs text-ink-faint">受限工具 {routedAgent.restricted_tools.length} 项</span>
-          )}
+        <div className={`border-b border-line ${routedAgent.degraded ? 'bg-danger-soft' : 'bg-accent-soft'}`}>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-2 text-sm text-ink-soft">
+            <AgentModeIcon
+              mode={routedAgent.mode}
+              className={`w-4 h-4 flex-shrink-0 ${routedAgent.degraded ? 'text-danger' : 'text-accent'}`}
+            />
+            <span>当前由</span>
+            <span className="font-medium text-ink">{routedAgent.agent_display_name}</span>
+            <span>处理</span>
+            <span className="inline-flex items-center rounded-sm border border-line-strong bg-surface px-2 py-0.5 text-xs font-medium text-accent">
+              {routedAgent.mode_label}
+            </span>
+            {routedAgent.restricted_tools.length > 0 && (
+              <span
+                className="text-xs text-ink-faint"
+                title={`受限工具：${routedAgent.restricted_tools.join('、')}`}
+              >
+                受限 {routedAgent.restricted_tools.length} 项工具
+              </span>
+            )}
+          </div>
+          <div className="px-4 pb-2 text-xs text-ink-faint">
+            {AGENT_MODE_HINTS[routedAgent.mode] ?? ''}
+          </div>
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {degraded && (
           <div className="panel p-4 border-l-2 border-l-danger bg-danger-soft" role="alert" aria-label="只读降级提示">
-            <div className="font-hand text-lg text-danger">本地 Agent 已降级为只读模式</div>
+            <div className="flex items-center gap-2">
+              <AgentModeIcon mode="development" className="w-4 h-4 flex-shrink-0 text-danger" />
+              <div className="font-hand text-lg text-danger">本地 Agent 已降级为只读模式</div>
+            </div>
             <div className="text-sm text-ink mt-1">{degraded.agent_display_name} 初始化失败，当前无法修改文件或执行命令。</div>
             <div className="text-xs text-ink-faint mt-2">原因：{degraded.reason}</div>
             <div className="text-xs text-ink-soft mt-2 font-medium">修复步骤：</div>

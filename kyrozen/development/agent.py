@@ -35,6 +35,7 @@ class SoftwareDevelopmentAgent(BaseAgent):
             "If no tool is needed, reply with a plain text answer.\n\n"
             "Available tools:\n" + tools_text + "\n\n"
             "Rules:\n"
+            "- Always respond in the same language as the user's latest message.\n"
             "- Read the PRD and Product Brief from the context before making any plan.\n"
             "- ALWAYS start by proposing a Technical Plan and saving it with save_technical_plan. "
             "Wait for user confirmation before writing code.\n"

@@ -76,9 +76,23 @@ const logInfo = (msg: string) => writeLog('INFO', msg);
 const logError = (msg: string) => writeLog('ERROR', msg);
 const logWarn = (msg: string) => writeLog('WARN', msg);
 
+function redactProtocolUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    for (const key of ['token', 'kyrozen_token', 'refresh_token', 'github_token', 'access_token']) {
+      if (parsed.searchParams.has(key)) parsed.searchParams.set(key, '<REDACTED>');
+    }
+    return parsed.toString();
+  } catch {
+    return '<invalid protocol URL>';
+  }
+}
+
 let mainWindow: BrowserWindow | null = null;
 let wsClient: WebSocket | null = null;
 let pythonAgent: ChildProcessWithoutNullStreams | null = null;
+let pythonAgentStartPromise: Promise<void> | null = null;
+let pythonAgentStdoutBuffer = '';
 let currentProjectId: string | null = null;
 // Default server URL. resolveDefaultServerUrl() seeds this from the
 // KYROZEN_DESKTOP_SERVER_URL env var (so a packaged build can target a server
@@ -100,6 +114,9 @@ let isQuitting = false;
 let fullTrustMode = false;
 let githubAccessToken: string | null = null;
 let githubTokenScope: string | null = null;
+const taskOperations = new Map<string, Array<{ description: string; status: string; timestamp: string }>>();
+const pendingConfirmations = new Map<string, Record<string, unknown>>();
+const trustedOperationTypes = new Set<string>();
 
 // Ensure only one instance of the desktop client is running. On Windows/Linux,
 // opening a kyrozen:// URL while the app is already running will be forwarded
@@ -113,7 +130,7 @@ if (!gotTheLock) {
 app.on('second-instance', (_event, argv) => {
   const url = argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
   if (url && mainWindow) {
-    logInfo(`Received protocol URL from second instance: ${url}`);
+    logInfo(`Received protocol URL from second instance: ${redactProtocolUrl(url)}`);
     if (mainWindow.webContents.isLoading()) {
       mainWindow.webContents.once('did-finish-load', () => {
         void handleProtocolUrl(url);
@@ -127,6 +144,7 @@ app.on('second-instance', (_event, argv) => {
 });
 let pendingCloudMessages: string[] = [];
 let accessToken: string | null = null;
+let currentWsToken: string | null = null;
 let projectFileWatchers = new Map<string, FSWatcher>();
 let pendingFileChanges = new Map<string, NodeJS.Timeout>();
 let pendingAutoCommit = new Map<string, NodeJS.Timeout>();
@@ -197,15 +215,24 @@ async function saveCredentials(
   refreshToken?: string,
   accessToken?: string,
 ): Promise<void> {
+  currentWsToken = wsToken;
   const payload = JSON.stringify({
     wsToken,
     refreshToken: refreshToken || null,
     accessToken: accessToken || null,
     serverUrl,
   });
-  const encrypted = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(payload) : Buffer.from(payload);
+  // Ad-hoc macOS builds cannot reliably access Chromium's Keychain item: the
+  // OS may block first launch with a password dialog because the app identity
+  // changes between builds. Keep the credential file private and use the
+  // OS-backed store only when explicitly opted in.
+  const useSafeStorage = process.platform !== 'darwin' || process.env.KYROZEN_ALLOW_KEYCHAIN === '1';
+  const encrypted = useSafeStorage && safeStorage.isEncryptionAvailable()
+    ? safeStorage.encryptString(payload)
+    : Buffer.from(payload);
   await fs.mkdir(path.dirname(TOKEN_STORE_PATH), { recursive: true });
   await fs.writeFile(TOKEN_STORE_PATH, encrypted);
+  await fs.chmod(TOKEN_STORE_PATH, 0o600).catch(() => undefined);
 }
 
 async function loadCredentials(): Promise<{
@@ -217,7 +244,10 @@ async function loadCredentials(): Promise<{
   try {
     logInfo(`Loading credentials from ${TOKEN_STORE_PATH}`);
     const raw = await fs.readFile(TOKEN_STORE_PATH);
-    const decrypted = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString();
+    const useSafeStorage = process.platform !== 'darwin' || process.env.KYROZEN_ALLOW_KEYCHAIN === '1';
+    const decrypted = useSafeStorage && safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(raw)
+      : raw.toString();
     const data = JSON.parse(decrypted);
     if (data.wsToken) {
       logInfo('Loaded existing credentials, resuming session');
@@ -235,6 +265,8 @@ async function loadCredentials(): Promise<{
 }
 
 async function clearCredentials(): Promise<void> {
+  currentWsToken = null;
+  accessToken = null;
   try {
     await fs.unlink(TOKEN_STORE_PATH);
   } catch {
@@ -293,7 +325,11 @@ async function getWorkspaceRoot(projectId: string | null): Promise<string | null
     await fs.mkdir(workspaceMap[projectId], { recursive: true });
     return workspaceMap[projectId];
   }
-  return pickWorkspaceRoot(projectId);
+  const defaultPath = path.join(app.getPath('home'), 'KyrozenProjects', projectId);
+  await fs.mkdir(defaultPath, { recursive: true });
+  workspaceMap[projectId] = defaultPath;
+  await saveWorkspaceMap();
+  return defaultPath;
 }
 
 let currentConnectionState: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
@@ -310,6 +346,7 @@ interface ChatMessage {
   role: string;
   content: string;
   raw?: string;
+  operations?: Array<{ description: string; status: string; timestamp: string }>;
 }
 
 function sendChatMessage(message: ChatMessage) {
@@ -318,6 +355,25 @@ function sendChatMessage(message: ChatMessage) {
 
 function sendExecutionPlan(plan: { task_id: string; steps: string[] }) {
   mainWindow?.webContents.send('kyrozen:execution-plan', plan);
+}
+
+function sendTaskActivity(activity: { task_id?: string; description: string; status?: string }) {
+  mainWindow?.webContents.send('kyrozen:task-activity', {
+    task_id: activity.task_id || '',
+    description: activity.description,
+    status: activity.status || 'running',
+  });
+}
+
+function decodeAccessTokenClaims(): Record<string, any> {
+  if (!accessToken) return {};
+  try {
+    const payload = accessToken.split('.')[1];
+    if (!payload) return {};
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+  } catch {
+    return {};
+  }
 }
 
 function sendOnboardingProgress(step: string, message: string, payload?: Record<string, unknown>) {
@@ -476,7 +532,7 @@ function getProtocolUrl() {
 }
 
 async function handleProtocolUrl(url: string) {
-  logInfo(`Handling protocol URL: ${url}`);
+  logInfo(`Handling protocol URL: ${redactProtocolUrl(url)}`);
   try {
     const parsed = new URL(url);
     if (parsed.hostname === 'open') {
@@ -507,10 +563,13 @@ async function handleProtocolUrl(url: string) {
             device_name: os.hostname(),
           });
           if (verify.ws_token) {
+            // Keep the server-verifiable JWT. The generated desktop API token
+            // is process-local and cannot restore a session after an API restart.
+            accessToken = kyrozenToken;
             await saveCredentials(
               verify.ws_token,
               refreshTok || undefined,
-              kyrozenToken,
+              accessToken || undefined,
             );
             connectWebSocket(verify.ws_token);
             mainWindow?.webContents.send('kyrozen:session-resumed', verify.ws_token, serverUrl);
@@ -528,7 +587,7 @@ async function handleProtocolUrl(url: string) {
         githubTokenScope = scope;
         void storeGitHubToken(token, scope);
         sendGitHubStatus();
-        sendChatMessage({ role: 'system', content: 'GitHub 授权已成功，可在 Git 面板中提交代码。' });
+        sendTaskActivity({ description: 'GitHub 授权成功', status: 'completed' });
       }
     }
   } catch (err: any) {
@@ -589,10 +648,8 @@ app.whenReady().then(async () => {
         const errorText = payload.errors.length
           ? payload.errors.map((e) => `- ${e.message}${e.source ? ` (${e.source}:${e.line})` : ''}`).join('\n')
           : '无错误';
-        sendChatMessage({
-          role: 'system',
-          content: `本地测试页面报告：${payload.url}\n加载时间：${payload.metrics?.loadTime?.toFixed(0) || '未知'}ms\nDOM 节点：${payload.metrics?.domNodes || '未知'}\n错误：\n${errorText}`,
-        });
+        logInfo(`Browser test report ${payload.url}: ${errorText}`);
+        sendTaskActivity({ description: '已收到浏览器测试报告', status: payload.errors.length ? 'failed' : 'completed' });
       },
       onNativeMessage: (message) => {
         logInfo(`Native message from extension: ${message.type || 'unknown'}`);
@@ -610,12 +667,10 @@ app.whenReady().then(async () => {
             ? message.interactions.map((i: any) => `[${i.action}] ${i.target || i.tag || ''}${i.value ? ` = ${i.value}` : ''}`).join('\n')
             : '';
           const metrics = (message.metrics || {}) as Record<string, unknown>;
-          sendChatMessage({
-            role: 'system',
-            content: `本地测试页面报告：${message.url}\nDOM 节点：${metrics.domNodes || '未知'}\n执行操作：\n${interactions || '无'}\n错误：\n${errorText}`,
-          });
+          logInfo(`Native browser test report ${message.url}: ${String(metrics.domNodes || 'unknown')} nodes; ${interactions}; ${errorText}`);
+          sendTaskActivity({ description: '已收到浏览器测试报告', status: errors.length ? 'failed' : 'completed' });
         } else {
-          sendChatMessage({ role: 'system', content: `收到浏览器扩展消息：${JSON.stringify(message)}` });
+          logInfo(`Ignored extension message: ${JSON.stringify(message).slice(0, 500)}`);
         }
       },
     });
@@ -632,7 +687,7 @@ app.whenReady().then(async () => {
   }
 
   const protocolUrl = getProtocolUrl();
-  logInfo(`Protocol URL: ${protocolUrl || 'none'}`);
+  logInfo(`Protocol URL: ${protocolUrl ? redactProtocolUrl(protocolUrl) : 'none'}`);
   if (protocolUrl && mainWindow) {
     mainWindow.webContents.once('did-finish-load', () => {
       void handleProtocolUrl(protocolUrl);
@@ -645,11 +700,40 @@ app.whenReady().then(async () => {
       setUpdateApiBaseUrl(serverUrl);
       wsUrl = getWebSocketUrlFromHttp(serverUrl);
       accessToken = credentials.accessToken;
-      connectWebSocket(credentials.wsToken);
+      let resumeWsToken = credentials.wsToken;
+      // WebSocket tokens are process-local on the API server. Exchange the
+      // persisted JWT on every launch so server restarts recover automatically.
+      if (credentials.accessToken && credentials.accessToken.split('.').length === 3) {
+        try {
+          const verify = await apiPost('/api/desktop/verify-token', {
+            access_token: credentials.accessToken,
+            device_name: os.hostname(),
+            client_version: app.getVersion(),
+            platform: process.platform,
+          });
+          if (verify.ws_token) {
+            resumeWsToken = verify.ws_token;
+            await saveCredentials(
+              resumeWsToken,
+              credentials.refreshToken || verify.refresh_token || undefined,
+              credentials.accessToken,
+            );
+          }
+        } catch (err: any) {
+          logWarn(`Could not refresh desktop session; trying stored token: ${err.message || err}`);
+        }
+      }
+      currentWsToken = resumeWsToken;
+      connectWebSocket(resumeWsToken);
       void fetchGitHubToken();
-      mainWindow?.webContents.once('did-finish-load', () => {
-        mainWindow?.webContents.send('kyrozen:session-resumed', credentials.wsToken, credentials.serverUrl);
-      });
+      const notifySessionResumed = () => {
+        mainWindow?.webContents.send('kyrozen:session-resumed', resumeWsToken, credentials.serverUrl);
+      };
+      if (mainWindow?.webContents.isLoading()) {
+        mainWindow.webContents.once('did-finish-load', notifySessionResumed);
+      } else {
+        notifySessionResumed();
+      }
     }
   } else {
     logInfo('Onboarding not completed; waiting for renderer wizard');
@@ -730,6 +814,28 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
     const text = await response.text();
     throw new Error(text || `HTTP ${response.status}`);
   }
+  return response.json();
+}
+
+async function apiPatch(endpoint: string, body: unknown) {
+  const response = await fetch(`${serverUrl}${endpoint}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+  return response.json();
+}
+
+async function apiDelete(endpoint: string) {
+  const response = await fetch(`${serverUrl}${endpoint}`, {
+    method: 'DELETE',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
   return response.json();
 }
 
@@ -872,21 +978,22 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
     }
 
     await fs.writeFile(path.join(contextDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
-    sendChatMessage({
-      role: 'system',
-      content: `已同步 ${artifacts.length} 个云端 Artifact 到本地 .kyrozen/context${conflicts.length > 0 ? `（${conflicts.length} 个冲突）` : ''}`,
-    });
+    sendTaskActivity({ description: `已同步 ${artifacts.length} 个项目资料`, status: 'completed' });
   } catch (err: any) {
-    sendChatMessage({ role: 'system', content: `Artifact 同步失败: ${err.message || err}` });
+    logWarn(`Artifact sync failed: ${err.message || err}`);
   }
 }
 
 const KEY_FILE_RE = /(^|\/)(package\.json|readme[^/]*|\.env[^/]*|tsconfig\.json|vite\.config\.[jt]s|tailwind\.config\.[jt]s)$/i;
 const SOURCE_FILE_RE = /\.(js|jsx|ts|tsx|py|html|css|vue|svelte)$/i;
-const IGNORED_PATH_RE = /[\\/](\.kyrozen|node_modules|\.git|dist|build)[\\/]/;
+const IGNORED_PATH_SEGMENTS = new Set(['.kyrozen', 'node_modules', '.git', 'dist', 'build']);
+
+function isIgnoredRelativePath(relativePath: string): boolean {
+  return relativePath.split(/[\\/]/).some((segment) => IGNORED_PATH_SEGMENTS.has(segment));
+}
 
 function shouldUploadFileSummary(relativePath: string): boolean {
-  if (IGNORED_PATH_RE.test(relativePath)) return false;
+  if (isIgnoredRelativePath(relativePath)) return false;
   const lower = relativePath.toLowerCase();
   if (KEY_FILE_RE.test(lower)) return true;
   if (SOURCE_FILE_RE.test(lower)) return true;
@@ -932,7 +1039,7 @@ async function uploadFileSummary(
       true,
     );
   } catch (err: any) {
-    sendChatMessage({ role: 'system', content: `文件摘要同步失败: ${err.message || err}` });
+    logWarn(`File summary sync failed: ${err.message || err}`);
   }
 }
 
@@ -972,7 +1079,7 @@ function startWatchingProjectFiles(projectId: string, root: string): void {
     );
     projectFileWatchers.set(projectId, watcher);
   } catch (err: any) {
-    sendChatMessage({ role: 'system', content: `无法监听项目文件: ${err.message || err}` });
+    logWarn(`Project file watcher failed: ${err.message || err}`);
   }
 }
 
@@ -1002,9 +1109,9 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
       client_version: app.getVersion(),
       platform: process.platform,
     });
-    accessToken = data.access_token || null;
+    accessToken = data.access_token;
     logInfo(`Signin success, verifying desktop token`);
-    await saveCredentials(verify.ws_token, verify.refresh_token, accessToken || undefined);
+    await saveCredentials(verify.ws_token, data.refresh_token || verify.refresh_token, accessToken || undefined);
     connectWebSocket(verify.ws_token);
     void fetchGitHubToken();
     logInfo(`Login complete, wsToken acquired`);
@@ -1047,7 +1154,8 @@ ipcMain.handle('kyrozen:poll-pairing', async (_event, url: string, code: string)
       serverUrl = normalizeServerUrl(baseUrl);
       setUpdateApiBaseUrl(serverUrl);
       wsUrl = getWebSocketUrlFromHttp(serverUrl);
-      await saveCredentials(data.ws_token);
+      accessToken = data.access_token || null;
+      await saveCredentials(data.ws_token, undefined, accessToken || undefined);
       connectWebSocket(data.ws_token);
       return { success: true, wsToken: data.ws_token };
     }
@@ -1097,7 +1205,7 @@ ipcMain.handle('kyrozen:set-current-project', async (_event, projectId: string) 
   const root = await getWorkspaceRoot(projectId);
   if (root) {
     await ensureWorkspaceStructure(root);
-    sendChatMessage({ role: 'system', content: `项目工作目录：${root}` });
+    sendTaskActivity({ description: '正在准备项目工作区' });
     await syncProjectArtifacts(projectId);
     startWatchingProjectFiles(projectId, root);
   }
@@ -1115,14 +1223,28 @@ ipcMain.handle('kyrozen:get-workspace-root', async (_event, projectId: string) =
 });
 
 async function isPathInside(parent: string, target: string): Promise<boolean> {
-  // Resolve symlinks to prevent directory traversal via symlinks pointing
-  // outside the workspace. Fall back to the original path if it does not exist.
+  async function resolveWithExistingAncestor(input: string): Promise<string> {
+    let cursor = path.resolve(input);
+    const missing: string[] = [];
+    while (true) {
+      try {
+        const real = await fs.realpath(cursor);
+        return path.join(real, ...missing.reverse());
+      } catch {
+        const parentDir = path.dirname(cursor);
+        if (parentDir === cursor) return path.resolve(input);
+        missing.push(path.basename(cursor));
+        cursor = parentDir;
+      }
+    }
+  }
+
   const [realParent, realTarget] = await Promise.all([
-    fs.realpath(parent).catch(() => parent),
-    fs.realpath(target).catch(() => target),
+    resolveWithExistingAncestor(parent),
+    resolveWithExistingAncestor(target),
   ]);
   const relative = path.relative(realParent, realTarget);
-  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  return !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 async function listWorkspaceFiles(projectId: string): Promise<string[]> {
@@ -1134,6 +1256,7 @@ async function listWorkspaceFiles(projectId: string): Promise<string[]> {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (isIgnoredRelativePath(rel)) continue;
       if (entry.isDirectory()) {
         await walk(full, rel);
       } else if (entry.isFile()) {
@@ -1174,7 +1297,7 @@ async function searchAcrossProjects(query: string, options?: { maxResults?: numb
       const files = await listWorkspaceFiles(projectId);
       for (const relativePath of files) {
         if (results.length >= maxResults) break;
-        if (IGNORED_PATH_RE.test(relativePath)) continue;
+        if (isIgnoredRelativePath(relativePath)) continue;
 
         if (relativePath.toLowerCase().includes(normalizedQuery)) {
           results.push({ projectId, relativePath, matchType: 'filename' });
@@ -1242,6 +1365,20 @@ function hasSensitivePlaceholder(content: string): boolean {
   return SENSITIVE_PLACEHOLDER_RE.test(content);
 }
 
+function sanitizeEnvExample(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .map((line) => {
+      if (!line.trim() || line.trimStart().startsWith('#')) return line;
+      const match = line.match(/^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)(.*)$/);
+      if (!match) return line;
+      const value = match[2].trim();
+      if (!value || /^(?:<[^>]+>|your[-_]|replace|changeme|example)/i.test(value)) return line;
+      return `${match[1]}<REPLACE_ME>`;
+    })
+    .join('\n');
+}
+
 async function ensureGitignoreEnv(root: string): Promise<void> {
   const gitignorePath = path.join(root, '.gitignore');
   let existing = '';
@@ -1261,8 +1398,8 @@ async function showEnvWarning(): Promise<void> {
     buttons: ['我知道了'],
     defaultId: 0,
     title: '敏感信息提醒',
-    message: '检测到配置文件包含敏感占位符',
-    detail: '已为你生成 .env.example，请将 .env.example 复制为 .env 并填入真实值。.env 已自动加入 .gitignore，不会被提交。',
+    message: '检测到环境配置文件',
+    detail: '.env 已加入 .gitignore；.env.example 中的实际值会替换为 <REPLACE_ME>，避免密钥被提交。',
   });
 }
 
@@ -1272,13 +1409,14 @@ ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePa
     if (!root) return { success: false, error: 'No workspace mapped' };
 
     let targetRelative = relativePath;
+    let contentToWrite = content;
     let shouldWarn = false;
 
-    // Prevent direct writes to .env; redirect to .env.example when sensitive placeholders are present.
+    // Keep real values in ignored .env files and scrub examples before writing.
     if (path.basename(relativePath) === '.env' && hasSensitivePlaceholder(content)) {
-      targetRelative = '.env.example';
       shouldWarn = true;
     } else if (path.basename(relativePath).endsWith('.env.example') && hasSensitivePlaceholder(content)) {
+      contentToWrite = sanitizeEnvExample(content);
       shouldWarn = true;
     }
 
@@ -1287,7 +1425,7 @@ ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePa
       return { success: false, error: 'Path outside workspace' };
     }
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, content, 'utf-8');
+    await fs.writeFile(target, contentToWrite, 'utf-8');
 
     if (shouldWarn) {
       await ensureGitignoreEnv(root);
@@ -1311,7 +1449,7 @@ ipcMain.handle('kyrozen:get-projects', async () => {
     return list;
   } catch (err: any) {
     logError(`Failed to load projects: ${err.message || err}`);
-    sendChatMessage({ role: 'system', content: `获取项目列表失败: ${err.message || err}` });
+    logWarn(`Failed to load project list: ${err.message || err}`);
     return [];
   }
 });
@@ -1326,7 +1464,7 @@ ipcMain.handle('kyrozen:create-project', async (_event, name: string, descriptio
       description: description || '',
       goal: goal || '',
       initial_idea: goal || description || '',
-    });
+    }, true);
     logInfo(`Created project: ${project.id} - ${project.name}`);
     return { success: true, project };
   } catch (err: any) {
@@ -1341,6 +1479,120 @@ ipcMain.handle('kyrozen:get-project-state', async (_event, projectId: string) =>
   } catch (err: any) {
     logError(`Failed to get project state: ${err.message || err}`);
     return null;
+  }
+});
+
+const PROJECT_WORKSPACE_SECTIONS = {
+  discovery: 'problem-discovery',
+  research: 'market-research',
+  planning: 'planning',
+  development: 'development',
+  hardware: 'hardware',
+  testing: 'testing',
+  learning: 'learning',
+  improvement: 'improvement',
+} as const;
+
+async function loadProjectWorkspace(projectId: string): Promise<Record<string, unknown>> {
+  const entries = await Promise.all(
+    Object.entries(PROJECT_WORKSPACE_SECTIONS).map(async ([key, endpoint]) => [
+      key,
+      await apiGet(`/api/projects/${projectId}/${endpoint}/state`),
+    ]),
+  );
+  const sections = Object.fromEntries(entries) as Record<string, Record<string, unknown>>;
+  const [learningRecords, failureKnowledge, successKnowledge] = await Promise.all([
+    apiGet(`/api/projects/${projectId}/learning/records`),
+    apiGet(`/api/projects/${projectId}/learning/failures`),
+    apiGet(`/api/projects/${projectId}/learning/successes`),
+  ]);
+  sections.learning = {
+    ...(sections.learning || {}),
+    learning_records: learningRecords,
+    failure_knowledge: failureKnowledge,
+    success_knowledge: successKnowledge,
+  };
+  const [project, state, decisions, artifactSummaries, tasks] = await Promise.all([
+    apiGet(`/api/projects/${projectId}`),
+    apiGet(`/api/projects/${projectId}/state`),
+    apiGet(`/api/projects/${projectId}/decisions`),
+    apiGet(`/api/projects/${projectId}/artifacts`),
+    apiGet(`/api/projects/${projectId}/tasks`),
+  ]);
+  const artifacts = await Promise.all(
+    (artifactSummaries as Array<Record<string, unknown>>).map((artifact) =>
+      apiGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
+    ),
+  );
+  return { project, state, decisions, artifacts, tasks, sections };
+}
+
+ipcMain.handle('kyrozen:get-project-workspace', async (_event, projectId: string) => {
+  if (!accessToken) return { success: false, error: '未登录' };
+  try {
+    return { success: true, data: await loadProjectWorkspace(projectId) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:create-decision', async (_event, projectId: string, decision: string, reason: string) => {
+  try {
+    const data = await apiPost(`/api/projects/${projectId}/decisions`, { decision, reason }, true);
+    return { success: true, data };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:create-feedback', async (_event, projectId: string, description: string, type: string, priority: string) => {
+  try {
+    const data = await apiPost('/api/feedback', { project_id: projectId, description, type, priority }, true);
+    return { success: true, data };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:update-suggestion-status', async (_event, projectId: string, suggestionId: string, status: string) => {
+  try {
+    const data = await apiPatch(`/api/projects/${projectId}/learning/suggestions/${suggestionId}/status`, { status });
+    return { success: true, data };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:delete-learning-item', async (_event, projectId: string, kind: string, itemId: string) => {
+  const endpoints: Record<string, string> = {
+    record: 'records',
+    failure: 'failures',
+    success: 'successes',
+    suggestion: 'suggestions',
+  };
+  const endpoint = endpoints[kind];
+  if (!endpoint) return { success: false, error: '未知学习记录类型' };
+  try {
+    await apiDelete(`/api/projects/${projectId}/learning/${endpoint}/${itemId}`);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:export-project', async (_event, projectId: string) => {
+  try {
+    const data = await loadProjectWorkspace(projectId);
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: '导出 Kyrozen 项目',
+      defaultPath: `kyrozen-${projectId}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return { success: false, cancelled: true };
+    await fs.writeFile(result.filePath, JSON.stringify({ exported_at: new Date().toISOString(), ...data }, null, 2), 'utf-8');
+    return { success: true, filePath: result.filePath };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
   }
 });
 
@@ -1414,8 +1666,9 @@ ipcMain.handle('kyrozen:check-for-updates', async () => {
 
 ipcMain.handle('kyrozen:ensure-hardware-toolchain', async () => {
   try {
-    const arduino = await ensureArduinoCLI((msg) => sendChatMessage({ role: 'system', content: msg }));
-    const pio = await ensurePlatformIO((msg) => sendChatMessage({ role: 'system', content: msg }));
+    const arduino = await ensureArduinoCLI((msg) => sendTaskActivity({ description: msg }));
+    const pio = await ensurePlatformIO((msg) => sendTaskActivity({ description: msg }));
+    mainWindow?.webContents.send('kyrozen:hardware-tool-status', getToolStatus());
     return {
       success: true,
       arduino: { path: arduino.path, version: arduino.version },
@@ -1428,7 +1681,7 @@ ipcMain.handle('kyrozen:ensure-hardware-toolchain', async () => {
 
 ipcMain.handle('kyrozen:install-common-cores', async () => {
   try {
-    await installCommonCores((msg) => sendChatMessage({ role: 'system', content: msg }));
+    await installCommonCores((msg) => sendTaskActivity({ description: msg }));
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
@@ -1437,7 +1690,8 @@ ipcMain.handle('kyrozen:install-common-cores', async () => {
 
 ipcMain.handle('kyrozen:check-hardware-updates', async () => {
   try {
-    const results = await checkAndUpdateHardwareToolchain((msg) => sendChatMessage({ role: 'system', content: msg }));
+    const results = await checkAndUpdateHardwareToolchain((msg) => sendTaskActivity({ description: msg }));
+    mainWindow?.webContents.send('kyrozen:hardware-tool-status', getToolStatus());
     return { success: true, results };
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
@@ -1515,9 +1769,6 @@ ipcMain.handle('kyrozen:commit-and-push', async (_event, message: string) => {
   if (!root) {
     return { success: false, error: '未选择项目工作区' };
   }
-  if (!githubAccessToken) {
-    return { success: false, error: '未绑定 GitHub 账号' };
-  }
   return commitAndPush(root, githubAccessToken, message);
 });
 
@@ -1537,7 +1788,7 @@ ipcMain.handle('kyrozen:create-github-repo', async (_event, name: string, descri
         name,
         description: description || '',
         private: isPrivate !== undefined ? isPrivate : false,
-        auto_init: true,
+        auto_init: false,
       }),
     });
     const repoData = await resp.json();
@@ -1579,7 +1830,7 @@ ipcMain.handle('kyrozen:ensure-project-venv', async () => {
     return { success: false, pythonPath: null, error: '未选择项目工作区' };
   }
   const basePython = pythonRuntimePath || (await getCachedPythonRuntime()) || 'python3';
-  const result = await ensureProjectVenv(root, basePython, (msg) => sendChatMessage({ role: 'system', content: msg }));
+  const result = await ensureProjectVenv(root, basePython, (msg) => sendTaskActivity({ description: msg }));
   if (result.error) {
     return { success: false, pythonPath: result.pythonPath, error: result.error };
   }
@@ -1591,7 +1842,7 @@ ipcMain.handle('kyrozen:install-project-deps', async (_event, packages?: string[
   if (!root) {
     return { success: false, installed: [], error: '未选择项目工作区' };
   }
-  return installProjectDependencies(root, packages, (msg) => sendChatMessage({ role: 'system', content: msg }));
+  return installProjectDependencies(root, packages, (msg) => sendTaskActivity({ description: msg }));
 });
 
 ipcMain.handle('kyrozen:get-project-venv', async () => {
@@ -1628,6 +1879,9 @@ ipcMain.handle('kyrozen:logout', async () => {
   await clearCredentials();
   disconnectWebSocket();
   stopPythonAgent();
+  serverUrl = normalizeServerUrl(resolveDefaultServerUrl());
+  setUpdateApiBaseUrl(serverUrl);
+  wsUrl = getWebSocketUrlFromHttp(serverUrl);
   currentProjectId = null;
   accessToken = null;
   githubAccessToken = null;
@@ -1712,22 +1966,99 @@ ipcMain.handle('kyrozen:import-local-project', async () => {
 
 ipcMain.on('kyrozen:request-initial-token', () => {
   const url = getProtocolUrl();
-  logInfo(`Renderer requested initial token, protocolUrl=${url || 'none'}`);
+  logInfo(`Renderer requested initial token, protocolUrl=${url ? redactProtocolUrl(url) : 'none'}`);
   if (url) {
     mainWindow?.webContents.send('kyrozen:protocol-url', url);
+  } else if (currentWsToken) {
+    mainWindow?.webContents.send('kyrozen:session-resumed', currentWsToken, serverUrl);
   }
   // Send the current connection state in case the renderer missed earlier events
   // (for example, when resuming a saved session before the window finished loading).
   mainWindow?.webContents.send('kyrozen:connection-change', currentConnectionState, currentConnectionMessage);
 });
 
-ipcMain.on('kyrozen:send-chat', (_event, message: string) => {
-  sendToCloud({
-    type: 'task_result',
-    task_id: `task_${Date.now()}`,
-    status: 'pending',
-    result: { message },
-  });
+ipcMain.handle('kyrozen:get-initial-session', () => ({
+  wsToken: currentWsToken,
+  serverUrl,
+  currentProjectId,
+  connection: currentConnectionState,
+  message: currentConnectionMessage,
+}));
+
+ipcMain.handle('kyrozen:get-user-profile', async () => {
+  const claims = decodeAccessTokenClaims();
+  const metadata = claims.user_metadata || {};
+  let username = String(metadata.github_username || metadata.user_name || metadata.preferred_username || '');
+  let avatarUrl = String(metadata.avatar_url || metadata.picture || '');
+  let githubName = '';
+  if (githubAccessToken) {
+    try {
+      const response = await fetch('https://api.github.com/user', {
+        headers: { Authorization: `Bearer ${githubAccessToken}`, Accept: 'application/vnd.github+json' },
+      });
+      if (response.ok) {
+        const githubUser = await response.json() as Record<string, unknown>;
+        username = String(githubUser.login || username);
+        avatarUrl = String(githubUser.avatar_url || avatarUrl);
+        githubName = String(githubUser.name || '');
+      }
+    } catch (err: any) {
+      logWarn(`Failed to fetch GitHub avatar: ${err.message || err}`);
+    }
+  }
+  return {
+    name: String(githubName || metadata.name || metadata.full_name || username || claims.email || 'Kyrozen 用户'),
+    email: String(claims.email || ''),
+    githubUsername: username,
+    avatarUrl: avatarUrl || (username ? `https://avatars.githubusercontent.com/${username}` : ''),
+  };
+});
+
+ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
+  if (!accessToken) return { success: false, error: '未登录' };
+  if (!currentProjectId) return { success: false, error: '请先选择项目' };
+  if (wsClient?.readyState !== WebSocket.OPEN) return { success: false, error: '桌面客户端尚未连接云端' };
+  try {
+    const projectState = await apiGet(`/api/projects/${currentProjectId}/state`);
+    const modeByStage: Record<string, string> = {
+      problem_discovery: 'discovery',
+      market_research: 'market_research',
+      product_definition: 'planning',
+      solution_design: 'planning',
+      development: 'development',
+      testing: 'testing',
+      iteration: 'learning',
+    };
+    const mode = modeByStage[String(projectState.stage || '')] || 'discovery';
+    sendTaskActivity({ description: '正在理解你的需求' });
+    const task = await apiPost('/api/chat', {
+      message,
+      project_id: currentProjectId,
+      mode,
+      stream: false,
+    }, true);
+    if (!task.dispatched_to_desktop && task.content) {
+      const operations = Array.isArray(task.steps)
+        ? task.steps.map((step: any) => ({
+            description: String(step.description || '处理任务'),
+            status: String(step.status || 'completed'),
+            timestamp: String(step.completed_at || step.started_at || new Date().toISOString()),
+          }))
+        : [];
+      sendTaskActivity({ task_id: String(task.task_id || ''), description: '回复已完成', status: 'completed' });
+      return {
+        success: true,
+        taskId: task.task_id,
+        dispatched: false,
+        content: String(task.content),
+        operations,
+      };
+    }
+    return { success: true, taskId: task.task_id, dispatched: !!task.dispatched_to_desktop };
+  } catch (err: any) {
+    logError(`Failed to submit desktop chat: ${err.message || err}`);
+    return { success: false, error: err.message || '发送失败' };
+  }
 });
 
 ipcMain.on('kyrozen:cancel-task', () => {
@@ -1893,10 +2224,7 @@ async function handleTaskTimeout() {
 
   if (taskRetryCount < MAX_TASK_RETRIES) {
     taskRetryCount += 1;
-    sendChatMessage({
-      role: 'system',
-      content: `任务 ${currentTaskId} 执行超时，正在尝试重做 (${taskRetryCount}/${MAX_TASK_RETRIES})...`,
-    });
+    sendTaskActivity({ task_id: currentTaskId, description: '任务执行超时，正在重试' });
     await restartPythonAgentAndRetryTask();
     return;
   }
@@ -1904,7 +2232,7 @@ async function handleTaskTimeout() {
   currentTaskRunning = false;
   const previousTaskId = currentTaskId;
   taskRetryCount = 0;
-  sendChatMessage({ role: 'system', content: `任务 ${previousTaskId} 执行超时，已自动终止。` });
+  sendTaskActivity({ task_id: previousTaskId, description: '任务执行超时，已停止', status: 'failed' });
   sendToCloud({
     type: 'task_result',
     task_id: previousTaskId,
@@ -1949,6 +2277,10 @@ async function handleServerMessage(message: Record<string, unknown>) {
   logInfo(`Received server message: ${type}`);
 
   if (type === 'assign_task') {
+    if (currentTaskRunning && String(message.task_id) === currentTaskId) {
+      logInfo(`Ignoring duplicate assignment for active task ${currentTaskId}`);
+      return;
+    }
     if (currentTaskRunning) {
       pendingTasks.push(message);
       sendToCloud({
@@ -1956,10 +2288,17 @@ async function handleServerMessage(message: Record<string, unknown>) {
         task_id: message.task_id,
         queue_length: pendingTasks.length,
       });
-      sendChatMessage({
-        role: 'system',
-        content: `任务 ${message.task_id} 已加入队列，当前任务完成后自动执行。`,
-      });
+      sendTaskActivity({ task_id: String(message.task_id || ''), description: '任务已排队，等待执行' });
+      return;
+    }
+    // The server can assign immediately after WebSocket auth, while the
+    // bundled Python runtime is still being spawned. Do not mark the task as
+    // running until an Agent exists; otherwise the payload is silently lost
+    // and the UI remains stuck forever.
+    if (!pythonAgent) {
+      pendingTasks.unshift(message);
+      sendTaskActivity({ task_id: String(message.task_id || ''), description: '正在准备本地 Agent' });
+      void startPythonAgent();
       return;
     }
     currentTaskId = String(message.task_id);
@@ -2015,7 +2354,7 @@ async function handleServerMessage(message: Record<string, unknown>) {
 
 async function handleAccountCleanup(userId: string): Promise<void> {
   if (!userId) return;
-  sendChatMessage({ role: 'system', content: '收到账户删除指令，正在清理本地项目数据...' });
+  sendTaskActivity({ description: '正在清理本地项目数据' });
   try {
     for (const [projectId, root] of Object.entries(workspaceMap)) {
       try {
@@ -2028,7 +2367,7 @@ async function handleAccountCleanup(userId: string): Promise<void> {
     workspaceMap = {};
     await saveWorkspaceMap();
     await clearCredentials();
-    sendChatMessage({ role: 'system', content: '本地项目数据已清理，客户端将在退出后关闭。' });
+    sendTaskActivity({ description: '本地项目数据已清理', status: 'completed' });
     showNotification('Kyrozen', '账户已删除，本地数据已清理');
     setTimeout(() => {
       isQuitting = true;
@@ -2036,7 +2375,7 @@ async function handleAccountCleanup(userId: string): Promise<void> {
     }, 3000);
   } catch (err: any) {
     logError(`Account cleanup failed: ${err.message || err}`);
-    sendChatMessage({ role: 'system', content: `账户清理失败: ${err.message || err}` });
+    sendTaskActivity({ description: '本地项目数据清理失败', status: 'failed' });
   }
 }
 
@@ -2051,29 +2390,48 @@ async function chooseWorkspaceRoot(projectId: string | null): Promise<string> {
 }
 
 function getRepoRoot(): string {
+  if (app.isPackaged) return process.resourcesPath;
   // main.js is inside dist-electron/main/, which is under desktop/; repo root is one level above desktop.
   return path.resolve(currentDir, '../../../');
 }
 
+function getPythonAgentScript(): string {
+  if (process.env.KYROZEN_AGENT_SCRIPT) return process.env.KYROZEN_AGENT_SCRIPT;
+  if (app.isPackaged) return path.join(process.resourcesPath, 'python_agent', 'main.py');
+  return path.join(currentDir, '../../python_agent/main.py');
+}
+
 /** Spawn the local Python Agent process and wire stdio JSON-RPC to the UI/cloud. */
-async function startPythonAgent() {
+function startPythonAgent(): Promise<void> {
+  // WebSocket open/reconnect, protocol login, and retry paths can all request
+  // an Agent at the same time. Serialize startup so only one child owns the
+  // stdio channel; concurrent children otherwise leave tasks hanging forever.
+  if (pythonAgent) return Promise.resolve();
+  if (pythonAgentStartPromise) return pythonAgentStartPromise;
+  pythonAgentStartPromise = startPythonAgentInternal().finally(() => {
+    pythonAgentStartPromise = null;
+  });
+  return pythonAgentStartPromise;
+}
+
+async function startPythonAgentInternal() {
   logInfo('Starting Python Agent');
   stopPythonAgent();
 
   let pythonPath = process.env.KYROZEN_PYTHON_PATH;
   if (!pythonPath) {
     if (!pythonRuntimeReady) {
-      sendChatMessage({ role: 'system', content: '正在准备本地 Python 运行时...' });
+      logInfo('Preparing local Python runtime');
       try {
         pythonRuntimePath = await ensurePythonRuntime(getRepoRoot(), (msg) => {
-          sendChatMessage({ role: 'system', content: msg });
+          logInfo(msg);
         });
         pythonRuntimeReady = true;
         if (pythonRuntimePath) {
-          sendChatMessage({ role: 'system', content: `使用内置 Python 运行时: ${pythonRuntimePath}` });
+          logInfo('Bundled Python runtime ready');
         }
       } catch (err: any) {
-        sendChatMessage({ role: 'system', content: `内置 Python 运行时准备失败，将尝试系统 python3: ${err.message || err}` });
+        logWarn(`Bundled Python unavailable; falling back to system Python: ${err.message || err}`);
         pythonRuntimePath = null;
         pythonRuntimeReady = true;
       }
@@ -2084,33 +2442,37 @@ async function startPythonAgent() {
   const extraEnv: Record<string, string> = {
     KYROZEN_WS_URL: wsUrl,
     KYROZEN_DESKTOP_MODE: '1',
+    KYROZEN_RESOURCE_ROOT: getRepoRoot(),
+    KYROZEN_LOG_DIR: path.join(app.getPath('userData'), 'logs'),
+    KYROZEN_TASK_STORE_PATH: path.join(app.getPath('userData'), 'kyrozen_tasks.json'),
   };
 
   if (pythonRuntimePath) {
     setPythonExe(pythonRuntimePath);
     // Start daily auto-update checks for hardware tools once a Python runtime is available.
-    startHardwareToolchainAutoUpdate((msg) => sendChatMessage({ role: 'system', content: msg }));
+    startHardwareToolchainAutoUpdate((msg) => logInfo(msg));
     // Resolve hardware toolchain paths before spawning the Agent so that the
     // bundled tools are discoverable by HardwareBridge via environment vars.
     try {
-      const arduino = await ensureArduinoCLI((msg) => sendChatMessage({ role: 'system', content: msg }));
+      const arduino = await ensureArduinoCLI((msg) => logInfo(msg));
       if (arduino.path) {
         extraEnv.KYROZEN_ARDUINO_CLI_PATH = arduino.path;
       }
     } catch (err: any) {
-      sendChatMessage({ role: 'system', content: `Arduino CLI 准备失败: ${err.message || err}` });
+      logWarn(`Arduino CLI setup failed: ${err.message || err}`);
     }
     try {
-      const pio = await ensurePlatformIO((msg) => sendChatMessage({ role: 'system', content: msg }));
+      const pio = await ensurePlatformIO((msg) => logInfo(msg));
       if (pio.path) {
         extraEnv.KYROZEN_PIO_PATH = pio.path;
       }
     } catch (err: any) {
-      sendChatMessage({ role: 'system', content: `PlatformIO 准备失败: ${err.message || err}` });
+      logWarn(`PlatformIO setup failed: ${err.message || err}`);
     }
+    mainWindow?.webContents.send('kyrozen:hardware-tool-status', getToolStatus());
   }
 
-  const agentScript = process.env.KYROZEN_AGENT_SCRIPT || path.join(currentDir, '../../python_agent/main.py');
+  const agentScript = getPythonAgentScript();
   logInfo(`Spawning Python Agent: ${pythonPath} ${agentScript}`);
 
   pythonAgent = spawn(pythonPath, [agentScript], {
@@ -2121,43 +2483,53 @@ async function startPythonAgent() {
     },
   });
 
-  pythonAgent.stdout.on('data', (data: Buffer) => {
-    const lines = data.toString().split('\n').filter(Boolean);
+  // A JSON-RPC line can span multiple pipe chunks. Decode UTF-8 as a stream
+  // and retain the incomplete tail instead of attempting to parse each chunk.
+  pythonAgentStdoutBuffer = '';
+  pythonAgent.stdout.setEncoding('utf8');
+  pythonAgent.stdout.on('data', (data: string) => {
+    pythonAgentStdoutBuffer += data;
+    const lines = pythonAgentStdoutBuffer.split('\n');
+    pythonAgentStdoutBuffer = lines.pop() || '';
     for (const line of lines) {
-      handlePythonAgentLine(line);
+      if (line.trim()) handlePythonAgentLine(line);
     }
   });
 
   pythonAgent.stderr.on('data', (data: Buffer) => {
-    sendChatMessage({ role: 'system', content: `Agent: ${data.toString().trim()}` });
+    logWarn(`Python Agent stderr: ${data.toString().trim()}`);
   });
 
   pythonAgent.on('error', (err) => {
     logError(`Python Agent spawn error: ${err.message}`);
-    sendChatMessage({ role: 'system', content: `Agent 启动失败: ${err.message}` });
+    sendTaskActivity({ description: '本地 Agent 启动失败', status: 'failed' });
   });
 
   pythonAgent.on('exit', (code) => {
     logWarn(`Python Agent exited with code ${code ?? 'unknown'}`);
-    sendChatMessage({ role: 'system', content: `Python Agent 已退出 (code ${code ?? 'unknown'})` });
+    sendTaskActivity({ description: '本地 Agent 已停止', status: code === 0 ? 'completed' : 'failed' });
     pythonAgent = null;
     if (!pythonAgentStopping && code !== 0) {
       if (pythonAgentRestartCount < PYTHON_AGENT_MAX_RESTARTS) {
         pythonAgentRestartCount += 1;
         const delay = Math.min(5000 * pythonAgentRestartCount, 30000);
-        sendChatMessage({ role: 'system', content: `Python Agent 异常退出，${delay / 1000} 秒后尝试重启 (${pythonAgentRestartCount}/${PYTHON_AGENT_MAX_RESTARTS})...` });
+        sendTaskActivity({ description: '本地 Agent 异常退出，正在重启' });
         setTimeout(() => {
           if (wsClient?.readyState === WebSocket.OPEN) {
             startPythonAgent();
           }
         }, delay);
       } else {
-        sendChatMessage({ role: 'system', content: 'Python Agent 连续异常退出超过最大重试次数，请检查环境后手动重启客户端。' });
+        sendTaskActivity({ description: '本地 Agent 无法启动，请检查运行环境', status: 'failed' });
         showNotification('Kyrozen', '本地 Agent 无法启动，请检查 Python 环境');
       }
     }
     pythonAgentStopping = false;
   });
+
+  // A task may have arrived while the runtime/toolchain was starting. Flush
+  // it only after the child process and its stdin handlers are ready.
+  void processNextQueuedTask();
 }
 
 function stopPythonAgent() {
@@ -2166,6 +2538,7 @@ function stopPythonAgent() {
     pythonAgent.kill();
     pythonAgent = null;
   }
+  pythonAgentStdoutBuffer = '';
 }
 
 function sendToPythonAgent(payload: unknown) {
@@ -2194,14 +2567,28 @@ function flushPendingCloudMessages() {
 function handlePythonAgentLine(line: string) {
   try {
     const message = JSON.parse(line);
-    if (message.method === 'task_step') {
+    if (message.type === 'model_request') {
+      logInfo(`Forwarding model request ${String(message.request_id || 'unknown')} to cloud`);
+      sendToCloud(message);
+    } else if (message.method === 'task_step') {
       const step = message.params.step || {};
       sendToCloud({ type: 'task_step', task_id: message.params.task_id, step });
-      sendChatMessage({
-        role: 'assistant',
-        content: `[${step.status}] ${step.description}`,
-        raw: JSON.stringify(message, null, 2),
+      sendTaskActivity({
+        task_id: String(message.params.task_id || currentTaskId || ''),
+        description: String(step.description || '正在处理任务'),
+        status: String(step.status || 'running'),
       });
+    } else if (message.method === 'task_operation') {
+      const taskId = String(message.params.task_id || currentTaskId || '');
+      const operation = {
+        description: String(message.params.description || '正在处理任务'),
+        status: String(message.params.status || 'running'),
+        timestamp: new Date().toISOString(),
+      };
+      const history = taskOperations.get(taskId) || [];
+      history.push(operation);
+      taskOperations.set(taskId, history.slice(-200));
+      sendTaskActivity({ task_id: taskId, description: operation.description, status: operation.status });
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);
@@ -2230,7 +2617,7 @@ function handlePythonAgentLine(line: string) {
       if (url) {
         // Prefer the inline preview panel; user can move it to a window from the UI.
         mainWindow?.webContents.send('kyrozen:open-preview-url', url);
-        sendChatMessage({ role: 'system', content: `已打开预览：${url}` });
+        sendTaskActivity({ description: '已打开本地预览', status: 'completed' });
       }
     } else if (message.method === 'execution_plan') {
       sendExecutionPlan({
@@ -2254,8 +2641,9 @@ function handlePythonAgentLine(line: string) {
       sendChatMessage({
         role: 'assistant',
         content: answer,
-        raw: JSON.stringify(message, null, 2),
+        operations: taskOperations.get(String(message.params.task_id || currentTaskId || '')) || [],
       });
+      taskOperations.delete(String(message.params.task_id || currentTaskId || ''));
       if (status === 'failed') {
         showNotification('Kyrozen', '任务执行失败');
       } else if (status === 'cancelled') {
@@ -2265,7 +2653,7 @@ function handlePythonAgentLine(line: string) {
       }
     }
   } catch {
-    sendChatMessage({ role: 'system', content: line });
+    logWarn(`Ignoring non-JSON Agent output: ${line.slice(0, 300)}`);
   }
 }
 
@@ -2412,7 +2800,7 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
         error: reason,
       },
     });
-    sendChatMessage({ role: 'system', content: reason });
+    sendTaskActivity({ description: reason, status: 'failed' });
     return;
   }
 
@@ -2439,7 +2827,7 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
         error: reason,
       },
     });
-    sendChatMessage({ role: 'system', content: reason });
+    sendTaskActivity({ description: reason, status: 'failed' });
     return;
   }
 
@@ -2452,50 +2840,67 @@ async function showConfirmationDialog(params: Record<string, unknown>) {
     fullTrust: fullTrustMode,
   };
 
-  // When the user has explicitly enabled full-trust mode for this session,
-  // skip the dialog and tell the local agent to trust all confirmations.
-  if (fullTrustMode) {
+  const operationType = `${String(params.tool)}.${String(params.action)}`;
+  // Full trust and an operation type trusted from an inline confirmation both
+  // bypass further prompts for this desktop session.
+  if (fullTrustMode || trustedOperationTypes.has(operationType)) {
     logWarn(`Auto-confirming ${params.tool}.${params.action} because full-trust mode is enabled`);
-    await logAuditEvent({ ...auditBase, confirmed: true, fullTrust: true });
+    await logAuditEvent({ ...auditBase, confirmed: true, fullTrust: fullTrustMode });
     sendToPythonAgent({
       jsonrpc: '2.0',
       method: 'confirmation_response',
       params: {
         confirmation_id: params.confirmation_id,
         confirmed: true,
-        trust_for_session: true,
+        trust_for_session: fullTrustMode || trustedOperationTypes.has(operationType),
         task_id: params.task_id,
       },
     });
     return;
   }
 
-  const result = await dialog.showMessageBox(mainWindow!, {
-    type: 'warning',
-    buttons: ['确认并信任该操作类型', '确认', '取消'],
-    defaultId: 2,
-    cancelId: 2,
-    title: '高危操作确认',
-    message: `${params.tool}.${params.action}`,
+  const confirmationId = String(params.confirmation_id || '');
+  pendingConfirmations.set(confirmationId, params);
+  mainWindow?.webContents.send('kyrozen:confirmation-request', {
+    confirmation_id: confirmationId,
+    task_id: String(params.task_id || ''),
+    tool: String(params.tool || ''),
+    action: String(params.action || ''),
+    parameters: (params.parameters as Record<string, unknown>) || {},
+    reason: String(params.reason || ''),
     detail: buildConfirmationDetail(params),
   });
-  const confirmed = result.response === 0 || result.response === 1;
-  const trustForSession = result.response === 0;
-  if (trustForSession) {
-    showNotification('已信任该操作类型', `当前会话内 ${params.tool}.${params.action} 将不再弹窗确认。`);
-  }
-  await logAuditEvent({ ...auditBase, confirmed, fullTrust: fullTrustMode });
-  sendToPythonAgent({
-    jsonrpc: '2.0',
-    method: 'confirmation_response',
-    params: {
-      confirmation_id: params.confirmation_id,
-      confirmed,
-      trust_for_session: trustForSession,
-      task_id: params.task_id,
-    },
-  });
 }
+
+ipcMain.handle(
+  'kyrozen:respond-confirmation',
+  async (_event, confirmationId: string, confirmed: boolean, trustForSession = false) => {
+    const params = pendingConfirmations.get(confirmationId);
+    if (!params) return { success: false, error: '确认请求已失效' };
+    pendingConfirmations.delete(confirmationId);
+    const operationType = `${String(params.tool)}.${String(params.action)}`;
+    if (confirmed && trustForSession) trustedOperationTypes.add(operationType);
+    await logAuditEvent({
+      taskId: String(params.task_id || ''),
+      tool: String(params.tool || ''),
+      action: String(params.action || ''),
+      parameters: (params.parameters as Record<string, unknown>) || {},
+      confirmed,
+      fullTrust: fullTrustMode,
+    });
+    sendToPythonAgent({
+      jsonrpc: '2.0',
+      method: 'confirmation_response',
+      params: {
+        confirmation_id: confirmationId,
+        confirmed,
+        trust_for_session: trustForSession,
+        task_id: params.task_id,
+      },
+    });
+    return { success: true };
+  },
+);
 
 function sanitizeLogForUpload(log: string): string {
   return log
@@ -2509,7 +2914,7 @@ function sanitizeLogForUpload(log: string): string {
 
 async function uploadErrorReport(errorSummary: string): Promise<void> {
   if (!accessToken) {
-    sendChatMessage({ role: 'system', content: '未登录，无法上传错误报告。' });
+    sendTaskActivity({ description: '未登录，无法上传错误报告', status: 'failed' });
     return;
   }
   try {
@@ -2536,10 +2941,10 @@ async function uploadErrorReport(errorSummary: string): Promise<void> {
       },
       true,
     );
-    sendChatMessage({ role: 'system', content: '错误报告已上传，我们将尽快排查问题。' });
+    sendTaskActivity({ description: '错误报告已上传', status: 'completed' });
   } catch (err: any) {
     logError(`Failed to upload error report: ${err.message || err}`);
-    sendChatMessage({ role: 'system', content: `错误报告上传失败: ${err.message || err}` });
+    sendTaskActivity({ description: '错误报告上传失败', status: 'failed' });
   }
 }
 

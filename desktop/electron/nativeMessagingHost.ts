@@ -28,17 +28,17 @@ function getPortFilePath(): string {
   return path.join(baseDir, PORT_FILE_NAME);
 }
 
-async function resolveServerPort(): Promise<number> {
+async function resolveServerConfig(): Promise<{ port: number; authToken: string | null }> {
   try {
     const raw = await fs.readFile(getPortFilePath(), 'utf-8');
-    const data = JSON.parse(raw) as { port?: number };
+    const data = JSON.parse(raw) as { port?: number; authToken?: string };
     if (typeof data.port === 'number' && data.port > 0) {
-      return data.port;
+      return { port: data.port, authToken: data.authToken || null };
     }
   } catch {
     // Fall back to the default port.
   }
-  return DEFAULT_PORT;
+  return { port: DEFAULT_PORT, authToken: null };
 }
 
 interface NativeMessage {
@@ -104,13 +104,17 @@ function writeMessage(message: unknown): void {
 }
 
 async function forwardToDesktop(message: NativeMessage): Promise<unknown> {
-  const port = await resolveServerPort();
+  const { port, authToken } = await resolveServerConfig();
+  if (!authToken) return { success: false, error: 'Desktop bridge credentials unavailable' };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/native-message`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Kyrozen-Bridge-Token': authToken,
+      },
       body: JSON.stringify(message),
       signal: controller.signal,
     });
@@ -130,7 +134,6 @@ async function runHost() {
   // Send a ready message so the extension knows the host is listening.
   writeMessage({ type: 'host_ready' });
 
-  // eslint-disable-next-line @typescript-eslint/no-misused-promises
   new NativeMessagingReader(async (message) => {
     const response = await forwardToDesktop(message);
     writeMessage({

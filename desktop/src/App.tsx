@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ChatPage } from './pages/ChatPage';
 import { LoginPage } from './pages/LoginPage';
 import { OnboardingPage } from './pages/OnboardingPage';
@@ -11,6 +11,7 @@ import { ProgressPanel } from './components/ProgressPanel';
 import { HardwarePanel } from './components/HardwarePanel';
 import { PreviewPanel } from './components/PreviewPanel';
 import { SearchPanel } from './components/SearchPanel';
+import { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -33,13 +34,20 @@ interface QuotaInfo {
   used: number;
   limit: number;
   remaining: number;
+  plan?: 'free' | 'developer';
+  project_limit?: number;
+}
+
+interface UserProfile {
+  name: string;
+  email: string;
+  githubUsername: string;
+  avatarUrl: string;
 }
 
 function formatQuota(quota: QuotaInfo) {
-  if (quota.limit === 0) {
-    return `已用 ${quota.used} / 无限制`;
-  }
-  return `已用 ${quota.used} / ${quota.limit}，剩余 ${quota.remaining}`;
+  if (quota.plan === 'developer') return '开发者账户 · 无限制';
+  return `免费账户 · 可完整使用 ${quota.project_limit || 1} 个项目`;
 }
 
 function App() {
@@ -62,16 +70,22 @@ function App() {
   const [newProjectDesc, setNewProjectDesc] = useState('');
   const [newProjectGoal, setNewProjectGoal] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState('');
+  const [showProjectWorkspace, setShowProjectWorkspace] = useState(false);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showFullTrustConfirm, setShowFullTrustConfirm] = useState(false);
 
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async () => {
     if (!window.kyrozen) return;
     const list = await window.kyrozen.getProjects();
     setProjects(Array.isArray(list) ? list : []);
-  };
+  }, []);
 
   const handleCreateProject = async () => {
     if (!window.kyrozen || !newProjectName.trim()) return;
     setCreatingProject(true);
+    setCreateProjectError('');
     try {
       const result = await window.kyrozen.createProject(newProjectName.trim(), newProjectDesc.trim(), newProjectGoal.trim());
       if (result.success && result.project) {
@@ -80,9 +94,13 @@ function App() {
         setNewProjectGoal('');
         setShowCreateProject(false);
         await loadProjects();
-        setCurrentProjectId(result.project.id);
+        await handleSelectProject(result.project.id);
+      } else {
+        setCreateProjectError(result.error || '项目创建失败');
       }
-    } catch { /* error handled by UI */ }
+    } catch (err: any) {
+      setCreateProjectError(err.message || '项目创建失败');
+    }
     finally { setCreatingProject(false); }
   };
 
@@ -128,6 +146,12 @@ function App() {
     }
   };
 
+  const loadUserProfile = async () => {
+    if (!window.kyrozen) return;
+    try { setUserProfile(await window.kyrozen.getUserProfile()); }
+    catch { setUserProfile(null); }
+  };
+
   useEffect(() => {
     if (!window.kyrozen) return;
 
@@ -155,6 +179,7 @@ function App() {
         if (verified) {
           setToken(verified.wsToken);
           await loadProjects();
+          await loadUserProfile();
           if (projectId) {
             setCurrentProjectId(projectId);
             await window.kyrozen.setCurrentProject(projectId);
@@ -171,6 +196,7 @@ function App() {
       await loadFullTrust();
       await loadLanguage();
       await loadGitHubStatus();
+      await loadUserProfile();
     });
 
     const unsubSessionEnded = window.kyrozen.onSessionEnded(() => {
@@ -180,6 +206,7 @@ function App() {
       setQuota(null);
       setFullTrust(false);
       setGithubStatus({ connected: false, scope: '' });
+      setUserProfile(null);
     });
 
     const unsubOpenSettings = window.kyrozen.onOpenSettings(() => {
@@ -209,7 +236,22 @@ function App() {
       });
     }, 5000);
 
-    window.kyrozen.requestInitialToken();
+    window.kyrozen.getInitialSession().then(async (session) => {
+      setConnection(session.connection);
+      setStatusMessage(session.message);
+      if (session.wsToken) {
+        setToken(session.wsToken);
+        await loadProjects();
+        if (session.currentProjectId) setCurrentProjectId(session.currentProjectId);
+        await loadQuota();
+        await loadFullTrust();
+        await loadLanguage();
+        await loadGitHubStatus();
+        await loadUserProfile();
+      }
+    }).catch(() => {
+      window.kyrozen?.requestInitialToken();
+    });
 
     return () => {
       clearTimeout(updateTimer);
@@ -233,27 +275,34 @@ function App() {
     await loadFullTrust();
     await loadLanguage();
     await loadGitHubStatus();
+    await loadUserProfile();
   };
 
   const handleToggleFullTrust = async () => {
     if (!window.kyrozen) return;
     const next = !fullTrust;
     if (next) {
-      const confirmed = window.confirm(
-        '开启“完全信任模式”后，本次会话内所有高危操作（文件写入、命令执行等）将自动执行，不再弹窗确认。是否继续？'
-      );
-      if (!confirmed) return;
+      setShowFullTrustConfirm(true);
+      return;
     }
     const result = await window.kyrozen.setFullTrust(next);
     setFullTrust(result.enabled);
   };
 
+  const enableFullTrust = async () => {
+    if (!window.kyrozen) return;
+    const result = await window.kyrozen.setFullTrust(true);
+    setFullTrust(result.enabled);
+    setShowFullTrustConfirm(false);
+  };
+
   const handleSelectProject = async (projectId: string) => {
     if (!window.kyrozen) return;
+    await window.kyrozen.setCurrentProject(projectId);
     setCurrentProjectId(projectId);
     setPreviewUrl(null);
     setEditingFile(null);
-    await window.kyrozen.setCurrentProject(projectId);
+    setShowProjectWorkspace(false);
   };
 
   const handleOpenPreview = (url: string) => {
@@ -334,6 +383,7 @@ function App() {
   }
 
   const currentProject = projects.find((p) => p.id === currentProjectId);
+  const canCreateProject = quota?.plan === 'developer' || projects.length < (quota?.project_limit || 1);
 
   return (
     <div className="h-screen w-screen flex flex-col bg-paper text-ink">
@@ -356,6 +406,15 @@ function App() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {currentProjectId && (
+            <button
+              type="button"
+              onClick={() => setShowProjectWorkspace(true)}
+              className="btn-primary text-xs px-3 py-1.5"
+            >
+              项目画布
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowSettings(true)}
@@ -363,8 +422,29 @@ function App() {
           >
             设置
           </button>
-          <div className="w-7 h-7 rounded bg-accent flex items-center justify-center text-xs font-medium text-white">
-            K
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowUserMenu((value) => !value)}
+              className="w-7 h-7 rounded-full overflow-hidden bg-accent flex items-center justify-center text-xs font-medium text-white border border-line-strong"
+              aria-label="用户菜单"
+              aria-expanded={showUserMenu}
+            >
+              {userProfile?.avatarUrl ? (
+                <img src={userProfile.avatarUrl} alt={userProfile.name} className="w-full h-full object-cover" />
+              ) : (userProfile?.name || 'K').slice(0, 1).toUpperCase()}
+            </button>
+            {showUserMenu && (
+              <div className="absolute right-0 top-9 z-40 w-56 panel p-2">
+                <div className="px-2 py-2 border-b border-line">
+                  <div className="text-sm font-medium truncate">{userProfile?.name || 'Kyrozen 用户'}</div>
+                  <div className="text-xs text-ink-faint truncate">{userProfile?.githubUsername ? `@${userProfile.githubUsername}` : userProfile?.email}</div>
+                </div>
+                <button type="button" onClick={() => { setShowUserMenu(false); void handleLogout(); }} className="btn-ghost w-full text-sm text-danger mt-1 justify-start">
+                  退出登录
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -376,8 +456,9 @@ function App() {
               <button
                 type="button"
                 onClick={() => setShowCreateProject(true)}
-                title="创建新项目"
+                title={canCreateProject ? '创建新项目' : '免费账户可完整使用一个项目'}
                 className="btn-primary text-xs px-2 py-1"
+                disabled={!canCreateProject}
               >
                 新建
               </button>
@@ -416,7 +497,7 @@ function App() {
           <div className="p-3 border-t border-line space-y-3 text-xs">
             {quota && (
               <div className="text-ink-soft" title={quota.reason}>
-                <div className="font-medium mb-1">云端 Token 额度</div>
+                <div className="font-medium mb-1">会员权益</div>
                 <div className="text-ink-faint">{formatQuota(quota)}</div>
               </div>
             )}
@@ -476,7 +557,7 @@ function App() {
             </div>
           )}
           <div className="flex-1 flex overflow-hidden">
-            <ChatPage projectId={currentProjectId} onOpenPreview={handleOpenPreview} />
+            <ChatPage projectId={currentProjectId} onOpenPreview={handleOpenPreview} onProjectChanged={loadProjects} />
             {previewUrl && <PreviewPanel url={previewUrl} onClose={() => setPreviewUrl(null)} />}
           </div>
           {currentProjectId && editingFile && (
@@ -486,55 +567,64 @@ function App() {
               onClose={() => setEditingFile(null)}
             />
           )}
+          {currentProjectId && showProjectWorkspace && (
+            <ProjectWorkspacePanel
+              projectId={currentProjectId}
+              onClose={() => setShowProjectWorkspace(false)}
+            />
+          )}
         </main>
         <div className="w-72 flex-shrink-0 h-full border-l border-line bg-surface overflow-y-auto flex flex-col">
           {currentProjectId && <ProgressPanel projectId={currentProjectId} />}
-          <GitPanel />
+          <GitPanel projectId={currentProjectId} />
         </div>
       </div>
       {showCreateProject && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-sm bg-slate-800 rounded-lg shadow-xl border border-slate-700 p-6">
-            <h2 className="text-lg font-semibold text-slate-100 mb-4">新建项目</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
+          <div className="w-full max-w-sm panel p-6">
+            <h2 className="font-hand text-2xl text-ink mb-4">新建项目</h2>
             <div className="space-y-3">
               <div>
-                <label className="block text-sm text-slate-300 mb-1">项目名称 *</label>
+                <label className="label">项目名称 *</label>
                 <input
                   type="text"
                   value={newProjectName}
                   onChange={(e) => setNewProjectName(e.target.value)}
                   placeholder="例如：AI 写作助手"
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+                  className="input"
                   autoFocus
                   onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-300 mb-1">描述（可选）</label>
+                <label className="label">描述（可选）</label>
                 <input
                   type="text"
                   value={newProjectDesc}
                   onChange={(e) => setNewProjectDesc(e.target.value)}
                   placeholder="简短描述这个项目"
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+                  className="input"
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-300 mb-1">目标（可选）</label>
+                <label className="label">目标（可选）</label>
                 <textarea
                   value={newProjectGoal}
                   onChange={(e) => setNewProjectGoal(e.target.value)}
                   placeholder="你想用这个项目达成什么目标？"
                   rows={2}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500 resize-none"
+                  className="input resize-none"
                 />
               </div>
             </div>
+            {createProjectError && (
+              <div role="alert" className="mt-3 text-sm text-danger">{createProjectError}</div>
+            )}
             <div className="flex justify-end gap-2 mt-5">
               <button
                 type="button"
-                onClick={() => { setShowCreateProject(false); setNewProjectName(''); setNewProjectDesc(''); setNewProjectGoal(''); }}
-                className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+                onClick={() => { setShowCreateProject(false); setNewProjectName(''); setNewProjectDesc(''); setNewProjectGoal(''); setCreateProjectError(''); }}
+                className="btn-ghost text-sm"
               >
                 取消
               </button>
@@ -542,7 +632,7 @@ function App() {
                 type="button"
                 onClick={handleCreateProject}
                 disabled={creatingProject || !newProjectName.trim()}
-                className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 text-white rounded-lg font-medium transition-colors"
+                className="btn-primary text-sm"
               >
                 {creatingProject ? '创建中...' : '创建'}
               </button>
@@ -561,6 +651,18 @@ function App() {
           onChangeLanguage={handleChangeLanguage}
           onLogout={handleLogout}
         />
+      )}
+      {showFullTrustConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
+          <div className="panel w-full max-w-md p-5">
+            <h2 className="font-hand text-2xl">开启完全信任模式？</h2>
+            <p className="text-sm text-ink-soft mt-2">本次会话内，文件写入和命令执行等高风险操作将自动继续，不再逐次询问。</p>
+            <div className="flex justify-end gap-2 mt-5">
+              <button type="button" onClick={() => setShowFullTrustConfirm(false)} className="btn-ghost text-sm">取消</button>
+              <button type="button" onClick={() => void enableFullTrust()} className="btn-primary text-sm">确认开启</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

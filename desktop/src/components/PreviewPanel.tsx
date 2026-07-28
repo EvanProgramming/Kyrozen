@@ -5,29 +5,29 @@ interface Props {
 
 export function PreviewPanel({ url, onClose }: Props) {
   return (
-    <div className="w-[45%] min-w-[360px] max-w-[720px] flex flex-col border-l border-slate-700 bg-slate-900">
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700">
-        <div className="text-xs text-slate-300 truncate flex-1 mr-2">
-          预览：<span className="font-medium">{url}</span>
+    <div className="w-[45%] min-w-[360px] max-w-[720px] flex flex-col border-l border-line bg-paper">
+      <div className="flex items-center justify-between px-3 py-2 bg-surface border-b border-line">
+        <div className="text-xs text-ink-soft truncate flex-1 mr-2">
+          预览：<span className="font-medium text-ink">{url}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => window.kyrozen?.openPreview(url, 'window')}
-            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-100 rounded"
+            className="btn-ghost text-xs px-2 py-1"
             title="在独立窗口中打开"
           >
             新窗口
           </button>
           <button
             onClick={() => window.kyrozen?.openPreview(url, 'external')}
-            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-100 rounded"
+            className="btn-ghost text-xs px-2 py-1"
             title="在系统浏览器中打开"
           >
             浏览器
           </button>
           <button
             onClick={onClose}
-            className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-100 rounded"
+            className="btn-ghost text-xs px-2 py-1"
           >
             关闭
           </button>

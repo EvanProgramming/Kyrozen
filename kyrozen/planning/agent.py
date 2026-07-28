@@ -34,6 +34,7 @@ class ProductPlanningAgent(BaseAgent):
             "If no tool is needed, reply with a plain text answer.\n\n"
             "Available tools:\n" + tools_text + "\n\n"
             "Rules:\n"
+            "- Always respond in the same language as the user's latest message.\n"
             "- DO NOT write code, design technical architecture, choose programming languages, "
             "design databases, design circuits, select chips, or generate a BOM.\n"
             "- DO NOT enter software development, hardware development, or testing execution.\n"

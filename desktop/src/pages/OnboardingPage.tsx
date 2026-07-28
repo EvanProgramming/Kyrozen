@@ -80,15 +80,15 @@ function LanguageStep({
 }) {
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-center">{t.languageTitle}</h2>
+      <h2 className="font-hand text-2xl leading-none text-center text-ink">{t.languageTitle}</h2>
       <div className="grid grid-cols-2 gap-4">
         <button
           type="button"
           onClick={() => onSelect('zh')}
-          className={`px-6 py-4 rounded-xl border text-lg font-medium transition-colors ${
+          className={`px-6 py-4 rounded border text-lg font-medium transition-colors ${
             language === 'zh'
-              ? 'bg-blue-600 border-blue-600 text-white'
-              : 'bg-slate-800 border-slate-600 text-slate-200 hover:bg-slate-700'
+              ? 'bg-accent border-accent text-white'
+              : 'bg-surface border-line-strong text-ink-soft hover:bg-paper-sink'
           }`}
         >
           中文
@@ -96,10 +96,10 @@ function LanguageStep({
         <button
           type="button"
           onClick={() => onSelect('en')}
-          className={`px-6 py-4 rounded-xl border text-lg font-medium transition-colors ${
+          className={`px-6 py-4 rounded border text-lg font-medium transition-colors ${
             language === 'en'
-              ? 'bg-blue-600 border-blue-600 text-white'
-              : 'bg-slate-800 border-slate-600 text-slate-200 hover:bg-slate-700'
+              ? 'bg-accent border-accent text-white'
+              : 'bg-surface border-line-strong text-ink-soft hover:bg-paper-sink'
           }`}
         >
           English
@@ -159,27 +159,27 @@ function PythonStep({
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-center">{t.pythonTitle}</h2>
-      <div className="text-sm text-slate-300">
+      <h2 className="font-hand text-2xl leading-none text-center text-ink">{t.pythonTitle}</h2>
+      <div className="text-sm text-ink-soft">
         {state.pythonStatus === 'ready' ? (
-          <div className="text-green-400">{t.pythonReady}</div>
+          <div className="text-success">{t.pythonReady}</div>
         ) : (
           <div>{state.pythonStatus === 'idle' ? t.pythonNotReady : ''}</div>
         )}
-        {state.pythonPath && <div className="mt-1 text-slate-400 break-all">{state.pythonPath}</div>}
+        {state.pythonPath && <div className="mt-1 text-ink-faint break-all">{state.pythonPath}</div>}
       </div>
       {state.pythonProgress && (
-        <div className="text-xs text-slate-400 font-mono bg-slate-900 p-2 rounded-lg">
+        <div className="text-xs text-ink-soft font-mono bg-paper-sink border border-line p-2 rounded-sm">
           {state.pythonProgress}
         </div>
       )}
-      {state.pythonError && <div className="text-sm text-red-400">{state.pythonError}</div>}
+      {state.pythonError && <div className="text-sm text-danger">{state.pythonError}</div>}
       <div className="flex flex-col gap-2">
         <button
           type="button"
           onClick={checkStatus}
           disabled={state.pythonStatus === 'checking' || state.pythonStatus === 'installing'}
-          className="w-full py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 text-white rounded-lg font-medium transition-colors"
+          className="btn-secondary w-full"
         >
           {t.pythonCheck}
         </button>
@@ -187,19 +187,19 @@ function PythonStep({
           type="button"
           onClick={ensureRuntime}
           disabled={state.pythonStatus === 'checking' || state.pythonStatus === 'installing'}
-          className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white rounded-lg font-medium transition-colors"
+          className="btn-primary w-full"
         >
           {t.pythonDownload}
         </button>
       </div>
-      <div className="text-xs text-slate-500">
+      <div className="text-xs text-ink-ghost">
         {t.pythonOfflineTip}
       </div>
       {state.pythonStatus === 'ready' && (
         <button
           type="button"
           onClick={onNext}
-          className="w-full py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium transition-colors"
+          className="btn-success w-full"
         >
           {t.next}
         </button>
@@ -223,7 +223,7 @@ function ProjectStep({
 
   useEffect(() => {
     let mounted = true;
-    kyrozen.getProjects().then((list) => {
+    const loadProjects = () => kyrozen.getProjects().then((list) => {
       if (!mounted) return;
       const projects = Array.isArray(list) ? list : [];
       setState((prev) => ({
@@ -232,8 +232,13 @@ function ProjectStep({
         selectedProjectId: projects[0]?.id || null,
       }));
     });
+    void loadProjects();
+    const unsubscribe = kyrozen.onConnectionChange((connection) => {
+      if (connection === 'connected') void loadProjects();
+    });
     return () => {
       mounted = false;
+      unsubscribe();
     };
   }, [kyrozen, setState]);
 
@@ -256,8 +261,8 @@ function ProjectStep({
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-center">{t.projectTitle}</h2>
-      <p className="text-sm text-slate-400">{t.projectSubtitle}</p>
+      <h2 className="font-hand text-2xl leading-none text-center text-ink">{t.projectTitle}</h2>
+      <p className="text-sm text-ink-faint">{t.projectSubtitle}</p>
 
       {state.projects.length > 0 ? (
         <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
@@ -266,42 +271,42 @@ function ProjectStep({
               key={project.id}
               type="button"
               onClick={() => setState((prev) => ({ ...prev, selectedProjectId: project.id }))}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+              className={`w-full text-left px-3 py-2 rounded-sm text-sm transition-colors border-l-2 ${
                 project.id === state.selectedProjectId
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                  ? 'bg-accent-soft border-accent text-ink'
+                  : 'bg-surface border-transparent hover:bg-paper-sink text-ink-soft'
               }`}
             >
               <div className="font-medium truncate">{project.name}</div>
-              <div className="text-xs opacity-80 truncate">{project.current_stage}</div>
+              <div className="text-xs text-ink-faint truncate">{project.current_stage}</div>
             </button>
           ))}
         </div>
       ) : (
-        <div className="text-sm text-slate-400 bg-slate-800 p-3 rounded-lg">{t.noProjects}</div>
+        <div className="text-sm text-ink-faint bg-paper-sink border border-line p-3 rounded-sm">{t.noProjects}</div>
       )}
 
       <button
         type="button"
         onClick={pickWorkspace}
-        className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors"
+        className="btn-primary w-full"
       >
         {state.workspaceRoot ? t.pickedWorkspace : t.pickWorkspace}
       </button>
 
       {state.workspaceRoot && (
-        <div className="text-xs text-slate-400 font-mono bg-slate-900 p-2 rounded-lg break-all">
+        <div className="text-xs text-ink-soft font-mono bg-paper-sink border border-line p-2 rounded-sm break-all">
           {state.workspaceRoot}
         </div>
       )}
 
-      {state.workspaceError && <div className="text-sm text-red-400">{state.workspaceError}</div>}
+      {state.workspaceError && <div className="text-sm text-danger">{state.workspaceError}</div>}
 
       <button
         type="button"
         onClick={onNext}
         disabled={!state.workspaceRoot}
-        className="w-full py-2 bg-green-600 hover:bg-green-500 disabled:bg-green-900 text-white rounded-lg font-medium transition-colors"
+        className="btn-success w-full"
       >
         {t.next}
       </button>
@@ -312,11 +317,11 @@ function ProjectStep({
 function CompleteStep({ t, onFinish }: { t: (typeof dict)['zh']; onFinish: () => void }) {
   return (
     <div className="space-y-6 text-center">
-      <h2 className="text-xl font-semibold">{t.completeTitle}</h2>
+      <h2 className="font-hand text-2xl leading-none text-ink">{t.completeTitle}</h2>
       <button
         type="button"
         onClick={onFinish}
-        className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors"
+        className="btn-primary w-full"
       >
         {t.enterApp}
       </button>
@@ -365,9 +370,9 @@ export function OnboardingPage({ onComplete }: Props) {
   ];
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-slate-950 p-6">
-      <div className="w-full max-w-md bg-slate-900 rounded-2xl p-8 shadow-2xl border border-slate-700">
-        <h1 className="text-2xl font-bold mb-6 text-center text-white">{t.welcome}</h1>
+    <div className="h-screen w-screen flex items-center justify-center bg-paper p-6">
+      <div className="w-full max-w-md panel p-8">
+        <h1 className="font-hand text-3xl leading-none mb-6 text-center text-ink">{t.welcome}</h1>
 
         <div className="flex items-center justify-between mb-8">
           {steps.map((s, index) => (
@@ -375,8 +380,8 @@ export function OnboardingPage({ onComplete }: Props) {
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium ${
                   steps.findIndex((x) => x.key === state.step) >= index
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-700 text-slate-400'
+                    ? 'bg-accent text-white'
+                    : 'bg-paper-edge text-ink-faint'
                 }`}
               >
                 {index + 1}
@@ -384,7 +389,7 @@ export function OnboardingPage({ onComplete }: Props) {
               {index < steps.length - 1 && (
                 <div
                   className={`w-8 h-0.5 mx-1 ${
-                    steps.findIndex((x) => x.key === state.step) > index ? 'bg-blue-600' : 'bg-slate-700'
+                    steps.findIndex((x) => x.key === state.step) > index ? 'bg-accent' : 'bg-paper-edge'
                   }`}
                 />
               )}

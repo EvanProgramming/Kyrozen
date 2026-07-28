@@ -29,6 +29,9 @@ class DesktopClient:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            # Persistence adapters use the common database primary-key name,
+            # while API consumers use the more descriptive client_id.
+            "id": self.client_id,
             "client_id": self.client_id,
             "user_id": self.user_id,
             "device_name": self.device_name,

@@ -157,10 +157,13 @@ class ProjectContextBuilder:
         # Enforce a hard ceiling on follow-up questions so the agent does not
         # keep probing indefinitely.
         questions_asked = len(memory_backend.query(category="discovery_qa", limit=100, project_id=project.id))
-        max_follow_up_questions = 2
+        max_follow_up_questions = 4
         at_question_limit = questions_asked >= max_follow_up_questions
 
-        if filled_count >= 4 or at_question_limit:
+        # Four surface-level fields are enough to start a brief, but not enough
+        # to understand the user's motivation and impact. Continue until the
+        # brief has meaningful depth, while respecting the four-question cap.
+        if filled_count >= 6 or at_question_limit:
             lines.append(
                 f"\n[Discovery Policy] Enough information collected ({filled_count}/{len(key_dimensions)} key dimensions, "
                 f"{questions_asked} follow-up questions asked). "

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from kyrozen.core.task import Task, TaskManager
+from kyrozen.desktop.models import DesktopClient
 from kyrozen.project import Project
 from kyrozen.project.db import KyrozenDatabase
 
@@ -67,3 +68,15 @@ def test_cascade_delete_project(temp_dir: str):
     db.delete_project(p.id)
     assert db.get_project(p.id) is None
     assert len(db.list_decisions(p.id)) == 0
+
+
+def test_desktop_client_model_persists_without_key_translation(temp_dir: str):
+    db = KyrozenDatabase(os.path.join(temp_dir, "kyrozen.db"))
+    client = DesktopClient(user_id="user-1", device_name="Test Mac")
+
+    db.save_desktop_client(client.to_dict())
+
+    stored = db.get_desktop_client(client.client_id)
+    assert stored is not None
+    assert stored["id"] == client.client_id
+    assert stored["device_name"] == "Test Mac"

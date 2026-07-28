@@ -98,7 +98,7 @@ npm run dev
 
 ### 6.4 本地工作目录
 
-每个项目首次在桌面端操作时，客户端会弹出目录选择对话框，默认路径为 `~/KyrozenProjects/{project_id}`。选择后路径会持久化到 `userData/workspaces.json`，后续同一项目自动使用已选目录。
+每个项目默认使用 `~/KyrozenProjects/{project_id}`，并将路径持久化到 `userData/workspaces.json`。用户也可以在客户端内为项目改选其他目录。
 
 ## 7. 构建与打包
 
@@ -113,7 +113,7 @@ npm run build
 - `dist-electron/`：Electron 主进程与预加载脚本编译输出
 - `release/`：最终安装包（按平台生成 dmg / nsis / AppImage）
 
-注意：当前 macOS 未配置 Apple Developer 签名，Windows 尝试使用免费签名方案。
+macOS 包默认使用完整的 ad-hoc 签名，不需要付费 Apple Developer 账号。首次打开网络下载的 DMG 时，macOS 仍会提示无法验证开发者；尝试打开一次后，在“系统设置 → 隐私与安全 → 安全性”选择“仍要打开”。之后该应用可以正常启动。正式包必须保持 `codesign --verify --deep --strict` 验证通过，不能发布构建日志中出现 `skipped macOS application code signing` 的产物。
 
 ## 8. 安全说明
 

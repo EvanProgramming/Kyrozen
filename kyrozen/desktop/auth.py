@@ -20,10 +20,12 @@ from typing import Any
 _OPEN_TOKENS: dict[str, dict[str, Any]] = {}
 _REFRESH_TOKENS: dict[str, dict[str, Any]] = {}
 _WS_TOKENS: dict[str, dict[str, Any]] = {}
+_API_TOKENS: dict[str, dict[str, Any]] = {}
 
 _OPEN_TOKEN_TTL_SECONDS = 5 * 60  # 5 minutes
 _REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 _WS_TOKEN_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+_API_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 _PAIRING_CODE_TTL_SECONDS = 10 * 60  # 10 minutes
 _PAIRING_POLL_TTL_SECONDS = 10 * 60  # 10 minutes
 
@@ -45,13 +47,18 @@ class DesktopTokenManager:
     """Generate and validate desktop client tokens."""
 
     @staticmethod
-    def create_open_token(user_id: str, project_id: str | None = None) -> str:
+    def create_open_token(
+        user_id: str,
+        project_id: str | None = None,
+        access_token: str | None = None,
+    ) -> str:
         """Create a short-lived single-use token for launching the desktop app."""
         _purge_expired(_OPEN_TOKENS)
         token = secrets.token_urlsafe(32)
         _OPEN_TOKENS[token] = {
             "user_id": user_id,
             "project_id": project_id,
+            "access_token": access_token,
             "exp": _now() + _OPEN_TOKEN_TTL_SECONDS,
             "used": False,
         }
@@ -65,13 +72,18 @@ class DesktopTokenManager:
         if data is None or data.get("used"):
             return None
         data["used"] = True
-        return {"user_id": data["user_id"], "project_id": data.get("project_id")}
+        return {
+            "user_id": data["user_id"],
+            "project_id": data.get("project_id"),
+            "access_token": data.get("access_token"),
+        }
 
     @staticmethod
     def create_credentials(user_id: str) -> dict[str, str]:
         """Create refresh token and WebSocket token for a verified desktop client."""
         _purge_expired(_REFRESH_TOKENS)
         _purge_expired(_WS_TOKENS)
+        _purge_expired(_API_TOKENS)
 
         refresh_token = secrets.token_urlsafe(32)
         _REFRESH_TOKENS[refresh_token] = {
@@ -85,9 +97,16 @@ class DesktopTokenManager:
             "exp": _now() + _WS_TOKEN_TTL_SECONDS,
         }
 
+        api_token = f"kzd_{secrets.token_urlsafe(32)}"
+        _API_TOKENS[api_token] = {
+            "user_id": user_id,
+            "exp": _now() + _API_TOKEN_TTL_SECONDS,
+        }
+
         return {
             "refresh_token": refresh_token,
             "ws_token": ws_token,
+            "api_token": api_token,
         }
 
     @staticmethod
@@ -102,6 +121,13 @@ class DesktopTokenManager:
         """Return user_id if the WebSocket token is valid."""
         _purge_expired(_WS_TOKENS)
         data = _WS_TOKENS.get(token)
+        return data["user_id"] if data else None
+
+    @staticmethod
+    def verify_api_token(token: str) -> str | None:
+        """Return user_id if a desktop REST API token is valid."""
+        _purge_expired(_API_TOKENS)
+        data = _API_TOKENS.get(token)
         return data["user_id"] if data else None
 
 
@@ -123,7 +149,7 @@ class DesktopPairingManager:
         return code
 
     @staticmethod
-    def confirm_code(code: str, user_id: str) -> bool:
+    def confirm_code(code: str, user_id: str, access_token: str | None = None) -> bool:
         """Confirm a pairing code from an authenticated browser session."""
         _purge_expired(_PAIRING_CODES)
         data = _PAIRING_CODES.get(code)
@@ -134,9 +160,16 @@ class DesktopPairingManager:
             "user_id": user_id,
             "exp": _now() + _WS_TOKEN_TTL_SECONDS,
         }
+        api_token = access_token or f"kzd_{secrets.token_urlsafe(32)}"
+        if not access_token:
+            _API_TOKENS[api_token] = {
+                "user_id": user_id,
+                "exp": _now() + _API_TOKEN_TTL_SECONDS,
+            }
         data["confirmed"] = True
         data["user_id"] = user_id
         data["ws_token"] = ws_token
+        data["access_token"] = api_token
         return True
 
     @staticmethod
@@ -147,7 +180,11 @@ class DesktopPairingManager:
         if data is None:
             return None
         if data.get("confirmed") and data.get("ws_token"):
-            return {"user_id": data["user_id"], "ws_token": data["ws_token"]}
+            return {
+                "user_id": data["user_id"],
+                "ws_token": data["ws_token"],
+                "access_token": data.get("access_token"),
+            }
         return {"pending": True}
 
 

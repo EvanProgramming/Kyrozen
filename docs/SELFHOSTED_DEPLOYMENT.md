@@ -60,7 +60,7 @@ KYROZEN_CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,null
 # 可选：GitHub OAuth（用于客户端一键提交/推送）
 GITHUB_OAUTH_CLIENT_ID=your-github-app-id
 GITHUB_OAUTH_CLIENT_SECRET=your-github-app-secret
-GITHUB_OAUTH_REDIRECT_URI=https://your-domain.com/api/auth/github/callback
+GITHUB_OAUTH_REDIRECT_URI=https://your-domain.com/api/auth/github/login-callback
 ```
 
 ### 3.  配置 Caddy（反向代理 + HTTPS）

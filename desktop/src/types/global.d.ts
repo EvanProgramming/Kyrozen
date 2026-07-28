@@ -20,12 +20,20 @@ export interface KyrozenAPI {
   getProjects: () => Promise<Array<{ id: string; name: string; current_stage: string; description?: string }>>;
   createProject: (name: string, description?: string, goal?: string) => Promise<{ success: boolean; project?: { id: string; name: string; current_stage: string }; error?: string }>;
   getProjectState: (projectId: string) => Promise<{ project_id: string; stage: string; progress: number; blocked_reason: string | null; next_action: { action: string; reason: string; target_mode: string } | null } | null>;
+  getProjectWorkspace: (projectId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
+  createDecision: (projectId: string, decision: string, reason: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
+  createFeedback: (projectId: string, description: string, type: string, priority: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
+  updateSuggestionStatus: (projectId: string, suggestionId: string, status: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
+  deleteLearningItem: (projectId: string, kind: string, itemId: string) => Promise<{ success: boolean; error?: string }>;
+  exportProject: (projectId: string) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>;
   getQuota: () => Promise<{
     allowed: boolean;
     reason: string;
     used: number;
     limit: number;
     remaining: number;
+    plan?: 'free' | 'developer';
+    project_limit?: number;
   }>;
   getServerUrl: () => Promise<string>;
   setServerUrl: (url: string) => Promise<{ success: boolean; serverUrl?: string; error?: string }>;
@@ -44,17 +52,29 @@ export interface KyrozenAPI {
   }>;
 
   requestInitialToken: () => void;
+  getInitialSession: () => Promise<{ wsToken: string | null; serverUrl: string; currentProjectId: string | null; connection: ConnectionState; message: string }>;
+  getUserProfile: () => Promise<{ name: string; email: string; githubUsername: string; avatarUrl: string }>;
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => () => void;
   onProtocolUrl: (callback: (url: string) => void) => () => void;
   onSessionResumed: (callback: (token: string, serverUrl: string) => void) => () => void;
   onSessionEnded: (callback: () => void) => () => void;
   onOpenSettings: (callback: () => void) => () => void;
-  sendChat: (message: string) => void;
+  sendChat: (message: string) => Promise<{
+    success: boolean;
+    taskId?: string;
+    dispatched?: boolean;
+    error?: string;
+    content?: string;
+    operations?: Array<{ description: string; status: string; timestamp: string }>;
+  }>;
   cancelTask: () => void;
   startPairing: (serverUrl: string) => Promise<{ success: boolean; code?: string; expiresIn?: number; error?: string }>;
   pollPairing: (serverUrl: string, code: string) => Promise<{ success: boolean; ready?: boolean; wsToken?: string; error?: string }>;
-  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) => () => void;
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string; operations?: Array<{ description: string; status: string; timestamp: string }> }) => void) => () => void;
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => () => void;
+  onTaskActivity: (callback: (activity: { task_id: string; description: string; status: string }) => void) => () => void;
+  onConfirmationRequest: (callback: (request: { confirmation_id: string; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string }) => void) => () => void;
+  respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean) => Promise<{ success: boolean; error?: string }>;
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;
   onOpenPreviewUrl: (callback: (url: string) => void) => () => void;
 
@@ -82,6 +102,7 @@ export interface KyrozenAPI {
     success: boolean;
     tools: Record<string, { command: string; path: string | null; bundled: boolean; version: string | null }>;
   }>;
+  onHardwareToolStatus: (callback: (tools: Record<string, { command: string; path: string | null; bundled: boolean; version: string | null }>) => void) => () => void;
   connectGitHub: () => Promise<{ success: boolean; error?: string }>;
   startGithubLogin: () => Promise<{ success: boolean; error?: string }>;
   createGitHubRepo: (name: string, description?: string, isPrivate?: boolean) => Promise<{ success: boolean; url?: string; cloneUrl?: string; error?: string }>;

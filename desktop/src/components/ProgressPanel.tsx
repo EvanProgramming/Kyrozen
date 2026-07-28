@@ -8,95 +8,64 @@ interface ProjectState {
   next_action: { action: string; reason: string; target_mode: string } | null;
 }
 
-const STAGE_LABELS: Record<string, string> = {
-  problem_discovery: '1. 问题发现',
-  market_research: '2. 市场调研',
-  product_definition: '3. 产品定义',
-  solution_design: '4. 方案设计',
-  development: '5. 开发',
-  testing: '6. 测试',
-  iteration: '7. 迭代改进',
-};
+const STAGES = [
+  ['problem_discovery', '问题探索'],
+  ['market_research', '市场调研'],
+  ['product_definition', '产品定义'],
+  ['solution_design', '方案设计'],
+  ['development', '开发'],
+  ['testing', '测试验证'],
+  ['iteration', '迭代改进'],
+] as const;
 
-const STAGE_ORDER = Object.keys(STAGE_LABELS);
-
-interface Props {
-  projectId: string;
-}
-
-export function ProgressPanel({ projectId }: Props) {
+export function ProgressPanel({ projectId }: { projectId: string }) {
   const [state, setState] = useState<ProjectState | null>(null);
 
   useEffect(() => {
     if (!window.kyrozen || !projectId) return;
     let cancelled = false;
-    window.kyrozen.getProjectState(projectId).then((s) => {
-      if (!cancelled && s) setState(s);
-    });
-    return () => { cancelled = true; };
+    const refresh = async () => {
+      const next = await window.kyrozen?.getProjectState(projectId);
+      if (!cancelled && next) setState(next);
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [projectId]);
 
-  if (!state) {
-    return (
-      <div className="p-4 text-xs text-slate-500">加载进度中...</div>
-    );
-  }
-
-  const currentIdx = STAGE_ORDER.indexOf(state.stage);
+  if (!state) return <div className="p-4 text-xs text-ink-faint">正在读取项目进度…</div>;
+  const currentIndex = Math.max(0, STAGES.findIndex(([key]) => key === state.stage));
+  const derivedProgress = Math.round((currentIndex / (STAGES.length - 1)) * 100);
+  const progress = Math.max(state.progress || 0, derivedProgress);
 
   return (
-    <div className="p-4">
-      <h2 className="text-sm font-semibold text-slate-200 mb-3">开发进度</h2>
-
-      <div className="text-xs text-slate-300 mb-1">
-        当前阶段：<span className="text-blue-400 font-medium">{STAGE_LABELS[state.stage] || state.stage}</span>
+    <section className="p-4 border-b border-line" aria-label="项目进度">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-hand text-lg text-ink">项目进度</h2>
+        <span className="text-xs text-accent font-medium">{progress}%</span>
       </div>
-
-      <div className="w-full bg-slate-700 rounded-full h-2 mb-3">
-        <div
-          className="bg-blue-500 h-2 rounded-full transition-all"
-          style={{ width: `${Math.max(1, state.progress)}%` }}
-        />
+      <div className="w-full h-1.5 bg-paper-edge rounded-full overflow-hidden mb-4">
+        <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${progress}%` }} />
       </div>
-
-      <div className="text-xs text-slate-400 mb-4">{state.progress}%</div>
-
-      {state.next_action && (
-        <div className="bg-slate-800 rounded-lg p-2 mb-3 border border-slate-700">
-          <div className="text-xs font-medium text-slate-300">{state.next_action.action}</div>
-          <div className="text-xs text-slate-500 mt-0.5">{state.next_action.reason}</div>
-        </div>
-      )}
-
-      {state.blocked_reason && (
-        <div className="text-xs text-red-400 bg-red-400/10 rounded p-2 mb-3">
-          ⚠ {state.blocked_reason}
-        </div>
-      )}
-
-      <div className="space-y-0.5">
-        {STAGE_ORDER.map((stage, idx) => {
-          const isCurrent = stage === state.stage;
-          const isPast = idx < currentIdx;
+      <div className="space-y-2">
+        {STAGES.map(([key, label], index) => {
+          const current = index === currentIndex;
+          const complete = index < currentIndex;
           return (
-            <div
-              key={stage}
-              className={`text-xs flex items-center gap-1.5 px-2 py-0.5 rounded ${
-                isCurrent
-                  ? 'bg-blue-600/20 text-blue-300 font-medium'
-                  : isPast
-                  ? 'text-slate-500'
-                  : 'text-slate-600'
-              }`}
-            >
-              <span className={`w-2 h-2 rounded-full ${
-                isCurrent ? 'bg-blue-400' : isPast ? 'bg-slate-500' : 'bg-slate-700'
-              }`} />
-              {STAGE_LABELS[stage]}
+            <div key={key} className={`flex items-center gap-2 text-xs ${current ? 'text-ink font-medium' : complete ? 'text-ink-soft' : 'text-ink-ghost'}`}>
+              <span className={`w-2.5 h-2.5 rounded-full ${current ? 'bg-accent' : complete ? 'bg-success' : 'border border-line-strong bg-surface'}`} />
+              <span>{label}</span>
             </div>
           );
         })}
       </div>
-    </div>
+      {state.next_action && (
+        <div className="mt-4 panel p-3">
+          <div className="text-xs font-medium text-ink">下一步：{state.next_action.action}</div>
+          <div className="text-xs text-ink-faint mt-1">{state.next_action.reason}</div>
+        </div>
+      )}
+      {state.blocked_reason && <div className="mt-3 bg-danger-soft text-danger border border-line rounded-sm p-2 text-xs">{state.blocked_reason}</div>}
+    </section>
   );
 }

@@ -6,10 +6,10 @@ interface Props {
 }
 
 const colorMap: Record<ConnectionState, string> = {
-  disconnected: 'bg-gray-600',
-  connecting: 'bg-yellow-600',
-  connected: 'bg-green-600',
-  error: 'bg-red-600',
+  disconnected: 'bg-ink-ghost',
+  connecting: 'bg-warning',
+  connected: 'bg-success',
+  error: 'bg-danger',
 };
 
 export function ConnectionStatus({ state, message }: Props) {

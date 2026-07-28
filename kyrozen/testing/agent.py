@@ -30,6 +30,7 @@ class TestingAgent(BaseAgent):
             "If no tool is needed, reply with a plain text answer.\n\n"
             "Available tools:\n" + tools_text + "\n\n"
             "Rules:\n"
+            "- Always respond in the same language as the user's latest message.\n"
             "- Read the PRD, Product Brief, Technical Plan, and existing implementation from the "
             "context before designing any test.\n"
             "- ALWAYS start by proposing a Test Plan and saving it with save_test_plan. "

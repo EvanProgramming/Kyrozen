@@ -1,16 +1,250 @@
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Long+Cang&family=Spline+Sans+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  background-color: #0f172a;
-  color: #e2e8f0;
-  overflow: hidden;
+/*
+ * Kyrozen 桌面端设计系统 —— 暖色手绘风
+ * 参考：claude.ai（暖米背景 #F0EEE6）+ moraxcheng.me（墨色文字 #201B15）
+ * 三主色：暖米背景 / 近黑墨色文字 / 深蓝强调 #1E40AF
+ * 规则：禁止任何渐变色；扁平化；不使用圆角卡片与投影；仅用 1px 实线分隔。
+ */
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* 纸面（暖米色系，源自 claude.ai 背景） */
+    --paper: #f0eee6;
+    --paper-sink: #eae8dc;
+    --paper-edge: #e1ded2;
+    --surface: #faf9f2;
+
+    /* 墨色（文字，源自 moraxcheng.me --ink 系） */
+    --ink: #201b15;
+    --ink-soft: #4e4841;
+    --ink-faint: #6e6862;
+    --ink-ghost: #8a857e;
+
+    /* 线条（墨色的透明化，扁平分隔） */
+    --line: rgba(32, 27, 21, 0.14);
+    --line-strong: rgba(32, 27, 21, 0.3);
+
+    /* 深蓝强调 */
+    --accent: #1e40af;
+    --accent-deep: #1e3a8a;
+    --accent-soft: #dce5f7;
+
+    /* 手绘荧光笔（实色，非渐变） */
+    --hl-green: #dce7c5;
+    --hl-blue: #d9e4f7;
+
+    /* 功能色（暖调） */
+    --success: #3f7a44;
+    --success-soft: #e0ead9;
+    --warning: #b5641e;
+    --warning-soft: #f2e5d0;
+    --danger: #b44434;
+    --danger-soft: #f3deda;
+
+    /* 形状：仅小控件 4px，面板 2px；无投影 */
+    --radius: 4px;
+    --radius-panel: 2px;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--paper);
+    color: var(--ink);
+    line-height: 1.6;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100vh;
+    width: 100vw;
+  }
+
+  button {
+    font-family: inherit;
+  }
+
+  ::selection {
+    background-color: var(--hl-blue);
+    color: var(--ink);
+  }
+
+  /* 细滚动条，融入纸面 */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--paper-edge);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--ink-ghost);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
-#root {
-  height: 100vh;
-  width: 100vw;
+@layer components {
+  /* 手绘标题体：Caveat 拉丁 + Long Cang 中文 */
+  .font-hand {
+    font-family: 'Caveat', 'Long Cang', 'PingFang SC', cursive;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .font-mono {
+    font-family: 'Spline Sans Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  /* 按钮：实色、4px、无阴影 */
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 font-medium transition-colors duration-150 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed;
+    border-radius: var(--radius);
+    border: 1px solid transparent;
+  }
+
+  .btn-primary {
+    @apply btn text-white;
+    background-color: var(--accent);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--accent-deep);
+  }
+
+  .btn-secondary {
+    @apply btn;
+    background-color: var(--surface);
+    border-color: var(--line-strong);
+    color: var(--ink-soft);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background-color: var(--paper-sink);
+    color: var(--ink);
+  }
+
+  .btn-ghost {
+    @apply btn;
+    color: var(--ink-faint);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--paper-sink);
+    color: var(--ink);
+  }
+
+  .btn-danger {
+    @apply btn text-white;
+    background-color: var(--danger);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: #96362a;
+  }
+
+  .btn-success {
+    @apply btn text-white;
+    background-color: var(--success);
+  }
+  .btn-success:hover:not(:disabled) {
+    background-color: #356639;
+  }
+
+  /* 输入框：纸面 + 实线边，聚焦描深蓝 */
+  .input {
+    @apply w-full px-3 py-2 text-sm transition-colors focus:outline-none;
+    background-color: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    color: var(--ink);
+  }
+  .input::placeholder {
+    color: var(--ink-ghost);
+  }
+  .input:focus {
+    border-color: var(--accent);
+  }
+  .input:disabled {
+    opacity: 0.5;
+  }
+
+  .label {
+    @apply block text-sm font-medium mb-1;
+    color: var(--ink-soft);
+  }
+
+  /* 扁平面板：实色面 + 1px 边，无阴影、2px 微圆角 */
+  .panel {
+    background-color: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-panel);
+  }
+
+  /* 荧光笔行内标记（实色块） */
+  .hl-green {
+    background-color: var(--hl-green);
+    padding: 0 0.15em;
+  }
+  .hl-blue {
+    background-color: var(--hl-blue);
+    padding: 0 0.15em;
+  }
+
+  /* 手绘波浪下划线（实色 SVG 笔触，非渐变） */
+  .wavy-green {
+    text-decoration: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='4' viewBox='0 0 24 4'%3E%3Cpath d='M0 2 Q3 0.5 6 2 T12 2 T18 2 T24 2' fill='none' stroke='%233f7a44' stroke-width='1.6'/%3E%3C/svg%3E");
+    background-repeat: repeat-x;
+    background-position: 0 100%;
+    padding-bottom: 3px;
+  }
+  .wavy-blue {
+    text-decoration: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='4' viewBox='0 0 24 4'%3E%3Cpath d='M0 2 Q3 0.5 6 2 T12 2 T18 2 T24 2' fill='none' stroke='%231e40af' stroke-width='1.6'/%3E%3C/svg%3E");
+    background-repeat: repeat-x;
+    background-position: 0 100%;
+    padding-bottom: 3px;
+  }
+
+  /* 状态文本色 */
+  .text-success { color: var(--success); }
+  .text-warning { color: var(--warning); }
+  .text-danger { color: var(--danger); }
+
+  .markdown-body { @apply text-sm leading-relaxed; color: inherit; }
+  .markdown-body > :first-child { margin-top: 0; }
+  .markdown-body > :last-child { margin-bottom: 0; }
+  .markdown-body p { margin: 0.45rem 0; }
+  .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+    font-family: 'Caveat', 'Long Cang', 'PingFang SC', cursive;
+    font-weight: 600;
+    color: inherit;
+    margin: 0.9rem 0 0.35rem;
+    line-height: 1.25;
+  }
+  .markdown-body h1 { font-size: 1.5rem; }
+  .markdown-body h2 { font-size: 1.25rem; }
+  .markdown-body h3 { font-size: 1.1rem; }
+  .markdown-body ul { list-style: disc; padding-left: 1.25rem; margin: 0.45rem 0; }
+  .markdown-body ol { list-style: decimal; padding-left: 1.25rem; margin: 0.45rem 0; }
+  .markdown-body li { margin: 0.2rem 0; }
+  .markdown-body a { color: var(--accent); text-decoration: underline; }
+  .markdown-body a:hover { color: var(--accent-deep); }
+  .markdown-body code { font-family: 'Spline Sans Mono', ui-monospace, monospace; background: var(--paper-sink); padding: 0.1rem 0.25rem; border-radius: 2px; }
+  .markdown-body pre { background: var(--paper-sink); border: 1px solid var(--line); border-radius: 2px; padding: 0.75rem; overflow: auto; margin: 0.6rem 0; }
+  .markdown-body pre code { background: transparent; padding: 0; }
+  .markdown-body blockquote { border-left: 2px solid var(--accent); padding-left: 0.75rem; color: var(--ink-soft); margin: 0.6rem 0; }
+  .markdown-body table { width: 100%; border-collapse: collapse; margin: 0.6rem 0; font-size: 0.75rem; }
+  .markdown-body th, .markdown-body td { border: 1px solid var(--line); padding: 0.4rem 0.5rem; text-align: left; }
+  .markdown-body th { background: var(--paper-sink); }
 }

@@ -57,6 +57,7 @@ class BaseAgent:
             "If no tool is needed, reply with a plain text answer.\n\n"
             "Available tools:\n" + tools_text + "\n\n"
             "Rules:\n"
+            "- Always respond in the same language as the user's latest message.\n"
             "- Use structured parameters, not plain strings.\n"
             "- Do not invent tool names or actions.\n"
             "- Do NOT use XML tags such as <tool_call> for tool calls; use JSON only.\n"

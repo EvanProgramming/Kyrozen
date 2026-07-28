@@ -11,12 +11,14 @@ interface GitStatus {
   error?: string;
 }
 
-export function GitPanel() {
+export function GitPanel({ projectId }: { projectId: string | null }) {
   const kyrozen = window.kyrozen!;
   const [connected, setConnected] = useState(false);
   const [scope, setScope] = useState<string | undefined>();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [remoteUrl, setRemoteUrl] = useState('');
+  const [repositoryName, setRepositoryName] = useState('');
+  const [repositoryPrivate, setRepositoryPrivate] = useState(true);
   const [commitMessage, setCommitMessage] = useState('');
   const [autoCommit, setAutoCommit] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -34,7 +36,8 @@ export function GitPanel() {
   };
 
   useEffect(() => {
-    loadStatus();
+    if (!projectId) { setStatus(null); return; }
+    void loadStatus();
     const unsubscribe = kyrozen.onGitHubStatus((st) => {
       setConnected(st.connected);
       setScope(st.scope);
@@ -43,7 +46,7 @@ export function GitPanel() {
     return () => {
       unsubscribe?.();
     };
-  }, [kyrozen]);
+  }, [kyrozen, projectId]);
 
   const connect = async () => {
     setLoading(true);
@@ -79,11 +82,23 @@ export function GitPanel() {
     if (!result.success) {
       setError(result.error || '提交失败');
     } else {
-      setSuccess('提交并推送成功');
+      setSuccess(connected ? '提交完成；已配置远程时同时推送' : '本地提交成功');
       setCommitMessage('');
     }
     setLoading(false);
     await loadStatus();
+  };
+
+  const createRepository = async () => {
+    if (!repositoryName.trim()) return;
+    setLoading(true); setError(null); setSuccess(null);
+    const result = await kyrozen.createGitHubRepo(repositoryName.trim(), '', repositoryPrivate);
+    if (result.success) {
+      setSuccess('GitHub 仓库已创建并连接到当前项目');
+      setRepositoryName('');
+      await loadStatus();
+    } else setError(result.error || '创建仓库失败');
+    setLoading(false);
   };
 
   const toggleAutoCommit = async () => {
@@ -101,8 +116,9 @@ export function GitPanel() {
   const changedCount = (status?.modified?.length || 0) + (status?.untracked?.length || 0);
 
   return (
-    <div className="flex flex-col overflow-y-auto border-t border-slate-700 p-4">
-      <h3 className="text-sm font-semibold text-slate-200 mb-3">GitHub / Git</h3>
+    <div className="flex flex-col overflow-y-auto border-t border-line p-4">
+      <h3 className="font-hand text-lg text-ink mb-3">GitHub / Git</h3>
+      {!projectId && <div className="text-xs text-ink-faint">选择项目后管理仓库</div>}
 
       <div className="mb-4 p-3 panel">
         <div className="flex items-center justify-between mb-2">
@@ -121,6 +137,18 @@ export function GitPanel() {
           {connected ? '已授权' : '授权 GitHub'}
         </button>
       </div>
+
+      {connected && !status?.isRepo && (
+        <div className="mb-4 p-3 panel space-y-2">
+          <div className="text-sm font-medium">创建 GitHub 仓库</div>
+          <input className="input" value={repositoryName} onChange={(event) => setRepositoryName(event.target.value)} placeholder="仓库名称" />
+          <label className="flex items-center gap-2 text-xs text-ink-soft">
+            <input type="checkbox" checked={repositoryPrivate} onChange={(event) => setRepositoryPrivate(event.target.checked)} />
+            私有仓库
+          </label>
+          <button type="button" onClick={() => void createRepository()} disabled={loading || !repositoryName.trim()} className="btn-primary w-full text-sm">创建并连接</button>
+        </div>
+      )}
 
       <div className="mb-4 p-3 panel">
         <div className="text-sm font-medium mb-2">仓库</div>
@@ -181,7 +209,7 @@ export function GitPanel() {
             disabled={loading || changedCount === 0}
             className="btn-primary w-full text-sm py-1.5"
           >
-            提交并推送
+            {connected ? '提交并推送' : '本地提交'}
           </button>
 
           <label className="flex items-center gap-2 text-sm text-ink-soft cursor-pointer">

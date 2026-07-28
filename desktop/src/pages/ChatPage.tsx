@@ -1,57 +1,91 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+type OperationStatus = 'pending' | 'running' | 'failed' | 'completed';
+
+interface Operation {
+  description: string;
+  status: string;
+  timestamp: string;
+}
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
-  raw?: string;
+  operations?: Operation[];
+}
+
+interface PlanStep {
+  label: string;
+  status: OperationStatus;
 }
 
 interface ExecutionPlan {
   task_id: string;
-  steps: string[];
+  steps: PlanStep[];
 }
+
+interface ConfirmationRequest {
+  confirmation_id: string;
+  task_id: string;
+  tool: string;
+  action: string;
+  parameters: Record<string, unknown>;
+  reason: string;
+  detail: string;
+}
+
+interface QuestionOption { label: string; value: string }
+interface QuestionCard { question: string; options: QuestionOption[]; allow_other?: boolean }
 
 interface ChatPageProps {
   projectId: string | null;
   onOpenPreview?: (url: string) => void;
+  onProjectChanged?: () => void;
 }
 
-const LOCAL_URL_RE = /(https?:\/\/localhost(:\d+)(\/[^\s<>\"]*))/g;
+const QUESTION_BLOCK_RE = /```kyrozen-question\s*\n([\s\S]*?)```/i;
 
-function isQuotaError(content: string): boolean {
-  return /配额|额度|余额不足|insufficient quota|quota exceeded/i.test(content);
-}
-
-function openExternalUrl(url: string): void {
-  window.open(url, '_blank', 'noopener,noreferrer');
-}
-
-function renderMessageContent(content: string, onOpenPreview?: (url: string) => void) {
-  if (!onOpenPreview) return content;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-  while ((match = LOCAL_URL_RE.exec(content)) !== null) {
-    const [fullUrl] = match;
-    if (match.index > lastIndex) {
-      parts.push(content.slice(lastIndex, match.index));
-    }
-    parts.push(
-      <button
-        key={match.index}
-        onClick={() => onOpenPreview(fullUrl)}
-        className="text-blue-300 hover:text-blue-200 underline"
-        title="在内置预览中打开"
-      >
-        {fullUrl}
-      </button>
-    );
-    lastIndex = match.index + fullUrl.length;
+function splitQuestionBlock(content: string): { markdown: string; question: QuestionCard | null } {
+  const match = content.match(QUESTION_BLOCK_RE);
+  if (!match) return { markdown: content, question: null };
+  try {
+    const parsed = JSON.parse(match[1]) as QuestionCard;
+    if (!parsed.question || !Array.isArray(parsed.options)) throw new Error('invalid question');
+    return { markdown: content.replace(match[0], '').trim(), question: parsed };
+  } catch {
+    return { markdown: content, question: null };
   }
-  if (lastIndex < content.length) {
-    parts.push(content.slice(lastIndex));
-  }
-  return parts.length > 0 ? parts : content;
+}
+
+function Markdown({ content, onOpenPreview }: { content: string; onOpenPreview?: (url: string) => void }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      className="markdown-body"
+      components={{
+        a: ({ href, children }) => {
+          const url = href || '';
+          const local = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/.test(url);
+          return (
+            <a
+              href={url}
+              onClick={(event) => {
+                event.preventDefault();
+                if (local && onOpenPreview) onOpenPreview(url);
+                else window.open(url, '_blank', 'noopener,noreferrer');
+              }}
+            >
+              {children}
+            </a>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 function readDroppedFile(file: File): Promise<{ name: string; content: string }> {
@@ -63,203 +97,271 @@ function readDroppedFile(file: File): Promise<{ name: string; content: string }>
   });
 }
 
-export function ChatPage({ projectId, onOpenPreview }: ChatPageProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: '已连接到 Kyrozen 云端。选择左侧项目后，可以让 AI 帮你生成代码、操作本地文件或启动预览。' },
-  ]);
+const dotClass: Record<OperationStatus, string> = {
+  pending: 'border border-line-strong bg-surface',
+  running: 'bg-accent',
+  failed: 'bg-danger',
+  completed: 'bg-success',
+};
+
+export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPageProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [activity, setActivity] = useState('');
   const [plan, setPlan] = useState<ExecutionPlan | null>(null);
+  const [planExpanded, setPlanExpanded] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<Array<{ name: string; content: string }>>([]);
-  const [expandedRaw, setExpandedRaw] = useState<Set<number>>(new Set());
+  const [expandedOperations, setExpandedOperations] = useState<Set<number>>(new Set());
+  const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Conversation UI is project-scoped. Never carry a user's messages,
+    // execution plan, confirmation, or attachments into another project.
+    setMessages([]);
+    setInput('');
+    setIsRunning(false);
+    setActivity('');
+    setPlan(null);
+    setPendingAttachments([]);
+    setExpandedOperations(new Set());
+    setConfirmation(null);
+  }, [projectId]);
+
+  useEffect(() => {
     if (!window.kyrozen) return;
-    const chatHandler = (msg: { role: string; content: string; raw?: string }) => {
-      const item: Message = {
+    const unsubChat = window.kyrozen.onChatMessage((msg) => {
+      if (msg.role === 'system' && /PlatformIO|Python Agent|项目工作目录|Artifact|\[INFO\]|\[model\]|\[tool\]/i.test(msg.content)) return;
+      setMessages((prev) => [...prev, {
         role: msg.role as Message['role'],
         content: msg.content,
-        raw: msg.raw,
-      };
-      setMessages((prev) => [...prev, item]);
-      if (msg.role === 'assistant' || msg.role === 'system') {
+        operations: msg.operations,
+      }]);
+      if (msg.role === 'assistant') {
         setIsRunning(false);
+        setActivity('');
+        setPlan((current) => current ? {
+          ...current,
+          steps: current.steps.map((step) => ({ ...step, status: 'completed' })),
+        } : null);
+        onProjectChanged?.();
       }
-    };
-    const planHandler = (p: ExecutionPlan) => {
-      setPlan(p);
-    };
-    window.kyrozen.onChatMessage(chatHandler);
-    window.kyrozen.onExecutionPlan(planHandler);
+    });
+    const unsubPlan = window.kyrozen.onExecutionPlan((incoming) => {
+      setPlan({ task_id: incoming.task_id, steps: incoming.steps.map((label) => ({ label, status: 'pending' })) });
+      setPlanExpanded(true);
+    });
+    const unsubActivity = window.kyrozen.onTaskActivity((incoming) => {
+      setActivity(incoming.description);
+      if (incoming.status === 'running' && incoming.task_id) setIsRunning(true);
+      setPlan((current) => {
+        if (!current || (incoming.task_id && current.task_id && incoming.task_id !== current.task_id)) return current;
+        const steps = current.steps.map((step) => ({ ...step }));
+        const runningIndex = steps.findIndex((step) => step.status === 'running');
+        if (incoming.status === 'failed') {
+          const target = runningIndex >= 0 ? runningIndex : steps.findIndex((step) => step.status === 'pending');
+          if (target >= 0) steps[target].status = 'failed';
+        } else if (incoming.status === 'completed' && runningIndex >= 0) {
+          steps[runningIndex].status = 'completed';
+        } else if (incoming.status === 'running' && runningIndex < 0) {
+          const next = steps.findIndex((step) => step.status === 'pending');
+          if (next >= 0) steps[next].status = 'running';
+        }
+        return { ...current, steps };
+      });
+    });
+    const unsubConfirmation = window.kyrozen.onConfirmationRequest((request) => {
+      setConfirmation(request);
+      setActivity('等待你确认下一步操作');
+    });
     return () => {
-      // ipcRenderer listeners are not removed here because the preload wrapper
-      // does not expose a remove API; this is acceptable for the single-page UI.
+      unsubChat();
+      unsubPlan();
+      unsubActivity();
+      unsubConfirmation();
     };
-  }, []);
+  }, [onProjectChanged]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, activity, confirmation]);
 
-  const handleSend = () => {
+  const sendMessage = async (message: string) => {
+    if (!window.kyrozen || !projectId || !message.trim()) return;
+    setMessages((prev) => [...prev, { role: 'user', content: message }]);
+    setInput('');
+    setPendingAttachments([]);
+    setIsRunning(true);
+    setActivity('正在理解你的需求');
+    setPlan(null);
+    const result = await window.kyrozen.sendChat(message);
+    if (!result.success) {
+      setMessages((prev) => [...prev, { role: 'system', content: `发送失败：${result.error || '未知错误'}` }]);
+      setIsRunning(false);
+      setActivity('');
+    } else if (result.content) {
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: result.content || '',
+        operations: result.operations,
+      }]);
+      setIsRunning(false);
+      setActivity('');
+      setPlan((current) => current ? {
+        ...current,
+        steps: current.steps.map((step) => ({ ...step, status: 'completed' })),
+      } : null);
+      onProjectChanged?.();
+    }
+  };
+
+  const handleSend = async () => {
     if (!input.trim() && pendingAttachments.length === 0) return;
-    if (!window.kyrozen) return;
     if (!projectId) {
       setMessages((prev) => [...prev, { role: 'system', content: '请先选择左侧项目。' }]);
       return;
     }
-    setPlan(null);
-
     const attachmentText = pendingAttachments
       .map((att) => `\n\n--- 附件：${att.name} ---\n${att.content.slice(0, 8000)}${att.content.length > 8000 ? '\n...' : ''}`)
       .join('');
-    const fullMessage = input.trim() ? `${input.trim()}${attachmentText}` : attachmentText.trim();
-
-    setMessages((prev) => [...prev, { role: 'user', content: fullMessage }]);
-    window.kyrozen.sendChat(fullMessage);
-    setInput('');
-    setPendingAttachments([]);
-    setIsRunning(true);
+    await sendMessage(input.trim() ? `${input.trim()}${attachmentText}` : attachmentText.trim());
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
+  const respondConfirmation = async (confirmed: boolean, trust = false) => {
+    if (!confirmation || !window.kyrozen) return;
+    await window.kyrozen.respondConfirmation(confirmation.confirmation_id, confirmed, trust);
+    setConfirmation(null);
+    setActivity(confirmed ? '已确认，正在继续执行' : '已取消该操作');
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
+  const handleDrop = async (event: React.DragEvent) => {
+    event.preventDefault();
     setIsDragging(false);
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (!projectId) {
-      setMessages((prev) => [...prev, { role: 'system', content: '请先选择左侧项目后再拖拽文件。' }]);
-      return;
-    }
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length === 0) return;
-    const readFiles = await Promise.all(
-      files.map(async (file) => {
-        try {
-          return await readDroppedFile(file);
-        } catch (err: any) {
-          return { name: file.name, content: `无法读取文件: ${err.message || String(err)}` };
-        }
-      })
-    );
+    if (!projectId) return;
+    const files = Array.from(event.dataTransfer.files);
+    const readFiles = await Promise.all(files.map(async (file) => {
+      try { return await readDroppedFile(file); }
+      catch (error: any) { return { name: file.name, content: `无法读取文件: ${error.message || String(error)}` }; }
+    }));
     setPendingAttachments((prev) => [...prev, ...readFiles]);
   };
 
-  const removeAttachment = (index: number) => {
-    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleCancel = () => {
-    if (!window.kyrozen) return;
-    window.kyrozen.cancelTask();
-    setIsRunning(false);
-    setMessages((prev) => [...prev, { role: 'system', content: '已请求取消当前任务' }]);
-  };
+  const questionByMessage = useMemo(() => messages.map((message) => splitQuestionBlock(message.content)), [messages]);
 
   return (
     <div
-      className={`flex-1 flex flex-col overflow-hidden relative ${isDragging ? 'bg-blue-900/20' : ''}`}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
+      className={`flex-1 flex flex-col overflow-hidden relative ${isDragging ? 'bg-accent-soft' : ''}`}
+      onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
+      onDragLeave={(event) => { event.preventDefault(); setIsDragging(false); }}
       onDrop={handleDrop}
     >
       {isDragging && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-blue-900/40 border-2 border-dashed border-blue-400 m-4 rounded-2xl pointer-events-none">
-          <div className="text-blue-100 text-lg font-medium">释放文件以添加到附件</div>
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-hl-blue border-2 border-dashed border-accent m-4 rounded pointer-events-none">
+          <div className="text-accent text-lg font-medium">释放文件以添加到附件</div>
         </div>
       )}
+
       {plan && (
-        <div className="px-4 py-3 bg-slate-800 border-b border-slate-700">
-          <div className="text-xs font-medium text-slate-300 mb-1">AI 执行计划（将自动实施）</div>
-          <ol className="list-decimal list-inside space-y-1 text-sm text-slate-100">
-            {plan.steps.map((step, idx) => (
-              <li key={idx} className="truncate">{step}</li>
-            ))}
-          </ol>
+        <div className="bg-surface border-b border-line">
+          <button type="button" onClick={() => setPlanExpanded((value) => !value)} className="w-full px-4 py-2 flex items-center justify-between text-left">
+            <span className="font-hand text-lg text-ink">任务计划</span>
+            <span className="text-xs text-ink-faint">{planExpanded ? '收起' : '展开'}</span>
+          </button>
+          {planExpanded && (
+            <div className="px-4 pb-3 space-y-2">
+              {plan.steps.map((step, index) => (
+                <div key={`${step.label}-${index}`} className="flex items-start gap-2 text-sm text-ink-soft">
+                  <span className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${dotClass[step.status]}`} />
+                  <div className="flex-1"><Markdown content={step.label} onOpenPreview={onOpenPreview} /></div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
+
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {messages.map((msg, idx) => {
-          const isRawExpanded = expandedRaw.has(idx);
+        {messages.map((message, index) => {
+          const parsed = questionByMessage[index];
+          const expanded = expandedOperations.has(index);
           return (
-            <div
-              key={idx}
-              className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white self-end ml-auto'
-                  : 'bg-slate-700 text-slate-100'
-              }`}
-            >
-              {renderMessageContent(msg.content, onOpenPreview)}
-              {isQuotaError(msg.content) && (
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    onClick={() => openExternalUrl('https://kyrozen.com/pricing')}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors"
-                  >
-                    升级会员以继续使用
-                  </button>
+            <div key={index} className={`max-w-[84%] rounded-sm px-4 py-3 text-sm ${
+              message.role === 'user' ? 'bg-accent text-white ml-auto' : message.role === 'system' ? 'bg-warning-soft border border-line text-warning' : 'bg-surface border border-line text-ink'
+            }`}>
+              {parsed.markdown && <Markdown content={parsed.markdown} onOpenPreview={onOpenPreview} />}
+              {parsed.question && (
+                <div className="mt-3 border-t border-line pt-3">
+                  <div className="font-medium text-ink mb-2">{parsed.question.question}</div>
+                  <div className="flex flex-wrap gap-2">
+                    {parsed.question.options.map((option) => (
+                      <button key={option.value} type="button" onClick={() => void sendMessage(option.value)} disabled={isRunning} className="btn-secondary text-xs">
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
-              {msg.raw && (
-                <div className="mt-2 pt-2 border-t border-slate-600/50">
+              {message.operations && message.operations.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-line">
                   <button
                     type="button"
-                    onClick={() => {
-                      setExpandedRaw((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(idx)) {
-                          next.delete(idx);
-                        } else {
-                          next.add(idx);
-                        }
-                        return next;
-                      });
-                    }}
-                    className="text-xs text-slate-400 hover:text-blue-300 transition-colors"
+                    onClick={() => setExpandedOperations((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(index)) next.delete(index); else next.add(index);
+                      return next;
+                    })}
+                    className="text-xs text-ink-faint hover:text-accent"
                   >
-                    {isRawExpanded ? '收起原始输出' : '展开原始输出'}
+                    {expanded ? '收起操作记录' : `查看操作记录（${message.operations.length}）`}
                   </button>
-                  {isRawExpanded && (
-                    <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-400 font-mono whitespace-pre-wrap">
-                      {msg.raw}
-                    </pre>
+                  {expanded && (
+                    <div className="mt-2 bg-paper-sink border border-line rounded-sm p-3 space-y-1.5">
+                      {message.operations.map((operation, operationIndex) => (
+                        <div key={`${operation.timestamp}-${operationIndex}`} className="flex gap-2 text-xs text-ink-soft font-mono">
+                          <span className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${dotClass[(operation.status as OperationStatus) || 'completed'] || dotClass.completed}`} />
+                          <span>{operation.description}</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}
             </div>
           );
         })}
+
+        {isRunning && activity && (
+          <div className="inline-flex items-center gap-2 bg-surface border border-line rounded-sm px-3 py-2 text-sm text-ink-soft" role="status">
+            <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+            <span>{activity}</span>
+          </div>
+        )}
+
+        {confirmation && (
+          <div className="max-w-[84%] panel p-4 border-l-2 border-l-warning" role="dialog" aria-label="操作确认">
+            <div className="font-hand text-lg">需要你的确认</div>
+            <div className="text-sm text-ink mt-1">{confirmation.tool}.{confirmation.action}</div>
+            <div className="text-xs text-ink-faint mt-2">{confirmation.reason || '此操作会修改项目或运行命令。'}</div>
+            <pre className="mt-3 max-h-40 overflow-auto bg-paper-sink border border-line rounded-sm p-3 text-xs text-ink-soft font-mono whitespace-pre-wrap">{JSON.stringify(confirmation.parameters, null, 2)}</pre>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button type="button" onClick={() => void respondConfirmation(true)} className="btn-primary text-xs">确认一次</button>
+              <button type="button" onClick={() => void respondConfirmation(true, true)} className="btn-secondary text-xs">本次会话信任此类操作</button>
+              <button type="button" onClick={() => void respondConfirmation(false)} className="btn-ghost text-xs">取消</button>
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
-      <div className="p-4 border-t border-slate-700 space-y-2">
+
+      <div className="p-4 border-t border-line space-y-2 bg-paper">
         {pendingAttachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {pendingAttachments.map((att, idx) => (
-              <div
-                key={`${att.name}-${idx}`}
-                className="inline-flex items-center gap-2 px-3 py-1 bg-slate-800 border border-slate-600 rounded-full text-xs text-slate-200"
-              >
-                <span className="truncate max-w-[200px]">{att.name}</span>
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(idx)}
-                  className="text-slate-400 hover:text-red-400"
-                  aria-label="移除附件"
-                >
-                  ×
-                </button>
+            {pendingAttachments.map((attachment, index) => (
+              <div key={`${attachment.name}-${index}`} className="inline-flex items-center gap-2 px-3 py-1 bg-surface border border-line-strong rounded text-xs text-ink-soft">
+                <span className="truncate max-w-[200px]">{attachment.name}</span>
+                <button type="button" onClick={() => setPendingAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))} className="text-ink-faint hover:text-danger">×</button>
               </div>
             ))}
           </div>
@@ -268,28 +370,17 @@ export function ChatPage({ projectId, onOpenPreview }: ChatPageProps) {
           <input
             type="text"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder={projectId ? '输入消息或拖拽文件...' : '请先选择项目'}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => event.key === 'Enter' && void handleSend()}
+            placeholder={projectId ? '说说你的想法或下一步想做什么…' : '请先选择项目'}
             disabled={!projectId || isRunning}
-            className="flex-1 px-4 py-2 bg-slate-900 border border-slate-600 rounded-full focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            className="input flex-1"
           />
-        {isRunning ? (
-          <button
-            onClick={handleCancel}
-            className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-full font-medium transition-colors"
-          >
-            停止
-          </button>
-        ) : (
-          <button
-            onClick={handleSend}
-            disabled={!projectId}
-            className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 text-white rounded-full font-medium transition-colors"
-          >
-            发送
-          </button>
-        )}
+          {isRunning ? (
+            <button type="button" onClick={() => { window.kyrozen?.cancelTask(); setIsRunning(false); setActivity(''); }} className="btn-danger px-5">停止</button>
+          ) : (
+            <button type="button" onClick={() => void handleSend()} disabled={!projectId || (!input.trim() && pendingAttachments.length === 0)} className="btn-primary px-5">发送</button>
+          )}
         </div>
       </div>
     </div>

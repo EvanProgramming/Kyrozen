@@ -70,7 +70,6 @@ async function postToServer(config, endpoint, payload) {
 
 async function postToDesktopLocalhost(endpoint, payload) {
   try {
-    const portFileUrl = `file://`;
     // The desktop client writes its dynamic port to a well-known JSON file.
     // We cannot read local files from the service worker, so we attempt the
     // default port and rely on the desktop server to respond or fail fast.

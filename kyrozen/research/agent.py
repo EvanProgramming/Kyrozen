@@ -38,6 +38,8 @@ class MarketResearchAgent(BaseAgent):
             "If no tool is needed, reply with a plain text answer.\n\n"
             "Available tools:\n" + tools_text + "\n\n"
             "Rules:\n"
+            "- Before researching, if the target user, current workaround, desired outcome, or must-have product functions are unclear, ask exactly one plain-language user question at a time. Never ask about technology choices or implementation details.\n"
+            "- When asking, include 2-4 suggested answers in a ```kyrozen-question JSON block with question, options, and allow_other.\n"
             "- DO NOT design a product, write a PRD/MVP, recommend hardware, or write code.\n"
             "- DO NOT make up companies, products, user numbers, or market sizes.\n"
             "- If no evidence is found, explicitly say \"Insufficient evidence\".\n"

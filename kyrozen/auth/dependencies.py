@@ -110,7 +110,10 @@ def _decode_supabase_token(token: str, config: KyrozenConfig) -> dict[str, Any]:
     kid = header.get("kid")
     alg = header.get("alg", "RS256")
 
-    if config.supabase_url:
+    # HS256 tokens are verified with the configured shared secret below.
+    # Fetching JWKS for them only adds network latency and can make every local
+    # desktop request stall when Supabase is unreachable.
+    if config.supabase_url and alg != "HS256":
         jwks_url = f"{config.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
 
         # Try cached key first for resilience and speed.
@@ -165,12 +168,14 @@ class CurrentUser:
         name: str | None = None,
         role: str = "user",
         raw_claims: dict[str, Any] | None = None,
+        access_token: str | None = None,
     ) -> None:
         self.user_id = user_id
         self.email = email
         self.name = name
         self.role = role
         self.raw_claims = raw_claims or {}
+        self.access_token = access_token
 
     def is_admin(self) -> bool:
         return self.role == "admin"
@@ -193,6 +198,20 @@ async def get_current_user(
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    if token.startswith("kzd_"):
+        from kyrozen.desktop.auth import DesktopTokenManager
+
+        desktop_user_id = DesktopTokenManager.verify_api_token(token)
+        if desktop_user_id:
+            user = CurrentUser(
+                user_id=desktop_user_id,
+                email="",
+                raw_claims={"sub": desktop_user_id, "token_type": "desktop"},
+                access_token=token,
+            )
+            current_user_ctx.set(user)
+            return user
 
     config = get_config()
 
@@ -226,6 +245,7 @@ async def get_current_user(
         name=payload.get("user_metadata", {}).get("name"),
         role=payload.get("user_metadata", {}).get("role", "user"),
         raw_claims=payload,
+        access_token=token,
     )
     current_user_ctx.set(user)
     return user

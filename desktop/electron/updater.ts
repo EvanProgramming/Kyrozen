@@ -7,11 +7,12 @@
  * instead of performing a silent update.
  */
 
-import { dialog, shell } from 'electron';
+import { app, dialog, shell } from 'electron';
 import { autoUpdater, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 import { UPDATE_PUBLIC_KEY } from './updatePublicKey';
 
 let updateCheckTimer: NodeJS.Timeout | null = null;
@@ -19,6 +20,14 @@ let mainWindowReference: Electron.BrowserWindow | null = null;
 let updateApiBaseUrl: string | null = null;
 
 const UPDATE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
+function hasTrustedMacSignature(): boolean {
+  if (process.platform !== 'darwin' || !app.isPackaged) return false;
+  const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', app.getPath('exe')], { encoding: 'utf-8' });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  const team = output.match(/TeamIdentifier=([^\s]+)/)?.[1];
+  return result.status === 0 && !!team && team !== 'not';
+}
 
 function sendUpdateStatus(status: string, message: string, payload?: Record<string, unknown>) {
   mainWindowReference?.webContents.send('kyrozen:update-status', {
@@ -106,7 +115,7 @@ export function initAutoUpdater(mainWindow: Electron.BrowserWindow): void {
   // Developer certificate we only notify the user and let them download the
   // update manually. Windows and Linux use the normal silent update flow.
   const isMacOS = process.platform === 'darwin';
-  const canAutoUpdate = !isMacOS;
+  const canAutoUpdate = !isMacOS || hasTrustedMacSignature();
 
   autoUpdater.autoDownload = canAutoUpdate;
   autoUpdater.autoInstallOnAppQuit = canAutoUpdate;
@@ -130,7 +139,7 @@ export function initAutoUpdater(mainWindow: Electron.BrowserWindow): void {
         })
         .then((result) => {
           if (result.response === 0) {
-            const url = info.releaseName || `https://github.com/kyrozen/kyrozen/releases/tag/v${info.version}`;
+            const url = `https://github.com/EvanProgramming/Kyrozen/releases/tag/v${info.version}`;
             shell.openExternal(url);
           }
         })

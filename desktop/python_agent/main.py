@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 
 # Make the repository root importable so we can reuse kyrozen core modules.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(os.environ.get("KYROZEN_RESOURCE_ROOT", Path(__file__).resolve().parents[2])).resolve()
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -176,6 +176,10 @@ class DesktopAgentRuntime:
 
         # Override workspace root for this task so file tools operate locally.
         self.config.workspace_root = str(root_path)
+        # Tool calls carry project_id. Point projects_dir at the selected
+        # desktop workspace parent so config.project_dir(project_id) resolves
+        # back to this exact directory instead of <workspace>/projects/<id>.
+        self.config.projects_dir = str(root_path.parent)
 
         self._notify("task_step", {
             "task_id": self.current_task_id,
@@ -193,7 +197,7 @@ class DesktopAgentRuntime:
                 self._cancel_task_timeout_timer()
                 if not self._task_timed_out.is_set():
                     self._notify("task_result", {
-                        "task_id": task.id,
+                        "task_id": self.current_task_id,
                         "status": task.status,
                         "result": task.result or {},
                         "steps": [step.to_dict() for step in task.steps],
@@ -240,11 +244,25 @@ class DesktopAgentRuntime:
         })
 
     def _wrap_tool_execution(self, tools: object) -> None:
-        """Detect local preview URLs in terminal output and notify Electron."""
+        """Report concise tool activity and detect local preview URLs."""
         original_execute = getattr(tools, "execute")
 
         def wrapped(tool_name: str, action: str, parameters: dict[str, object]) -> object:
-            result = original_execute(tool_name, action, parameters)
+            description = self._describe_tool_operation(tool_name, action, parameters)
+            self._notify("task_operation", {
+                "task_id": self.current_task_id,
+                "description": description,
+                "status": "running",
+            })
+            try:
+                result = original_execute(tool_name, action, parameters)
+            except Exception:
+                self._notify("task_operation", {
+                    "task_id": self.current_task_id,
+                    "description": description,
+                    "status": "failed",
+                })
+                raise
             if tool_name == "terminal" and action == "execute":
                 output = ""
                 if hasattr(result, "data") and result.data:
@@ -252,9 +270,34 @@ class DesktopAgentRuntime:
                 url = self._extract_local_url(output)
                 if url:
                     self._notify("open_preview", {"url": url})
+            succeeded = bool(getattr(result, "success", True))
+            self._notify("task_operation", {
+                "task_id": self.current_task_id,
+                "description": description,
+                "status": "completed" if succeeded else "failed",
+            })
             return result
 
         setattr(tools, "execute", wrapped)
+
+    @staticmethod
+    def _describe_tool_operation(tool_name: str, action: str, parameters: dict[str, object]) -> str:
+        path = str(parameters.get("path") or parameters.get("file_path") or parameters.get("directory") or "").strip()
+        command = str(parameters.get("command") or "").strip()
+        if tool_name in {"read_file", "file_read"}:
+            return f"Reading file: {path or 'project file'}"
+        if tool_name in {"write_file", "file_write", "edit_file"}:
+            return f"Editing file: {path or 'project file'}"
+        if tool_name in {"list_dir", "find_files"}:
+            return f"Inspecting files: {path or 'project workspace'}"
+        if tool_name == "terminal":
+            summary = command.splitlines()[0][:80] if command else action
+            return f"Running command: {summary}"
+        if tool_name in {"web_search", "search_github"}:
+            return f"Researching: {str(parameters.get('query') or 'market information')[:80]}"
+        if tool_name.startswith("git") or tool_name == "git":
+            return f"Updating Git repository: {action}"
+        return f"Using {tool_name}: {action}"
 
     def _extract_local_url(self, text: str) -> str | None:
         """Look for common local development server URLs in command output."""
@@ -333,7 +376,7 @@ class DesktopAgentRuntime:
         if self.current_task and self.current_task.status == "running":
             self.current_task.update_status("cancelled")
             self._notify("task_result", {
-                "task_id": self.current_task.id,
+                "task_id": self.current_task_id,
                 "status": "cancelled",
                 "result": {"answer": "任务已被用户取消"},
             })

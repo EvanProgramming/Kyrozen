@@ -3,6 +3,7 @@ import { AddressInfo } from 'net';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { randomBytes, timingSafeEqual } from 'crypto';
 
 export interface ClipPayload {
   url: string;
@@ -24,6 +25,14 @@ export interface ExtensionServerCallbacks {
   onClip: (payload: ClipPayload) => void;
   onTestReport: (payload: TestReportPayload) => void;
   onNativeMessage?: (message: Record<string, unknown>) => void;
+}
+
+function hasValidBridgeToken(req: http.IncomingMessage, expected: string): boolean {
+  const provided = req.headers['x-kyrozen-bridge-token'];
+  if (typeof provided !== 'string') return false;
+  const left = Buffer.from(provided);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
@@ -53,7 +62,7 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Kyrozen-Bridge-Token',
   });
   res.end(body);
 }
@@ -68,13 +77,13 @@ function isValidTestReport(payload: unknown): payload is TestReportPayload {
   return typeof p.url === 'string' && Array.isArray(p.errors);
 }
 
-export function createExtensionServer(callbacks: ExtensionServerCallbacks): http.Server {
+export function createExtensionServer(callbacks: ExtensionServerCallbacks, authToken: string): http.Server {
   const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Kyrozen-Bridge-Token',
       });
       res.end();
       return;
@@ -82,6 +91,11 @@ export function createExtensionServer(callbacks: ExtensionServerCallbacks): http
 
     if (req.method !== 'POST') {
       sendJson(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+
+    if (!hasValidBridgeToken(req, authToken)) {
+      sendJson(res, 401, { error: 'Invalid bridge token' });
       return;
     }
 
@@ -140,17 +154,22 @@ function getNativeMessagingPortFilePath(): string {
   return path.join(baseDir, 'extension-server-port.json');
 }
 
-async function writeExtensionServerPort(port: number): Promise<void> {
+async function writeExtensionServerPort(port: number, authToken: string): Promise<void> {
   const filePath = getNativeMessagingPortFilePath();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify({ port, updated_at: new Date().toISOString() }, null, 2));
+  await fs.writeFile(
+    filePath,
+    JSON.stringify({ port, authToken, updated_at: new Date().toISOString() }, null, 2),
+    { mode: 0o600 },
+  );
 }
 
 export function startExtensionServer(
   callbacks: ExtensionServerCallbacks,
   preferredPort = 9339,
-): Promise<{ server: http.Server; port: number }> {
-  const server = createExtensionServer(callbacks);
+): Promise<{ server: http.Server; port: number; authToken: string }> {
+  const authToken = randomBytes(32).toString('base64url');
+  const server = createExtensionServer(callbacks, authToken);
   return new Promise((resolve, reject) => {
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
@@ -162,12 +181,12 @@ export function startExtensionServer(
     server.on('listening', async () => {
       const address = server.address() as AddressInfo;
       try {
-        await writeExtensionServerPort(address.port);
+        await writeExtensionServerPort(address.port, authToken);
       } catch (writeErr) {
         // Port file is best-effort; the host can fall back to the default port.
         console.error('Failed to write extension server port file:', writeErr);
       }
-      resolve({ server, port: address.port });
+      resolve({ server, port: address.port, authToken });
     });
     server.listen(preferredPort, '127.0.0.1');
   });

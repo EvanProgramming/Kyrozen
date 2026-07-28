@@ -103,10 +103,11 @@ class KyrozenLogger:
 _LOGGER: KyrozenLogger | None = None
 
 
-def get_logger(log_level: str | None = None, log_dir: str = "./logs") -> KyrozenLogger:
+def get_logger(log_level: str | None = None, log_dir: str | None = None) -> KyrozenLogger:
     """Return the singleton logger, creating it if needed."""
     global _LOGGER
     if _LOGGER is None:
         level = log_level or os.environ.get("KYROZEN_LOG_LEVEL", "INFO")
-        _LOGGER = KyrozenLogger(log_level=level, log_dir=log_dir)
+        resolved_log_dir = log_dir or os.environ.get("KYROZEN_LOG_DIR", "./logs")
+        _LOGGER = KyrozenLogger(log_level=level, log_dir=resolved_log_dir)
     return _LOGGER

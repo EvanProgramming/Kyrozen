@@ -1,16 +1,1 @@
-{
-  "0.1.0": {
-    "version": "0.1.0",
-    "releaseDate": "2026-07-24T15:30:27.635Z",
-    "files": {
-      "Kyrozen-0.1.0-arm64.dmg": {
-        "sha512": "egjeXSsWSu7M/wxbPRmN4gCosTBe2s6tlgmfasdUAvN5qsR3Me5u1Krj6rF0+eG0UQoaxmOgSjtWEF8nL6TXJw==",
-        "signature": "W1P2guall+Jru32VtumuRVOiGmSQEdwER9xQX4/oSwCFh2jyUqY1K6/8w3gfksoxSYY/Y3bXGFOhN3lVQ7UrEJx0gwuan0IMmwtHBQmo3uZZFDL1PCd44pQbrnNxmkz0QNzXVztuYfFjWPY9y5NwGSReWQC0nmkLCh9XX6RJCe9Jp8APHpfzfNVa4XM0NMfnNSTAgh3Wzv1eW+dW1b9SspkFcjZLm2VOmZQWoRG7wfUG8JaVhRIEWoMgocH1HCDNfvCdtk1KTc16n8V8v0SQsgSe0hGAnuwT3XbaUnYBwkJYr9Lj2AWM9Ggt6SqIihhmxt1KlQWN3ZBNYlTGYVsfyXLiPUBfVq1f3Lhqx8TgoGsbS6HYv1YuXQYdi4P06TUWXrfV/tBOCYDOxPZ2ZII2Rao/yv46DTGH28PQ0KSzFNqDwW4mWC0VFyXwDtlxNvZIqn0sKVghSJPBmUEi9WMOqzR4OyqdBNaQzRzWjl4zGCllUb19vl3Fh2TMbpQE+SsasWg8kBhFnz9ywnqjV1aL73rezfCO2VuNrpmGV66RCorrUu+3wBAd3DuhVWnUmpCrN47olBn2DBFQYqReRDm2jLyq15vt2it1js5TNpZFHOLUFskQNpf24VTn8ya9ZC0Xd507TJtDmsdaLFNg22XNiMjgE6iJ5Ch6ITrzivByasY="
-      },
-      "Kyrozen-0.1.0.dmg": {
-        "sha512": "9c6bdipcoaRTpcDvoH2Y5kBWayX4AenpTyU9VWChW3nBWwBPUsvwZdenHJZTklz+xMnGtf8Ig4EAHxWTUfD8aQ==",
-        "signature": "TY6/GMZFEgD9e5SglIT4ZKTh6NC7lVMwmBLw0k7rE7OCpKwKwqe9jRAZzfCfqK5ifEi9BfzK2FjCmVdO8GlRFjR/vvtYn6XNkqjnjdvNuqykUrWYQ+JvuZlir5ddJOg895H3fkIELxM5PH/2HYw7+Zql49dlCEicTUai18W7RkcWHGSZwUGln7HpUUzvpwo/u48bh+1hZv6fwu0lHk48leWlrPdKe2UIsQ7rfqmzGoLVxhSnYGhYxzQhjuO3OEEWhSaY6erRjwyor7EWuvR8+IBPMba8s3KQ9JbcIttQdugqvIvGQaxrWpBJogXUymYLlDxWcAiy+GMgDMHqU0v5OoWxGVjnZZdpy+Liu0eevz2eTWrJ839iU9LU+7dtAus+DWnYwzk6MSlYrd06eMixUhqBGCQS2D0ky+/qYbZ8QquXmUzRbcJvLIu8mxgnhyJ/L4G4mjB+rwnCDA3CYagMctxyxNzQ4LDe8cvgr/jl0Bq/mmdAk2wc9Dh/KoHxr/aURVfO5QNbHmEnHY+bnIE++dsdz/eG8tCXu4/vd+LoRZUm9SzZwNw28i//cXXJAzAW7jjfiEq+J20onXHfFXxZZ32iVDNKF+f4/UzIVqubGG2MTou9PF7i2AFqMeTLiPz9yPfcXEKUWopyBoi04lUhkOGjRRExFK+pT/CDlNahEAc="
-      }
-    }
-  }
-}
+{}

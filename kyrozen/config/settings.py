@@ -134,6 +134,9 @@ class KyrozenConfig:
     cors_origins: list[str] = field(default_factory=list)
     provider_costs: dict[str, tuple[float, float]] = field(default_factory=dict)
     desktop_quota_default_limit: int = 0  # 0 means unlimited; positive value enforces token quota
+    free_project_limit: int = 1
+    developer_user_ids: list[str] = field(default_factory=list)
+    developer_github_users: list[str] = field(default_factory=lambda: ["EvanProgramming"])
 
     def __post_init__(self) -> None:
         if not self.model_simple:
@@ -234,7 +237,8 @@ def get_config(
         log_level=os.environ.get("KYROZEN_LOG_LEVEL", "INFO"),
         memory_backend=file_data.get("memory_backend", "memory"),
         chroma_path=file_data.get("chroma_path", "./chroma_memory"),
-        task_store_path=file_data.get("task_store_path", "./kyrozen_tasks.json"),
+        task_store_path=os.environ.get("KYROZEN_TASK_STORE_PATH", "")
+        or file_data.get("task_store_path", "./kyrozen_tasks.json"),
         db_path=os.environ.get("KYROZEN_DB_PATH", "") or file_data.get("db_path", ""),
         projects_dir=os.environ.get("KYROZEN_PROJECTS_DIR", "") or file_data.get("projects_dir", ""),
         config_path=config_path,
@@ -263,4 +267,21 @@ def get_config(
             or file_data.get("desktop_quota_default_limit", 0)
             or 0
         ),
+        free_project_limit=int(
+            os.environ.get("KYROZEN_FREE_PROJECT_LIMIT", "")
+            or file_data.get("free_project_limit", 1)
+            or 1
+        ),
+        developer_user_ids=[
+            item.strip() for item in (
+                os.environ.get("KYROZEN_DEVELOPER_USER_IDS", "")
+                or file_data.get("developer_user_ids", "")
+            ).split(",") if item.strip()
+        ],
+        developer_github_users=[
+            item.strip() for item in (
+                os.environ.get("KYROZEN_DEVELOPER_GITHUB_USERS", "")
+                or file_data.get("developer_github_users", "EvanProgramming")
+            ).split(",") if item.strip()
+        ],
     )

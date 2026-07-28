@@ -24,14 +24,14 @@ export function SettingsPage({
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(true);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-full max-w-md bg-slate-800 rounded-lg shadow-xl border border-slate-700 overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-100">设置</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
+      <div className="w-full max-w-md panel overflow-hidden">
+        <div className="px-5 py-4 border-b border-line flex items-center justify-between">
+          <h2 className="font-hand text-2xl leading-none text-ink">设置</h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white"
+            className="text-ink-faint hover:text-ink"
             aria-label="关闭"
           >
             ×
@@ -40,13 +40,13 @@ export function SettingsPage({
 
         <div className="p-5 space-y-6">
           <section>
-            <h3 className="text-sm font-medium text-slate-300 mb-3">账号</h3>
+            <h3 className="text-sm font-medium text-ink-soft mb-3">账号</h3>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-400">已登录</span>
+              <span className="text-ink-faint">已登录</span>
               <button
                 type="button"
                 onClick={onLogout}
-                className="text-red-400 hover:text-red-300"
+                className="text-danger hover:underline"
               >
                 退出登录
               </button>
@@ -54,7 +54,7 @@ export function SettingsPage({
           </section>
 
           <section>
-            <h3 className="text-sm font-medium text-slate-300 mb-3">语言</h3>
+            <h3 className="text-sm font-medium text-ink-soft mb-3">语言</h3>
             <div className="flex gap-2">
               {(['zh', 'en'] as const).map((lang) => (
                 <button
@@ -63,8 +63,8 @@ export function SettingsPage({
                   onClick={() => onChangeLanguage(lang)}
                   className={`px-3 py-1.5 rounded text-sm transition-colors ${
                     language === lang
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                      ? 'bg-accent text-white'
+                      : 'bg-surface border border-line-strong text-ink-soft hover:bg-paper-sink'
                   }`}
                 >
                   {lang === 'zh' ? '中文' : 'English'}
@@ -74,13 +74,13 @@ export function SettingsPage({
           </section>
 
           <section>
-            <h3 className="text-sm font-medium text-slate-300 mb-3">安全</h3>
+            <h3 className="text-sm font-medium text-ink-soft mb-3">安全</h3>
             <label className="flex items-center justify-between cursor-pointer group">
               <div>
-                <div className={`text-sm ${fullTrust ? 'text-orange-400' : 'text-slate-300'}`}>
+                <div className={`text-sm ${fullTrust ? 'text-warning font-medium' : 'text-ink-soft'}`}>
                   完全信任模式
                 </div>
-                <div className="text-xs text-slate-500 mt-0.5">
+                <div className="text-xs text-ink-ghost mt-0.5">
                   开启后高危操作将自动执行，不再弹窗确认
                 </div>
               </div>
@@ -92,11 +92,11 @@ export function SettingsPage({
               />
               <span
                 className={`w-8 h-4 rounded-full relative transition-colors ${
-                  fullTrust ? 'bg-orange-500' : 'bg-slate-600'
+                  fullTrust ? 'bg-warning' : 'bg-paper-edge'
                 }`}
               >
                 <span
-                  className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${
+                  className={`absolute top-0.5 left-0.5 w-3 h-3 bg-surface border border-line-strong rounded-full transition-transform ${
                     fullTrust ? 'translate-x-4' : ''
                   }`}
                 />
@@ -105,19 +105,19 @@ export function SettingsPage({
           </section>
 
           <section>
-            <h3 className="text-sm font-medium text-slate-300 mb-3">GitHub</h3>
+            <h3 className="text-sm font-medium text-ink-soft mb-3">GitHub</h3>
             <div className="flex items-center justify-between">
               <div className="text-sm">
                 {githubStatus.connected ? (
-                  <span className="text-green-400">已连接{githubStatus.scope ? `（${githubStatus.scope}）` : ''}</span>
+                  <span className="text-success">已连接{githubStatus.scope ? `（${githubStatus.scope}）` : ''}</span>
                 ) : (
-                  <span className="text-slate-400">未连接</span>
+                  <span className="text-ink-faint">未连接</span>
                 )}
               </div>
               <button
                 type="button"
                 onClick={onConnectGitHub}
-                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-sm transition-colors"
+                className="btn-secondary text-sm px-3 py-1.5"
               >
                 {githubStatus.connected ? '重新授权' : '连接 GitHub'}
               </button>
@@ -125,9 +125,9 @@ export function SettingsPage({
           </section>
 
           <section>
-            <h3 className="text-sm font-medium text-slate-300 mb-3">更新</h3>
+            <h3 className="text-sm font-medium text-ink-soft mb-3">更新</h3>
             <label className="flex items-center justify-between cursor-pointer group">
-              <span className="text-sm text-slate-300">启动时自动检查更新</span>
+              <span className="text-sm text-ink-soft">启动时自动检查更新</span>
               <input
                 type="checkbox"
                 checked={autoCheckUpdates}
@@ -136,11 +136,11 @@ export function SettingsPage({
               />
               <span
                 className={`w-8 h-4 rounded-full relative transition-colors ${
-                  autoCheckUpdates ? 'bg-blue-500' : 'bg-slate-600'
+                  autoCheckUpdates ? 'bg-accent' : 'bg-paper-edge'
                 }`}
               >
                 <span
-                  className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${
+                  className={`absolute top-0.5 left-0.5 w-3 h-3 bg-surface border border-line-strong rounded-full transition-transform ${
                     autoCheckUpdates ? 'translate-x-4' : ''
                   }`}
                 />
@@ -149,11 +149,11 @@ export function SettingsPage({
           </section>
         </div>
 
-        <div className="px-5 py-4 border-t border-slate-700 flex justify-end">
+        <div className="px-5 py-4 border-t border-line flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-sm transition-colors"
+            className="btn-secondary text-sm px-4 py-2"
           >
             关闭
           </button>

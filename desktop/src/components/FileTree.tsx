@@ -61,7 +61,7 @@ function TreeItem({
   return (
     <li>
       <div
-        className="flex items-center text-slate-300 hover:text-blue-400 hover:bg-slate-700/50 rounded truncate"
+        className="flex items-center text-ink-soft hover:text-accent hover:bg-paper-edge rounded-sm truncate"
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
       >
         {node.isDirectory ? (
@@ -70,7 +70,7 @@ function TreeItem({
             onClick={() => toggle(node.path)}
             className="flex-1 flex items-center gap-1 px-2 py-1 text-left text-xs"
           >
-            <span className="text-slate-500 select-none">{isExpanded ? '▼' : '▶'}</span>
+            <span className="text-ink-ghost select-none">{isExpanded ? '▼' : '▶'}</span>
             <span className="font-medium">{node.name}</span>
           </button>
         ) : (
@@ -148,19 +148,19 @@ export function FileTree({ projectId, onSelectFile }: Props) {
 
   if (!projectId) {
     return (
-      <div className="text-xs text-slate-400 p-2">
+      <div className="text-xs text-ink-faint p-2">
         选择项目后查看本地文件
       </div>
     );
   }
 
   if (error) {
-    return <div className="text-xs text-red-400 p-2">{error}</div>;
+    return <div className="text-xs text-danger p-2">{error}</div>;
   }
 
   if (files.length === 0) {
     return (
-      <div className="text-xs text-slate-400 p-2">
+      <div className="text-xs text-ink-faint p-2">
         工作区暂无文件
       </div>
     );

@@ -38,6 +38,7 @@ class LearningAgent(BaseAgent):
             "If no tool is needed, reply with a plain text answer.\n\n"
             "Available tools:\n" + tools_text + "\n\n"
             "Rules:\n"
+            "- Always respond in the same language as the user's latest message.\n"
             "- ALWAYS classify every piece of learning into one of: user_preference, user_capability, "
             "project_fact, product_decision, validated_success, validated_failure, external_knowledge.\n"
             "- Every learning record MUST include confidence (low/medium/high) and verification_status "

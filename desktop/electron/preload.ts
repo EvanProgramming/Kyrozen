@@ -22,6 +22,16 @@ contextBridge.exposeInMainWorld('kyrozen', {
   createProject: (name: string, description?: string, goal?: string) =>
     ipcRenderer.invoke('kyrozen:create-project', name, description, goal),
   getProjectState: (projectId: string) => ipcRenderer.invoke('kyrozen:get-project-state', projectId),
+  getProjectWorkspace: (projectId: string) => ipcRenderer.invoke('kyrozen:get-project-workspace', projectId),
+  createDecision: (projectId: string, decision: string, reason: string) =>
+    ipcRenderer.invoke('kyrozen:create-decision', projectId, decision, reason),
+  createFeedback: (projectId: string, description: string, type: string, priority: string) =>
+    ipcRenderer.invoke('kyrozen:create-feedback', projectId, description, type, priority),
+  updateSuggestionStatus: (projectId: string, suggestionId: string, status: string) =>
+    ipcRenderer.invoke('kyrozen:update-suggestion-status', projectId, suggestionId, status),
+  deleteLearningItem: (projectId: string, kind: string, itemId: string) =>
+    ipcRenderer.invoke('kyrozen:delete-learning-item', projectId, kind, itemId),
+  exportProject: (projectId: string) => ipcRenderer.invoke('kyrozen:export-project', projectId),
 
   getQuota: () => ipcRenderer.invoke('kyrozen:get-quota'),
   getServerUrl: () => ipcRenderer.invoke('kyrozen:get-server-url'),
@@ -37,6 +47,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.invoke('kyrozen:save-file', projectId, relativePath, content),
 
   requestInitialToken: () => ipcRenderer.send('kyrozen:request-initial-token'),
+  getInitialSession: () => ipcRenderer.invoke('kyrozen:get-initial-session'),
+  getUserProfile: () => ipcRenderer.invoke('kyrozen:get-user-profile'),
 
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => {
     const handler = (_event: unknown, state: ConnectionState, message: string) => callback(state, message);
@@ -68,13 +80,13 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:open-settings', handler);
   },
 
-  sendChat: (message: string) => ipcRenderer.send('kyrozen:send-chat', message),
+  sendChat: (message: string) => ipcRenderer.invoke('kyrozen:send-chat', message),
   cancelTask: () => ipcRenderer.send('kyrozen:cancel-task'),
   startPairing: (serverUrl: string) => ipcRenderer.invoke('kyrozen:start-pairing', serverUrl),
   pollPairing: (serverUrl: string, code: string) => ipcRenderer.invoke('kyrozen:poll-pairing', serverUrl, code),
 
-  onChatMessage: (callback: (message: { role: string; content: string; raw?: string }) => void) => {
-    const handler = (_event: unknown, message: { role: string; content: string; raw?: string }) => callback(message);
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string; operations?: unknown[] }) => void) => {
+    const handler = (_event: unknown, message: { role: string; content: string; raw?: string; operations?: unknown[] }) => callback(message);
     ipcRenderer.on('kyrozen:chat-message', handler);
     return () => ipcRenderer.removeListener('kyrozen:chat-message', handler);
   },
@@ -84,6 +96,20 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.on('kyrozen:execution-plan', handler);
     return () => ipcRenderer.removeListener('kyrozen:execution-plan', handler);
   },
+
+  onTaskActivity: (callback: (activity: { task_id: string; description: string; status: string }) => void) => {
+    const handler = (_event: unknown, activity: { task_id: string; description: string; status: string }) => callback(activity);
+    ipcRenderer.on('kyrozen:task-activity', handler);
+    return () => ipcRenderer.removeListener('kyrozen:task-activity', handler);
+  },
+
+  onConfirmationRequest: (callback: (request: Record<string, unknown>) => void) => {
+    const handler = (_event: unknown, request: Record<string, unknown>) => callback(request);
+    ipcRenderer.on('kyrozen:confirmation-request', handler);
+    return () => ipcRenderer.removeListener('kyrozen:confirmation-request', handler);
+  },
+  respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession = false) =>
+    ipcRenderer.invoke('kyrozen:respond-confirmation', confirmationId, confirmed, trustForSession),
 
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') =>
     ipcRenderer.invoke('kyrozen:open-preview', url, mode),
@@ -118,6 +144,11 @@ contextBridge.exposeInMainWorld('kyrozen', {
   installCommonCores: () => ipcRenderer.invoke('kyrozen:install-common-cores'),
   checkHardwareUpdates: () => ipcRenderer.invoke('kyrozen:check-hardware-updates'),
   getHardwareToolStatus: () => ipcRenderer.invoke('kyrozen:get-hardware-tool-status'),
+  onHardwareToolStatus: (callback: (tools: Record<string, unknown>) => void) => {
+    const handler = (_event: unknown, tools: Record<string, unknown>) => callback(tools);
+    ipcRenderer.on('kyrozen:hardware-tool-status', handler);
+    return () => ipcRenderer.removeListener('kyrozen:hardware-tool-status', handler);
+  },
   connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),
   startGithubLogin: () => ipcRenderer.invoke('kyrozen:start-github-login'),
   getGitHubStatus: () => ipcRenderer.invoke('kyrozen:get-github-status'),

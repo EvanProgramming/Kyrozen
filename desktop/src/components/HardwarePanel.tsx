@@ -26,6 +26,8 @@ export function HardwarePanel() {
 
   useEffect(() => {
     void loadStatus();
+    const unsubscribe = kyrozen.onHardwareToolStatus((nextTools) => setTools(nextTools));
+    return unsubscribe;
   }, []);
 
   const handleCheckUpdates = async () => {
@@ -62,18 +64,18 @@ export function HardwarePanel() {
   const pio = tools['pio'];
 
   return (
-    <div className="border-t border-slate-700 pt-2">
-      <div className="px-2 font-medium text-slate-300 mb-1">硬件工具链</div>
+    <div className="border-t border-line pt-2">
+      <div className="px-2 font-medium text-ink-soft mb-1">硬件工具链</div>
       <div className="space-y-1.5 text-xs mb-2">
-        <div className="flex items-center justify-between text-slate-400">
+        <div className="flex items-center justify-between text-ink-faint">
           <span>Arduino CLI</span>
-          <span className={arduino?.path ? 'text-green-400' : 'text-slate-500'}>
+          <span className={arduino?.path ? 'text-success' : 'text-ink-ghost'}>
             {arduino?.version || (arduino?.path ? '就绪' : '未就绪')}
           </span>
         </div>
-        <div className="flex items-center justify-between text-slate-400">
+        <div className="flex items-center justify-between text-ink-faint">
           <span>PlatformIO</span>
-          <span className={pio?.path ? 'text-green-400' : 'text-slate-500'}>
+          <span className={pio?.path ? 'text-success' : 'text-ink-ghost'}>
             {pio?.version || (pio?.path ? '就绪' : '未就绪')}
           </span>
         </div>
@@ -83,7 +85,7 @@ export function HardwarePanel() {
           type="button"
           onClick={handleCheckUpdates}
           disabled={loading}
-          className="w-full py-1 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 text-white rounded text-xs transition-colors"
+          className="btn-secondary w-full py-1 text-xs"
         >
           检查更新
         </button>
@@ -91,12 +93,12 @@ export function HardwarePanel() {
           type="button"
           onClick={handleInstallCores}
           disabled={loading}
-          className="w-full py-1 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 text-white rounded text-xs transition-colors"
+          className="btn-secondary w-full py-1 text-xs"
         >
           安装常用核心
         </button>
       </div>
-      {message && <div className="mt-1.5 text-xs text-slate-400">{message}</div>}
+      {message && <div className="mt-1.5 text-xs text-ink-faint">{message}</div>}
     </div>
   );
 }

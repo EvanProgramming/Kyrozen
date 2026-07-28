@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import hmac
 import os
 import re
 import shutil
@@ -11,6 +14,7 @@ import traceback
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -43,6 +47,39 @@ from kyrozen.planning.agent import ProductPlanningAgent
 from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager, SupabaseDatabase, create_database
 from kyrozen.project.project import PROJECT_STAGES
 from kyrozen.research.agent import MarketResearchAgent
+
+
+def _encode_github_oauth_state(redirect_uri: str, secret: str, ttl_seconds: int = 600) -> str:
+    """Create a short-lived signed OAuth state that survives process changes."""
+    payload = {
+        "redirect_uri": redirect_uri,
+        "exp": int(datetime.now(timezone.utc).timestamp()) + ttl_seconds,
+        "nonce": uuid.uuid4().hex,
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    signed = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    return f"{encoded}.{signed}"
+
+
+def _decode_github_oauth_state(state: str, secret: str) -> dict[str, Any] | None:
+    """Validate and decode a signed OAuth state without server-local storage."""
+    try:
+        encoded, supplied_signature = state.split(".", 1)
+        expected = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+        expected_signature = base64.urlsafe_b64encode(expected).rstrip(b"=").decode("ascii")
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            return None
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
+        if int(payload.get("exp", 0)) < int(datetime.now(timezone.utc).timestamp()):
+            return None
+        if not payload.get("redirect_uri"):
+            return None
+        return payload
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
 from kyrozen.testing.agent import TestingAgent
 from kyrozen.learning.agent import LearningAgent
 from kyrozen.learning.repository import LearningRepository
@@ -655,6 +692,25 @@ def _get_owned_project(
     return project
 
 
+def _is_developer_account(current_user: CurrentUser) -> bool:
+    """Check the internal developer entitlement from config and GitHub claims."""
+    config = _config
+    if config is None:
+        return False
+    if config.provider == "mock":
+        return True
+    if current_user.user_id in config.developer_user_ids:
+        return True
+    metadata = current_user.raw_claims.get("user_metadata", {}) or {}
+    github_user = str(
+        metadata.get("github_username")
+        or metadata.get("preferred_username")
+        or metadata.get("user_name")
+        or ""
+    ).casefold()
+    return github_user in {name.casefold() for name in config.developer_github_users}
+
+
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
@@ -712,14 +768,9 @@ async def _handle_model_request(
     messages = message.get("messages", [])
     stream = message.get("stream", True)
 
-    quota = _get_quota_manager().check_quota(user_id)
-    if not quota.allowed:
-        await websocket.send_json({
-            "type": "model_error",
-            "request_id": request_id,
-            "error": quota.reason,
-        })
-        return
+    # Membership limits project count, not how far a user can progress inside
+    # an existing project. Token usage is still recorded for observability but
+    # never interrupts discovery, development, testing, or iteration.
 
     factory = _get_agent_factory()
     model = factory.model
@@ -1174,16 +1225,11 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if not config.github_oauth_client_id or not config.github_oauth_client_secret:
             raise HTTPException(status_code=503, detail="GitHub OAuth is not configured on the server")
 
-        _cleanup_github_login_states()
-        state = uuid.uuid4().hex
         callback_uri = (
             config.github_oauth_redirect_uri
             or str(request.base_url).rstrip("/") + "/api/auth/github/login-callback"
         )
-        _github_login_states[state] = {
-            "redirect_uri": callback_uri,
-            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp(),
-        }
+        state = _encode_github_oauth_state(callback_uri, config.github_oauth_client_secret)
 
         params = {
             "client_id": config.github_oauth_client_id,
@@ -1191,9 +1237,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "state": state,
             "scope": "repo read:user user:email",
         }
-        authorize_url = "https://github.com/login/oauth/authorize?" + "&".join(
-            f"{k}={v}" for k, v in params.items()
-        )
+        authorize_url = "https://github.com/login/oauth/authorize?" + urlencode(params)
         return {"authorize_url": authorize_url}
 
     @app.get("/api/auth/github/login-callback")
@@ -1201,12 +1245,15 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         """GitHub OAuth callback – create (or find) a Kyrozen user, then
         redirect the desktop client with both a Kyrozen JWT and a GitHub token.
         """
-        _cleanup_github_login_states()
-        state_data = _github_login_states.pop(state, None)
+        config = get_config()
+        state_data = _decode_github_oauth_state(state, config.github_oauth_client_secret)
+        if state_data is None:
+            # Accept login attempts started immediately before this deployment.
+            _cleanup_github_login_states()
+            state_data = _github_login_states.pop(state, None)
         if not state_data:
             raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
-        config = get_config()
         if not config.github_oauth_client_id or not config.github_oauth_client_secret:
             raise HTTPException(status_code=503, detail="GitHub OAuth is not configured")
 
@@ -1271,6 +1318,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 "email_confirm": True,
                 "user_metadata": {
                     "name": github_name,
+                    "github_username": github_username,
+                    "avatar_url": github_user.get("avatar_url", ""),
                     "github_access_token": github_token,
                     "github_token_scopes": scope,
                 },
@@ -1298,6 +1347,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                     "password": random_password,
                     "user_metadata": {
                         "name": github_name,
+                        "github_username": github_username,
+                        "avatar_url": github_user.get("avatar_url", ""),
                         "github_access_token": github_token,
                         "github_token_scopes": scope,
                     },
@@ -1438,7 +1489,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             from supabase import create_client
             admin_client = create_client(config.supabase_url, config.supabase_service_role_key)
             admin_client.auth.admin.update_user_by_id(
-                current_user.id,
+                current_user.user_id,
                 {
                     "user_metadata": {
                         "github_access_token": token,
@@ -1667,7 +1718,14 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
                 )
-            return {"task_id": task.id, "status": task.status, "project_id": request.project_id, "mode": request.mode}
+            return {
+                "task_id": task.id,
+                "status": task.status,
+                "project_id": request.project_id,
+                "mode": request.mode,
+                "content": _assistant_content(task),
+                "steps": [step.to_dict() for step in task.steps],
+            }
         except Exception as e:
             if request.project_id and user_message is not None:
                 pm.save_chat_message(
@@ -1790,6 +1848,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         current_user: CurrentUser = Depends(get_current_user),
     ):
         pm = _get_project_manager()
+        if _config is not None and not _is_developer_account(current_user):
+            existing = pm.list(user_id=current_user.user_id)
+            if len(existing) >= _config.free_project_limit:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"免费账户最多创建 {_config.free_project_limit} 个项目；已有项目可完整使用全部阶段。",
+                )
         project = pm.create(
             name=request.name,
             description=request.description,
@@ -2935,6 +3000,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         token = DesktopTokenManager.create_open_token(
             user_id=current_user.user_id,
             project_id=request.project_id,
+            access_token=current_user.access_token,
         )
         return {
             "token": token,
@@ -2948,6 +3014,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         """Exchange a short-lived open token or access token for long-lived credentials."""
         user_id: str | None = None
         project_id: str | None = None
+        access_token: str | None = None
 
         if request.token:
             open_data = DesktopTokenManager.consume_open_token(request.token)
@@ -2955,6 +3022,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 raise HTTPException(401, "Invalid or expired open token")
             user_id = open_data["user_id"]
             project_id = open_data.get("project_id")
+            access_token = open_data.get("access_token")
         elif request.access_token:
             config = _config or get_config()
             try:
@@ -2962,6 +3030,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             except Exception as exc:
                 raise HTTPException(401, f"Invalid access token: {exc}") from exc
             user_id = payload.get("sub")
+            access_token = request.access_token
             if not user_id:
                 raise HTTPException(401, "Invalid access token: missing user id")
 
@@ -2988,7 +3057,9 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "client_id": client.client_id,
             "refresh_token": credentials["refresh_token"],
             "ws_token": credentials["ws_token"],
-            "access_token": request.access_token,
+            # A supplied JWT can be exchanged again after an API restart;
+            # generated desktop tokens are retained for legacy open-token use.
+            "access_token": access_token or credentials["api_token"],
             "project_id": project_id,
             "user_id": user_id,
         }
@@ -2997,15 +3068,18 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     async def api_desktop_quota(
         current_user: CurrentUser = Depends(get_current_user),
     ):
-        """Return the current user's desktop model-proxy token quota."""
+        """Return membership information without blocking project stages."""
         manager = _get_quota_manager()
         status = manager.check_quota(current_user.user_id)
+        developer = _is_developer_account(current_user)
         return {
-            "allowed": status.allowed,
-            "reason": status.reason,
+            "allowed": True,
+            "reason": "Developer unlimited" if developer else "Free plan: one complete project",
             "used": status.used,
-            "limit": status.limit,
-            "remaining": status.remaining,
+            "limit": 0,
+            "remaining": -1,
+            "plan": "developer" if developer else "free",
+            "project_limit": 0 if developer else (_config.free_project_limit if _config else 1),
         }
 
     @app.post("/api/desktop/pairing-code")
@@ -3026,7 +3100,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             raise HTTPException(404, "Pairing code not found or expired")
         if result.get("pending"):
             return {"ready": False}
-        return {"ready": True, "ws_token": result["ws_token"], "user_id": result["user_id"]}
+        return {
+            "ready": True,
+            "ws_token": result["ws_token"],
+            "access_token": result.get("access_token"),
+            "user_id": result["user_id"],
+        }
 
     @app.post("/api/auth/confirm-pairing")
     async def api_confirm_pairing(
@@ -3034,7 +3113,11 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         current_user: CurrentUser = Depends(get_current_user),
     ):
         """Browser session confirms a desktop pairing code."""
-        success = DesktopPairingManager.confirm_code(request.code, current_user.user_id)
+        success = DesktopPairingManager.confirm_code(
+            request.code,
+            current_user.user_id,
+            current_user.access_token,
+        )
         if not success:
             raise HTTPException(400, "Invalid or expired pairing code")
         return {"success": True}
@@ -3108,7 +3191,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                         task = _db.get_task(task_id)
                         if task is not None:
                             task.assigned_client_id = client.client_id
-                            task.update_status("running")
+                            if task.status == "pending":
+                                task.update_status("running")
                             _db.save_task(task)
                     await websocket.send_json({"type": "task_accepted_ack", "task_id": task_id})
 
@@ -3136,16 +3220,47 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
                 elif msg_type == "confirmation_response":
                     # TODO: wire into running agent confirmation queue
-                    logger.info(f"Confirmation response for task {message.get('task_id')}: {message.get('confirmed')}")
+                    logger.log("info", f"Confirmation response for task {message.get('task_id')}: {message.get('confirmed')}")
 
                 elif msg_type == "model_request":
                     asyncio.create_task(_handle_model_request(websocket, message, user_id, logger))
+
+                elif msg_type == "request_pending_tasks":
+                    if _db is not None:
+                        for task in _db.list_tasks():
+                            if not task.requires_local_client or task.status not in {
+                                "pending", "running", "waiting_confirmation"
+                            }:
+                                continue
+                            project = _db.get_project(task.project_id) if task.project_id else None
+                            if project is None or project.user_id != user_id:
+                                continue
+                            task.assigned_client_id = client.client_id
+                            _db.save_task(task)
+                            await websocket.send_json({
+                                "type": "assign_task",
+                                "task_id": task.id,
+                                "project_id": task.project_id,
+                                "mode": task.mode,
+                                "message": task.description,
+                                "requires_confirmation": True,
+                                "resumed": True,
+                            })
+
+                elif msg_type == "task_queued":
+                    # The desktop has accepted ownership but is deliberately
+                    # waiting for its current local task to finish.
+                    logger.log(
+                        "info",
+                        f"Desktop queued task {message.get('task_id')} "
+                        f"at position {message.get('queue_length')}",
+                    )
 
                 else:
                     logger.warning(f"Unknown desktop websocket message type: {msg_type}")
 
         except WebSocketDisconnect:
-            logger.info("Desktop client disconnected")
+            logger.log("info", "Desktop client disconnected")
         except Exception as exc:
             logger.warning(f"Desktop websocket error: {exc}")
         finally:

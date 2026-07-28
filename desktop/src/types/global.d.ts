@@ -262,8 +262,18 @@ export interface KyrozenAPI {
   onHardwareToolStatus: (callback: (tools: Record<string, { command: string; path: string | null; bundled: boolean; version: string | null }>) => void) => () => void;
   connectGitHub: () => Promise<{ success: boolean; error?: string }>;
   startGithubLogin: () => Promise<{ success: boolean; error?: string }>;
-  createGitHubRepo: (name: string, description?: string, isPrivate?: boolean) => Promise<{ success: boolean; url?: string; cloneUrl?: string; error?: string }>;
-  getGitHubStatus: () => Promise<{ connected: boolean; scope?: string }>;
+  disconnectGitHub: () => Promise<{ success: boolean }>;
+  createGitHubRepo: (owner: string, name: string, description?: string, isPrivate?: boolean) => Promise<{
+    success: boolean;
+    url?: string;
+    cloneUrl?: string;
+    owner?: string;
+    failureKind?: string;
+    reason?: string;
+    recovery?: string;
+    error?: string;
+  }>;
+  getGitHubStatus: () => Promise<{ connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean }>;
   initGitRepo: (remoteUrl?: string) => Promise<{ success: boolean; error?: string }>;
   getGitStatus: () => Promise<{
     success: boolean;
@@ -273,12 +283,23 @@ export interface KyrozenAPI {
     behind?: number;
     modified?: string[];
     untracked?: string[];
+    staged?: string[];
+    recentCommits?: Array<{ hash: string; message: string; date: string; author: string }>;
+    remoteUrl?: string | null;
     error?: string;
   }>;
-  commitAndPush: (message: string) => Promise<{ success: boolean; error?: string }>;
+  getGitCommits: () => Promise<{ success: boolean; commits: Array<{ hash: string; message: string; date: string; author: string; files?: string[] }>; remoteUrl: string | null; error?: string }>;
+  commitAndPush: (message: string) => Promise<{
+    success: boolean;
+    committed?: boolean;
+    failureKind?: string;
+    reason?: string;
+    recovery?: string;
+    error?: string;
+  }>;
   setAutoCommit: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   getAutoCommit: () => Promise<{ enabled: boolean }>;
-  onGitHubStatus: (callback: (status: { connected: boolean; scope?: string }) => void) => () => void;
+  onGitHubStatus: (callback: (status: { connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean }) => void) => () => void;
   onFullTrustChange: (callback: (status: { enabled: boolean }) => void) => () => void;
 
   getOnboardingStatus: () => Promise<{ completed: boolean; language: 'zh' | 'en'; completedAt?: string }>;

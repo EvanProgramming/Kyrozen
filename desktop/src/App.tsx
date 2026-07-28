@@ -61,7 +61,7 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
-  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string }>({ connected: false, scope: '' });
+  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string; login?: string; avatarUrl?: string; expired?: boolean }>({ connected: false, scope: '' });
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
@@ -137,10 +137,26 @@ function App() {
     if (!window.kyrozen) return;
     try {
       const status = await window.kyrozen.getGitHubStatus();
-      setGithubStatus({ connected: status.connected, scope: status.scope || '' });
+      setGithubStatus({
+        connected: status.connected,
+        scope: status.scope || '',
+        login: status.login,
+        avatarUrl: status.avatarUrl,
+        expired: status.expired,
+      });
     } catch {
       setGithubStatus({ connected: false, scope: '' });
     }
+  };
+
+  const handleDisconnectGitHub = async () => {
+    if (!window.kyrozen) return;
+    try {
+      await window.kyrozen.disconnectGitHub();
+    } catch {
+      /* ignore */
+    }
+    await loadGitHubStatus();
   };
 
   const loadUserProfile = async () => {
@@ -629,6 +645,7 @@ function App() {
           onToggleFullTrust={handleToggleFullTrust}
           githubStatus={githubStatus}
           onConnectGitHub={handleConnectGitHub}
+          onDisconnectGitHub={handleDisconnectGitHub}
           language={language}
           onChangeLanguage={handleChangeLanguage}
           onLogout={handleLogout}

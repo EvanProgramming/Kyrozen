@@ -4,8 +4,9 @@ export interface Props {
   onClose: () => void;
   fullTrust: boolean;
   onToggleFullTrust: () => void;
-  githubStatus: { connected: boolean; scope: string };
+  githubStatus: { connected: boolean; scope: string; login?: string; avatarUrl?: string; expired?: boolean };
   onConnectGitHub: () => void;
+  onDisconnectGitHub: () => void;
   language: 'zh' | 'en';
   onChangeLanguage: (lang: 'zh' | 'en') => void;
   onLogout: () => void;
@@ -17,6 +18,7 @@ export function SettingsPage({
   onToggleFullTrust,
   githubStatus,
   onConnectGitHub,
+  onDisconnectGitHub,
   language,
   onChangeLanguage,
   onLogout,
@@ -106,22 +108,75 @@ export function SettingsPage({
 
           <section>
             <h3 className="text-sm font-medium text-ink-soft mb-3">GitHub</h3>
-            <div className="flex items-center justify-between">
-              <div className="text-sm">
-                {githubStatus.connected ? (
-                  <span className="text-success">已连接{githubStatus.scope ? `（${githubStatus.scope}）` : ''}</span>
-                ) : (
-                  <span className="text-ink-faint">未连接</span>
+            {githubStatus.connected ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  {githubStatus.avatarUrl ? (
+                    <img
+                      src={githubStatus.avatarUrl}
+                      alt={githubStatus.login || 'GitHub avatar'}
+                      className="w-10 h-10 rounded-full border border-line"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-paper-sink border border-line" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-ink truncate">
+                      {githubStatus.login || 'GitHub 用户'}
+                    </div>
+                    <div className="text-xs text-ink-ghost mt-0.5">
+                      已连接{githubStatus.scope ? ` · ${githubStatus.scope}` : ''}
+                    </div>
+                  </div>
+                  <span className="ml-auto inline-flex items-center gap-1 text-xs text-success">
+                    <span className="w-2 h-2 rounded-full bg-success inline-block" /> 已授权
+                  </span>
+                </div>
+
+                {githubStatus.expired && (
+                  <div className="flex items-start gap-2 rounded-md bg-danger-soft border border-l-2 border-l-danger px-3 py-2">
+                    <span className="text-danger text-sm leading-snug">
+                      授权已过期或已被撤销，推送将被拒绝。请重新连接 GitHub 账号后重试。
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onConnectGitHub}
+                      className="btn-primary text-xs px-2 py-1 shrink-0"
+                    >
+                      重新连接
+                    </button>
+                  </div>
                 )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onConnectGitHub}
+                    className="btn-secondary text-sm px-3 py-1.5"
+                  >
+                    重新授权
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDisconnectGitHub}
+                    className="btn-ghost text-sm px-3 py-1.5 text-danger hover:bg-danger-soft"
+                  >
+                    断开连接
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={onConnectGitHub}
-                className="btn-secondary text-sm px-3 py-1.5"
-              >
-                {githubStatus.connected ? '重新授权' : '连接 GitHub'}
-              </button>
-            </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-ink-faint">未连接</span>
+                <button
+                  type="button"
+                  onClick={onConnectGitHub}
+                  className="btn-secondary text-sm px-3 py-1.5"
+                >
+                  连接 GitHub
+                </button>
+              </div>
+            )}
           </section>
 
           <section>

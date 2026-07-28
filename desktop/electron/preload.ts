@@ -176,8 +176,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:update-status', handler);
   },
 
-  onGitHubStatus: (callback: (status: { connected: boolean; scope?: string }) => void) => {
-    const handler = (_event: unknown, status: { connected: boolean; scope?: string }) => callback(status);
+  onGitHubStatus: (callback: (status: { connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean }) => void) => {
+    const handler = (_event: unknown, status: { connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean }) => callback(status);
     ipcRenderer.on('kyrozen:github-status', handler);
     return () => ipcRenderer.removeListener('kyrozen:github-status', handler);
   },
@@ -200,8 +200,10 @@ contextBridge.exposeInMainWorld('kyrozen', {
   connectGitHub: () => ipcRenderer.invoke('kyrozen:connect-github'),
   startGithubLogin: () => ipcRenderer.invoke('kyrozen:start-github-login'),
   getGitHubStatus: () => ipcRenderer.invoke('kyrozen:get-github-status'),
-  createGitHubRepo: (name: string, description?: string, isPrivate?: boolean) =>
-    ipcRenderer.invoke('kyrozen:create-github-repo', name, description, isPrivate),
+  disconnectGitHub: () => ipcRenderer.invoke('kyrozen:disconnect-github'),
+  createGitHubRepo: (owner: string, name: string, description?: string, isPrivate?: boolean) =>
+    ipcRenderer.invoke('kyrozen:create-github-repo', owner, name, description, isPrivate),
+  getGitCommits: () => ipcRenderer.invoke('kyrozen:get-git-commits'),
   initGitRepo: (remoteUrl?: string) => ipcRenderer.invoke('kyrozen:init-git-repo', remoteUrl),
   getGitStatus: () => ipcRenderer.invoke('kyrozen:get-git-status'),
   commitAndPush: (message: string) => ipcRenderer.invoke('kyrozen:commit-and-push', message),

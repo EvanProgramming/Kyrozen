@@ -40,10 +40,12 @@ import {
 import {
   commitAndPush,
   getAutoCommit,
+  getGitCommits,
   getGitStatus,
   initGitRepo,
   maybeAutoCommit,
   setAutoCommit,
+  classifyCreateRepoError,
 } from './gitOperations';
 
 interface WorkspaceMap {
@@ -1741,10 +1743,42 @@ function getCurrentWorkspaceRoot(): string | null {
 }
 
 ipcMain.handle('kyrozen:get-github-status', async () => {
-  return {
+  const base: { connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean } = {
     connected: !!githubAccessToken,
-    scope: githubTokenScope,
+    scope: githubTokenScope || undefined,
   };
+  if (!githubAccessToken) return base;
+  // Validate the token and surface the user's identity (3.5 #2) + expiry (3.5 #1).
+  try {
+    const resp = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${githubAccessToken}`, Accept: 'application/vnd.github+json' },
+    });
+    if (resp.status === 401) {
+      // Token expired or revoked -> guide re-login.
+      return { ...base, connected: true, expired: true };
+    }
+    if (resp.ok) {
+      const user = await resp.json() as any;
+      return { ...base, connected: true, login: user.login, avatarUrl: user.avatar_url, expired: false };
+    }
+  } catch {
+    // Network error during validation: keep the cached connection state.
+  }
+  return base;
+});
+
+ipcMain.handle('kyrozen:disconnect-github', async () => {
+  try {
+    // Best-effort: ask the backend to drop the stored token.
+    if (accessToken) {
+      await apiPost('/api/user/github-token', { token: '', scope: '' }, true).catch(() => undefined);
+    }
+  } catch { /* ignore backend errors during disconnect */ }
+  githubAccessToken = null;
+  githubTokenScope = null;
+  sendGitHubStatus();
+  logInfo('Disconnected GitHub account');
+  return { success: true };
 });
 
 ipcMain.handle('kyrozen:init-git-repo', async (_event, remoteUrl?: string) => {
@@ -1772,7 +1806,7 @@ ipcMain.handle('kyrozen:commit-and-push', async (_event, message: string) => {
   return commitAndPush(root, githubAccessToken, message);
 });
 
-ipcMain.handle('kyrozen:create-github-repo', async (_event, name: string, description?: string, isPrivate?: boolean) => {
+ipcMain.handle('kyrozen:create-github-repo', async (_event, owner: string, name: string, description?: string, isPrivate?: boolean) => {
   if (!githubAccessToken) {
     return { success: false, error: '未绑定 GitHub 账号' };
   }
@@ -1789,23 +1823,41 @@ ipcMain.handle('kyrozen:create-github-repo', async (_event, name: string, descri
         description: description || '',
         private: isPrivate !== undefined ? isPrivate : false,
         auto_init: false,
+        visibility: isPrivate !== false ? 'private' : 'public',
       }),
     });
     const repoData = await resp.json();
     if (resp.ok) {
       const cloneUrl = (repoData as any).clone_url || (repoData as any).ssh_url;
-      // Initialize local git repo with the newly created remote
+      // 3.5 #4: after creation set origin so the local repo can push.
       const root = getCurrentWorkspaceRoot();
       if (root && cloneUrl) {
         await initGitRepo(root, cloneUrl);
       }
       logInfo(`Created GitHub repo ${name}: ${cloneUrl}`);
-      return { success: true, url: (repoData as any).html_url, cloneUrl };
+      return { success: true, url: (repoData as any).html_url, cloneUrl, owner: owner || (repoData as any).owner?.login };
     }
-    return { success: false, error: (repoData as any).message || `HTTP ${resp.status}` };
+    // Classify the failure (e.g. repo name already exists) and surface a reason + recovery.
+    const classified = classifyCreateRepoError(resp.status, repoData);
+    return {
+      success: false,
+      failureKind: classified.kind,
+      reason: classified.reason,
+      recovery: classified.recovery,
+      error: (repoData as any).message || `HTTP ${resp.status}`,
+    };
   } catch (err: any) {
-    return { success: false, error: err.message || String(err) };
+    const classified = classifyCreateRepoError(0, null);
+    return { success: false, failureKind: classified.kind, reason: classified.reason, recovery: classified.recovery, error: err.message || String(err) };
   }
+});
+
+ipcMain.handle('kyrozen:get-git-commits', async () => {
+  const root = getCurrentWorkspaceRoot();
+  if (!root) {
+    return { success: false, commits: [], remoteUrl: null, error: '未选择项目工作区' };
+  }
+  return getGitCommits(root);
 });
 
 ipcMain.handle('kyrozen:set-auto-commit', async (_event, enabled: boolean) => {

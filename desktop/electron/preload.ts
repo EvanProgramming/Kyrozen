@@ -9,6 +9,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
+type SoftwareFeatureResult = Record<string, unknown>;
+
 contextBridge.exposeInMainWorld('kyrozen', {
   login: (email: string, password: string, serverUrl: string) =>
     ipcRenderer.invoke('kyrozen:login', email, password, serverUrl),
@@ -120,6 +122,15 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.on('kyrozen:stage-updated', handler);
     return () => ipcRenderer.removeListener('kyrozen:stage-updated', handler);
   },
+
+  // 3.3 real software generation / run / repair panel.
+  onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => {
+    const handler = (_event: unknown, result: SoftwareFeatureResult) => callback(result);
+    ipcRenderer.on('kyzen:software-feature', handler);
+    return () => ipcRenderer.removeListener('kyzen:software-feature', handler);
+  },
+  sendSoftwareFeature: (params: Record<string, unknown>) =>
+    ipcRenderer.send('kyzen:software-feature', params),
 
   sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) =>
     ipcRenderer.invoke('kyrozen:stage-action', action, stage),

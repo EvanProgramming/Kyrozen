@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { StageGateStatus } from '../types/global';
+import type { StageGateStatus, SoftwareFeatureResult, SoftwareRunResult } from '../types/global';
 
 type OperationStatus = 'pending' | 'running' | 'failed' | 'completed';
 
@@ -384,6 +384,299 @@ function StageGatePanel({
   );
 }
 
+// Feature 3.3: real software generation / run / repair panel. Talks to the
+// deterministic SoftwareFeatureTool in the desktop Python Agent (no LLM needed).
+const WEB_APP_SET = new Set(['web_app', 'website', 'simple_saas', 'ai_tool', 'desktop_app']);
+const APP_TYPE_LABELS: Record<string, string> = {
+  web_app: 'Web 应用',
+  website: '官网/落地页',
+  simple_saas: '轻量 SaaS',
+  ai_tool: 'AI 工具',
+  automation_tool: '自动化工具',
+  desktop_app: '桌面应用',
+  cli_tool: '命令行工具',
+};
+const DELIVERABLE_LABELS: Record<string, string> = {
+  research_report: '调研报告',
+  content_plan: '内容计划',
+  ops_plan: '运营方案',
+  business_process: '业务流程',
+};
+
+function SoftwareFeaturePanel({ projectId, onOpenPreview }: { projectId: string | null; onOpenPreview?: (url: string) => void }) {
+  const [feature, setFeature] = useState<SoftwareFeatureResult | null>(null);
+  const [appType, setAppType] = useState<string>('web_app');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(true);
+  const [formOpen, setFormOpen] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  // Generate form state.
+  const [appName, setAppName] = useState('我的 Web 应用');
+  const [genType, setGenType] = useState('web_app');
+  const [featuresText, setFeaturesText] = useState('用户登录\n数据看板\n导出报表');
+  const [desc, setDesc] = useState('');
+
+  // Non-coding deliverable form state.
+  const [deliverableType, setDeliverableType] = useState('research_report');
+  const [deliverableTitle, setDeliverableTitle] = useState('竞品调研报告');
+  const [deliverableFields, setDeliverableFields] = useState('背景: 行业现状与规模\n目标: 找出 3 个差异化切入点\n结论: 建议优先切入方向');
+
+  useEffect(() => {
+    if (!window.kyrozen) return;
+    const unsub = window.kyrozen.onSoftwareFeature((result) => {
+      setFeature(result);
+      if (result.app_type) setAppType(result.app_type);
+      setBusy(false);
+    });
+    return unsub;
+  }, []);
+
+  const send = async (action: string, extra: Record<string, unknown> = {}) => {
+    if (!window.kyrozen || !projectId) return;
+    setBusy(true);
+    try {
+      const { workspaceRoot } = await window.kyrozen.getWorkspaceRoot(projectId);
+      window.kyrozen.sendSoftwareFeature({ action, workspace_root: workspaceRoot, ...extra });
+    } catch {
+      setBusy(false);
+    }
+  };
+
+  const copyCommand = async () => {
+    const cmd = feature?.command || (WEB_APP_SET.has(feature?.app_type ?? appType) ? 'python app.py' : 'python main.py');
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard may be unavailable in some contexts; ignore.
+    }
+  };
+
+  const handleGenerate = () => {
+    const features = featuresText.split('\n').map((line) => line.trim()).filter(Boolean);
+    send('generate', {
+      app_type: genType,
+      app_name: appName.trim() || 'kyrozen-app',
+      description: desc.trim(),
+      prd: { features, name: appName.trim() || 'kyrozen-app', description: desc.trim() },
+    });
+  };
+
+  const handleNoncoding = () => {
+    const fields: Record<string, string> = {};
+    deliverableFields.split('\n').forEach((line) => {
+      const idx = line.indexOf(':');
+      if (idx > 0) fields[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+    });
+    send('noncoding', {
+      deliverable_type: deliverableType,
+      title: deliverableTitle.trim() || '未命名交付物',
+      fields,
+    });
+  };
+
+  const activeType = feature?.app_type ?? appType;
+  const isWeb = WEB_APP_SET.has(activeType);
+  const previewUrl = feature?.preview_url || '';
+  const runCommand = feature?.command || (isWeb ? 'python app.py' : 'python main.py');
+  const artifactPath = feature?.artifact_path || '';
+
+  return (
+    <div className="bg-surface border-b border-line">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="w-full px-4 py-2 flex items-center justify-between text-left"
+      >
+        <span className="flex items-center gap-2">
+          <span className="font-hand text-lg text-ink">软件生成</span>
+          <span className="text-xs text-ink-faint">真实生成 · 运行 · 修复</span>
+        </span>
+        <span className="text-xs text-ink-faint">{open ? '收起' : '展开'}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-3 space-y-3">
+          {!projectId && (
+            <div className="text-xs text-ink-faint">请先选择左侧项目后再生成软件。</div>
+          )}
+
+          {feature && (
+            <div className="panel p-3 border-l-2 border-l-accent bg-accent-soft space-y-2">
+              {feature.action === 'generate' && (
+                <div className="space-y-1.5">
+                  <div className="text-sm text-ink font-medium">
+                    已生成 {APP_TYPE_LABELS[feature.app_type || ''] || feature.app_type} 原型
+                  </div>
+                  <div className="text-xs text-ink-soft">
+                    写入文件 {feature.files?.length ?? 0} 个 · 功能 {feature.feature_slugs?.length ?? 0} 项
+                    {feature.files?.includes('README.md') ? ' · README.md 已生成' : ' · 缺少 README.md'}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(feature.files || []).map((file) => (
+                      <span key={file} className="text-xs bg-surface border border-line rounded-sm px-2 py-0.5 text-ink-soft font-mono">
+                        {file}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {feature.action === 'run' && feature.run && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-sm ${feature.run.overall_success ? 'bg-accent text-white' : 'bg-danger text-white'}`}>
+                      {feature.run.overall_success ? '运行 / 测试通过' : '运行 / 测试未通过'}
+                    </span>
+                    <span className="text-xs text-ink-faint">
+                      安装 {tick(feature.run.install)} · 构建 {tick(feature.run.build)} · 测试 {tick(feature.run.test)} · 核心流程 {tick(feature.run.core_flow)}
+                    </span>
+                  </div>
+
+                  {isWeb && previewUrl && (
+                    <div>
+                      <button type="button" onClick={() => onOpenPreview?.(previewUrl)} className="btn-primary text-xs">
+                        打开可点击预览 {previewUrl}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-ink-faint">启动命令</span>
+                    <code className="text-xs bg-paper-sink border border-line rounded-sm px-2 py-1 text-ink-soft font-mono flex-1 truncate">{runCommand}</code>
+                    <button type="button" onClick={() => void copyCommand()} className="btn-ghost text-xs">{copied ? '已复制' : '复制'}</button>
+                  </div>
+
+                  {artifactPath && (
+                    <div className="text-xs text-ink-faint">
+                      交付物路径：<span className="font-mono text-ink-soft">{artifactPath}</span>
+                    </div>
+                  )}
+
+                  {feature.feature_records && feature.feature_records.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs font-medium text-ink-soft">功能实现记录</div>
+                      {feature.feature_records.map((record, index) => (
+                        <div key={index} className="flex items-center gap-2 text-xs text-ink-soft">
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${record.status === 'tested' ? 'bg-accent' : 'bg-danger'}`} />
+                          <span className="flex-1">{record.prd_feature}</span>
+                          <span className={record.status === 'tested' ? 'text-accent' : 'text-danger'}>{record.status === 'tested' ? '已验证' : '未通过'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {feature.action === 'repair' && feature.repair && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-sm ${feature.repair.success ? 'bg-accent text-white' : 'bg-danger text-white'}`}>
+                      {feature.repair.success ? '自动修复成功' : '修复未成功'}
+                    </span>
+                    <span className="text-xs text-ink-faint">尝试 {feature.repair.attempts} 次</span>
+                  </div>
+                  {feature.repair.repairs.map((step, index) => (
+                    <div key={index} className="panel p-2 border-l-2 border-l-accent bg-surface space-y-0.5">
+                      <div className="text-xs text-ink-soft font-medium">{step.file}</div>
+                      <div className="text-xs text-danger">{step.error_summary}</div>
+                      <div className="text-xs text-accent">修复：{step.fix_applied}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {feature.action === 'noncoding' && (
+                <div className="space-y-1.5">
+                  <div className="text-sm text-ink font-medium">
+                    {DELIVERABLE_LABELS[feature.deliverable_type || ''] || feature.deliverable_type} · {feature.title}
+                  </div>
+                  <div className="text-xs text-ink-faint">已保存：{feature.file}</div>
+                  <div className="max-h-48 overflow-auto bg-paper-sink border border-line rounded-sm p-3 text-xs text-ink-soft">
+                    <Markdown content={feature.markdown || ''} onOpenPreview={onOpenPreview} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            {feature && (
+              <button type="button" disabled={busy || !projectId} onClick={() => void send('run')} className="btn-primary text-xs">
+                {busy ? '执行中…' : '运行 / 测试'}
+              </button>
+            )}
+            {feature && (
+              <button type="button" disabled={busy || !projectId} onClick={() => void send('repair')} className="btn-secondary text-xs">
+                自动修复
+              </button>
+            )}
+            <button type="button" onClick={() => setFormOpen((value) => !value)} className="btn-ghost text-xs">
+              {formOpen ? '收起生成表单' : '新建应用 / 交付物'}
+            </button>
+          </div>
+
+          {formOpen && (
+            <div className="space-y-3 border-t border-line pt-3">
+              <div className="space-y-2">
+                <div className="text-xs font-medium text-ink-soft">生成可运行软件</div>
+                <div className="flex flex-wrap gap-2">
+                  <input value={appName} onChange={(event) => setAppName(event.target.value)} placeholder="应用名称" className="input text-xs flex-1 min-w-[140px]" />
+                  <select value={genType} onChange={(event) => setGenType(event.target.value)} className="input text-xs">
+                    {Object.entries(APP_TYPE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <textarea
+                  value={featuresText}
+                  onChange={(event) => setFeaturesText(event.target.value)}
+                  placeholder="每个功能一行"
+                  rows={3}
+                  className="input text-xs w-full font-mono"
+                />
+                <input value={desc} onChange={(event) => setDesc(event.target.value)} placeholder="一句话描述（可选）" className="input text-xs w-full" />
+                <button type="button" disabled={busy || !projectId} onClick={handleGenerate} className="btn-primary text-xs">
+                  生成并写入工作区
+                </button>
+              </div>
+
+              <div className="space-y-2 border-t border-line pt-2">
+                <div className="text-xs font-medium text-ink-soft">非代码交付物</div>
+                <div className="flex flex-wrap gap-2">
+                  <input value={deliverableTitle} onChange={(event) => setDeliverableTitle(event.target.value)} placeholder="交付物标题" className="input text-xs flex-1 min-w-[140px]" />
+                  <select value={deliverableType} onChange={(event) => setDeliverableType(event.target.value)} className="input text-xs">
+                    {Object.entries(DELIVERABLE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <textarea
+                  value={deliverableFields}
+                  onChange={(event) => setDeliverableFields(event.target.value)}
+                  placeholder="字段用「键: 值」逐行填写"
+                  rows={3}
+                  className="input text-xs w-full font-mono"
+                />
+                <button type="button" disabled={busy || !projectId} onClick={handleNoncoding} className="btn-secondary text-xs">
+                  生成交付物
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function tick(result: SoftwareRunResult | null): string {
+  if (!result) return '—';
+  return result.exit_code === 0 ? '✓' : '✗';
+}
+
 export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -610,6 +903,10 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
 
       {stageStatus && (
         <StageGatePanel status={stageStatus} busy={stageBusy} onAction={handleStageAction} />
+      )}
+
+      {projectId && (
+        <SoftwareFeaturePanel projectId={projectId} onOpenPreview={onOpenPreview} />
       )}
 
       {routedAgent && (

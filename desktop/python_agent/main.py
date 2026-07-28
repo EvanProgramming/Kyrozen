@@ -34,6 +34,8 @@ from kyrozen.core.stagegate import (
     stage_advance,
 )
 from kyrozen.core.task import Task
+from kyrozen.core import featuregen as featuregen_mod
+from kyrozen.core import deliverable_templates as deliverable_mod
 from kyrozen.desktop import CloudProxyModelProvider
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory
@@ -154,6 +156,8 @@ class DesktopAgentRuntime:
                 self._handle_cancel_task(params)
             elif method == "stage_action":
                 self._handle_stage_action(params, req_id)
+            elif method == "software_feature":
+                self._handle_software_feature(params, req_id)
             else:
                 self._send_response(req_id, error=f"Unknown method: {method}")
         except Exception as exc:
@@ -383,6 +387,98 @@ class DesktopAgentRuntime:
             self._push_stage(store)
         except Exception as exc:
             self.logger.error("stage_action failed: %s", exc, exc_info=True)
+            self._send_response(req_id, error=str(exc))
+
+    def _handle_software_feature(self, params: dict[str, object], req_id: object) -> None:
+        """Handle a 3.3 software generate / run / repair / noncoding request.
+
+        Triggered from the desktop UI (kyzen:software-feature). The engine is
+        deterministic, so it works without an LLM and persists results to
+        <workspace>/.kyrozen/software_feature.json for the UI panel.
+        """
+        action = str(params.get("action", "generate"))
+        workspace_root = str(params.get("workspace_root", "."))
+        root_path = Path(workspace_root).resolve()
+        try:
+            if action == "generate":
+                prd = params.get("prd") or {}
+                if isinstance(prd, str):
+                    try:
+                        prd = json.loads(prd)
+                    except Exception:
+                        prd = {}
+                spec = featuregen_mod.generate_project_spec(
+                    prd,
+                    app_type=str(params.get("app_type") or "web_app"),
+                    app_name=params.get("app_name"),
+                    description=str(params.get("description") or ""),
+                )
+                result = featuregen_mod.scaffold_project(spec, root_path)
+                payload = {
+                    "action": "generate",
+                    "app_type": spec.application_type,
+                    "files": result.files,
+                    "manifest_path": result.manifest_path,
+                    "feature_slugs": spec.feature_slugs(),
+                }
+            elif action == "run":
+                manifest = featuregen_mod.load_manifest(root_path)
+                spec = featuregen_mod.SoftwareProjectSpec.from_dict(manifest.get("spec", {})) if manifest else featuregen_mod.generate_project_spec(app_type="web_app")
+                port = int(params.get("port") or featuregen_mod.DEFAULT_PORT)
+                runner = featuregen_mod.BuildRunner()
+                run = runner.run_all(root_path, port=port)
+                records = featuregen_mod.build_feature_records(spec, run)
+                run.feature_records = records
+                saved = featuregen_mod.save_software_feature(root_path, spec, run, feature_records=records)
+                payload = {
+                    "action": "run",
+                    "run": run.to_dict(),
+                    "feature_records": [r.to_dict() for r in records],
+                    "preview_url": run.preview_url,
+                    "command": run.command,
+                    "artifact_path": run.artifact_path,
+                    "saved_path": str(saved),
+                }
+            elif action == "repair":
+                manifest = featuregen_mod.load_manifest(root_path)
+                spec = featuregen_mod.SoftwareProjectSpec.from_dict(manifest.get("spec", {})) if manifest else featuregen_mod.generate_project_spec(app_type="web_app")
+                command = str(params.get("command") or f"{sys.executable} -m py_compile app.py tests/*.py")
+                max_attempts = int(params.get("max_attempts") or 3)
+                outcome = featuregen_mod.run_with_repair(featuregen_mod.CommandExecutor(), command, root_path, file_tasks=spec.file_tasks, max_attempts=max_attempts)
+                run = featuregen_mod.BuildRunner().run_all(root_path, port=featuregen_mod.DEFAULT_PORT)
+                records = featuregen_mod.build_feature_records(spec, run)
+                run.feature_records = records
+                saved = featuregen_mod.save_software_feature(root_path, spec, run, feature_records=records)
+                payload = {
+                    "action": "repair",
+                    "repair": outcome.to_dict(),
+                    "feature_records": [r.to_dict() for r in records],
+                    "saved_path": str(saved),
+                }
+            elif action == "noncoding":
+                dtype = str(params.get("deliverable_type") or "")
+                title = str(params.get("title") or "未命名交付物")
+                fields = params.get("fields") or {}
+                if isinstance(fields, str):
+                    try:
+                        fields = json.loads(fields)
+                    except Exception:
+                        fields = {}
+                res = deliverable_mod.build_deliverable(dtype, title, fields, root_path)
+                payload = {
+                    "action": "noncoding",
+                    "deliverable_type": res.deliverable_type,
+                    "title": res.title,
+                    "file": res.file,
+                    "markdown": res.markdown,
+                }
+            else:
+                self._send_response(req_id, error=f"Unknown software_feature action: {action}")
+                return
+            self._send_response(req_id, result=payload)
+            self._notify("software_feature", payload)
+        except Exception as exc:
+            self.logger.error("software_feature failed: %s", exc, exc_info=True)
             self._send_response(req_id, error=str(exc))
 
     def _cancel_task_timeout_timer(self) -> None:

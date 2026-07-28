@@ -53,6 +53,71 @@ export interface StageGateStatus {
   skips: StageSkip[];
 }
 
+// Feature 3.3: real software generation / run / repair (SoftwareFeatureTool).
+export interface FeatureRecord {
+  prd_feature: string;
+  files: string[];
+  tests: string[];
+  status: string;
+  notes: string;
+}
+
+export interface SoftwareRunResult {
+  command: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  cwd: string;
+}
+
+export interface SoftwareRepairStep {
+  task_path: string;
+  error_summary: string;
+  fix_applied: string;
+  file: string;
+}
+
+export interface SoftwareRepairOutcome {
+  success: boolean;
+  attempts: number;
+  final_result: SoftwareRunResult | null;
+  repairs: SoftwareRepairStep[];
+  associated_task: string;
+}
+
+export interface SoftwareRunSummary {
+  install: SoftwareRunResult | null;
+  build: SoftwareRunResult | null;
+  test: SoftwareRunResult | null;
+  core_flow: SoftwareRunResult | null;
+  preview_url: string;
+  command: string;
+  artifact_path: string;
+  overall_success: boolean;
+  feature_records: FeatureRecord[];
+  fix_count: number;
+}
+
+export interface SoftwareFeatureResult {
+  action: 'generate' | 'run' | 'repair' | 'noncoding';
+  app_type?: string;
+  files?: string[];
+  manifest_path?: string;
+  feature_slugs?: string[];
+  run?: SoftwareRunSummary;
+  feature_records?: FeatureRecord[];
+  preview_url?: string;
+  command?: string;
+  artifact_path?: string;
+  saved_path?: string;
+  repair?: SoftwareRepairOutcome;
+  deliverable_type?: string;
+  title?: string;
+  file?: string;
+  markdown?: string;
+}
+
 export interface KyrozenAPI {
   login: (email: string, password: string, serverUrl: string) => Promise<LoginResult>;
   verifyOpenToken: (token: string) => Promise<VerifyResult | null>;
@@ -118,6 +183,8 @@ export interface KyrozenAPI {
   onAgentRouted: (callback: (decision: { task_id: string; mode: string; mode_label: string; agent_name: string; agent_display_name: string; reason: string; available_tools: string[]; restricted_tools: string[]; degraded: boolean }) => void) => () => void;
   onAgentDegraded: (callback: (info: { task_id: string; agent_display_name: string; reason: string; repair_steps: string[] }) => void) => () => void;
   onStageUpdated: (callback: (status: StageGateStatus) => void) => () => void;
+  onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => () => void;
+  sendSoftwareFeature: (params: Record<string, unknown>) => void;
   sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) => Promise<{ ok: boolean }>;
   onConfirmationRequest: (callback: (request: { confirmation_id: string; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string }) => void) => () => void;
   respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean) => Promise<{ success: boolean; error?: string }>;

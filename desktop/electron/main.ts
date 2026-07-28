@@ -1964,6 +1964,11 @@ ipcMain.handle('kyrozen:import-local-project', async () => {
   };
 });
 
+ipcMain.on('kyzen:software-feature', (_event, params: unknown) => {
+  logInfo('Forwarding software_feature request to Python Agent');
+  sendToPythonAgent({ jsonrpc: '2.0', method: 'software_feature', params });
+});
+
 ipcMain.on('kyrozen:request-initial-token', () => {
   const url = getProtocolUrl();
   logInfo(`Renderer requested initial token, protocolUrl=${url ? redactProtocolUrl(url) : 'none'}`);
@@ -2642,6 +2647,9 @@ function handlePythonAgentLine(line: string) {
       showNotification('Kyrozen', '本地 Agent 初始化失败，已降级为只读模式');
     } else if (message.method === 'stage_updated') {
       mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
+    } else if (message.method === 'software_feature') {
+      // 3.3 real software generation / run / repair results for the UI panel.
+      mainWindow?.webContents.send('kyzen:software-feature', message.params);
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);

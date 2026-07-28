@@ -36,6 +36,25 @@ interface ConfirmationRequest {
   detail: string;
 }
 
+interface RoutedAgent {
+  task_id: string;
+  mode: string;
+  mode_label: string;
+  agent_name: string;
+  agent_display_name: string;
+  reason: string;
+  available_tools: string[];
+  restricted_tools: string[];
+  degraded: boolean;
+}
+
+interface DegradedInfo {
+  task_id: string;
+  agent_display_name: string;
+  reason: string;
+  repair_steps: string[];
+}
+
 interface QuestionOption { label: string; value: string }
 interface QuestionCard { question: string; options: QuestionOption[]; allow_other?: boolean }
 
@@ -115,6 +134,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   const [pendingAttachments, setPendingAttachments] = useState<Array<{ name: string; content: string }>>([]);
   const [expandedOperations, setExpandedOperations] = useState<Set<number>>(new Set());
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
+  const [routedAgent, setRoutedAgent] = useState<RoutedAgent | null>(null);
+  const [degraded, setDegraded] = useState<DegradedInfo | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -128,6 +149,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     setPendingAttachments([]);
     setExpandedOperations(new Set());
     setConfirmation(null);
+    setRoutedAgent(null);
+    setDegraded(null);
   }, [projectId]);
 
   useEffect(() => {
@@ -176,11 +199,24 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       setConfirmation(request);
       setActivity('等待你确认下一步操作');
     });
+    const unsubRouted = window.kyrozen.onAgentRouted((decision) => {
+      setRoutedAgent(decision);
+      if (decision.degraded) {
+        setActivity(`已降级为只读模式（${decision.agent_display_name}）`);
+      } else {
+        setActivity(`由${decision.agent_display_name}处理中`);
+      }
+    });
+    const unsubDegraded = window.kyrozen.onAgentDegraded((info) => {
+      setDegraded(info);
+    });
     return () => {
       unsubChat();
       unsubPlan();
       unsubActivity();
       unsubConfirmation();
+      unsubRouted();
+      unsubDegraded();
     };
   }, [onProjectChanged]);
 
@@ -196,6 +232,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     setIsRunning(true);
     setActivity('正在理解你的需求');
     setPlan(null);
+    setRoutedAgent(null);
+    setDegraded(null);
     const result = await window.kyrozen.sendChat(message);
     if (!result.success) {
       setMessages((prev) => [...prev, { role: 'system', content: `发送失败：${result.error || '未知错误'}` }]);
@@ -282,7 +320,32 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         </div>
       )}
 
+      {routedAgent && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-accent-soft border-b border-line text-sm text-ink-soft" title={routedAgent.reason}>
+          <span className={`w-2 h-2 rounded-full ${routedAgent.degraded ? 'bg-warning' : 'bg-accent'}`} />
+          <span>
+            由 <span className="font-medium text-ink">{routedAgent.agent_display_name}</span> 处理（模式：{routedAgent.mode_label}）
+          </span>
+          {routedAgent.restricted_tools.length > 0 && (
+            <span className="text-xs text-ink-faint">受限工具 {routedAgent.restricted_tools.length} 项</span>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {degraded && (
+          <div className="panel p-4 border-l-2 border-l-danger bg-danger-soft" role="alert" aria-label="只读降级提示">
+            <div className="font-hand text-lg text-danger">本地 Agent 已降级为只读模式</div>
+            <div className="text-sm text-ink mt-1">{degraded.agent_display_name} 初始化失败，当前无法修改文件或执行命令。</div>
+            <div className="text-xs text-ink-faint mt-2">原因：{degraded.reason}</div>
+            <div className="text-xs text-ink-soft mt-2 font-medium">修复步骤：</div>
+            <ol className="list-decimal list-inside text-xs text-ink-soft mt-1 space-y-1">
+              {degraded.repair_steps.map((step, index) => (
+                <li key={index}>{step}</li>
+              ))}
+            </ol>
+          </div>
+        )}
         {messages.map((message, index) => {
           const parsed = questionByMessage[index];
           const expanded = expandedOperations.has(index);

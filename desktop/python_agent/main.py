@@ -22,6 +22,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from kyrozen.config import get_config
 from kyrozen.core.agent import BaseAgent
+from kyrozen.core.handoff import HandoffStore, HandoffTool
+from kyrozen.core.router import AgentRouter, LocalCapabilities
 from kyrozen.core.task import Task
 from kyrozen.desktop import CloudProxyModelProvider
 from kyrozen.logs import get_logger
@@ -101,6 +103,7 @@ class DesktopAgentRuntime:
         self.send_message: callable | None = None
         self.model: CloudProxyModelProvider | None = None
         self.agent: BaseAgent | None = None
+        self.router = AgentRouter()
         self.current_task_id: str | None = None
         self.current_task: Task | None = None
         self._pending_confirmations: dict[str, PendingConfirmation] = {}
@@ -181,18 +184,96 @@ class DesktopAgentRuntime:
         # back to this exact directory instead of <workspace>/projects/<id>.
         self.config.projects_dir = str(root_path.parent)
 
+        # ------------------------------------------------------------------
+        # Route the task to the correct specialized agent (AgentRouter).
+        # ------------------------------------------------------------------
+        project_id = str(params.get("project_id", ""))
+        requested_mode = str(params.get("mode", ""))
+        stage = str(params.get("stage", ""))
+        project_type = str(params.get("project_type", ""))
+
+        state_dir = root_path / ".kyrozen"
+        handoff_store = HandoffStore(state_dir / "handoff.json", project_id=project_id)
+        handoff_tool = HandoffTool(handoff_store)
+        registry = get_default_registry()
+        registry.register(handoff_tool)
+
+        self.router.log_path = state_dir / "routing_log.jsonl"
+        agent, effective_registry, decision = self.router.route(
+            requested_mode=requested_mode,
+            stage=stage,
+            project_type=project_type,
+            user_message=message,
+            capabilities=LocalCapabilities.detect(),
+            registry=registry,
+            agent_kwargs={
+                "config": self.config,
+                "model": self.model,
+                "memory": InMemoryMemory(),
+                "logger": self.logger,
+                "confirmation_callback": self._request_confirmation,
+            },
+            task_id=self.current_task_id,
+        )
+        handoff_tool.mode = decision.mode
+        self.agent = agent
+        self._wrap_tool_execution(effective_registry)
+
+        # Structured handoff: snapshot state when the active agent changes.
+        previous_mode = handoff_store.last_mode
+        if previous_mode and previous_mode != decision.mode:
+            handoff_store.record_handoff(
+                source_mode=previous_mode,
+                source_agent=handoff_store.last_agent,
+                target_mode=decision.mode,
+                target_agent=decision.agent_name,
+            )
+        handoff_store.set_current_agent(decision.mode, decision.agent_name)
+
+        # Report the routing decision: to the desktop UI and into the cloud
+        # task record (task_step), so task history shows the exact agent.
+        self._notify("agent_routed", {"task_id": self.current_task_id, **decision.to_dict()})
+        self._notify("task_step", {
+            "task_id": self.current_task_id,
+            "step": {
+                "description": f"路由到{decision.agent_display_name}（模式：{decision.mode}）",
+                "status": "completed",
+                "metadata": decision.to_dict(),
+            },
+        })
+        if decision.degraded:
+            self._notify("agent_degraded", {
+                "task_id": self.current_task_id,
+                "agent_display_name": decision.agent_display_name,
+                "reason": decision.degraded_reason,
+                "repair_steps": decision.repair_steps,
+            })
+
+        # Inject the persisted handoff context so a restarted or newly routed
+        # agent never re-asks questions the user has already answered.
+        agent_input = message
+        context_block = handoff_store.context_block()
+        if context_block:
+            agent_input = f"{context_block}\n\n[用户消息]\n{message}"
+        if decision.degraded:
+            agent_input = (
+                "[系统提示] 本地专用 Agent 初始化失败，当前处于只读降级模式：只能读取文件和检索信息，"
+                "不能修改文件或执行命令。请先告知用户降级原因，再尽力用只读能力回答。\n"
+                f"降级原因：{decision.degraded_reason}\n\n" + agent_input
+            )
+
         self._notify("task_step", {
             "task_id": self.current_task_id,
             "step": {
                 "description": "Starting local task execution",
                 "status": "running",
-                "metadata": {"message": message},
+                "metadata": {"message": message, "agent": decision.agent_name, "mode": decision.mode},
             },
         })
 
         def execute() -> None:
             try:
-                task = self.agent.run(message, project_id=str(params.get("project_id", "")))
+                task = self.agent.run(agent_input, project_id=project_id)
                 self.current_task = task
                 self._cancel_task_timeout_timer()
                 if not self._task_timed_out.is_set():

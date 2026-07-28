@@ -73,6 +73,8 @@ export interface KyrozenAPI {
   onChatMessage: (callback: (message: { role: string; content: string; raw?: string; operations?: Array<{ description: string; status: string; timestamp: string }> }) => void) => () => void;
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => () => void;
   onTaskActivity: (callback: (activity: { task_id: string; description: string; status: string }) => void) => () => void;
+  onAgentRouted: (callback: (decision: { task_id: string; mode: string; mode_label: string; agent_name: string; agent_display_name: string; reason: string; available_tools: string[]; restricted_tools: string[]; degraded: boolean }) => void) => () => void;
+  onAgentDegraded: (callback: (info: { task_id: string; agent_display_name: string; reason: string; repair_steps: string[] }) => void) => () => void;
   onConfirmationRequest: (callback: (request: { confirmation_id: string; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string }) => void) => () => void;
   respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean) => Promise<{ success: boolean; error?: string }>;
   openPreview: (url: string, mode: 'embedded' | 'window' | 'external') => Promise<{ success: boolean; error?: string }>;

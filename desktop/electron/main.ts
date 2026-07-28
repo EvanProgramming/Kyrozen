@@ -2304,6 +2304,27 @@ async function handleServerMessage(message: Record<string, unknown>) {
     currentTaskId = String(message.task_id);
     currentTaskRunning = true;
     taskRetryCount = 0;
+    // Fetch stage and project info so the local AgentRouter can route by
+    // project stage and project type, not just the dispatched mode.
+    let projectStage = '';
+    let projectType = '';
+    try {
+      const state = await apiGet(`/api/projects/${String(message.project_id || currentProjectId)}/state`);
+      projectStage = String(state?.stage || '');
+    } catch {
+      // Best effort: routing falls back to the dispatched mode.
+    }
+    try {
+      const project = await apiGet(`/api/projects/${String(message.project_id || currentProjectId)}`);
+      const haystack = `${String(project?.name || '')} ${String(project?.description || '')} ${String(project?.goal || '')}`;
+      if (/arduino|esp32|esp8266|stm32|raspberry|单片机|开发板|固件|电路|传感器|pcb|硬件/i.test(haystack)) {
+        projectType = 'hardware';
+      } else {
+        projectType = 'software';
+      }
+    } catch {
+      // Best effort: leave project type empty.
+    }
     const payload = {
       jsonrpc: '2.0',
       id: Date.now(),
@@ -2313,6 +2334,8 @@ async function handleServerMessage(message: Record<string, unknown>) {
         project_id: message.project_id,
         message: message.message,
         mode: message.mode,
+        stage: projectStage,
+        project_type: projectType,
         workspace_root: await chooseWorkspaceRoot(String(message.project_id || currentProjectId)),
       },
     };
@@ -2589,6 +2612,19 @@ function handlePythonAgentLine(line: string) {
       history.push(operation);
       taskOperations.set(taskId, history.slice(-200));
       sendTaskActivity({ task_id: taskId, description: operation.description, status: operation.status });
+    } else if (message.method === 'agent_routed') {
+      const display = String(message.params?.agent_display_name || message.params?.agent_name || 'Agent');
+      logInfo(`Task routed to ${String(message.params?.agent_name || '')} (mode=${String(message.params?.mode || '')})`);
+      mainWindow?.webContents.send('kyrozen:agent-routed', message.params);
+      sendTaskActivity({
+        task_id: String(message.params?.task_id || currentTaskId || ''),
+        description: `由${display}处理`,
+        status: 'running',
+      });
+    } else if (message.method === 'agent_degraded') {
+      logWarn(`Local agent degraded to read-only: ${String(message.params?.reason || '')}`);
+      mainWindow?.webContents.send('kyrozen:agent-degraded', message.params);
+      showNotification('Kyrozen', '本地 Agent 初始化失败，已降级为只读模式');
     } else if (message.method === 'request_confirmation') {
       showConfirmationDialog(message.params);
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);

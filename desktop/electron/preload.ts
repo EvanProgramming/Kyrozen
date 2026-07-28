@@ -103,6 +103,18 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:task-activity', handler);
   },
 
+  onAgentRouted: (callback: (decision: Record<string, unknown>) => void) => {
+    const handler = (_event: unknown, decision: Record<string, unknown>) => callback(decision);
+    ipcRenderer.on('kyrozen:agent-routed', handler);
+    return () => ipcRenderer.removeListener('kyrozen:agent-routed', handler);
+  },
+
+  onAgentDegraded: (callback: (info: Record<string, unknown>) => void) => {
+    const handler = (_event: unknown, info: Record<string, unknown>) => callback(info);
+    ipcRenderer.on('kyrozen:agent-degraded', handler);
+    return () => ipcRenderer.removeListener('kyrozen:agent-degraded', handler);
+  },
+
   onConfirmationRequest: (callback: (request: Record<string, unknown>) => void) => {
     const handler = (_event: unknown, request: Record<string, unknown>) => callback(request);
     ipcRenderer.on('kyrozen:confirmation-request', handler);

@@ -20,6 +20,7 @@ metadata that needs them is left empty and ``error`` records what was skipped.
 
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -212,6 +213,44 @@ class ImageAnalyzer:
         if not bits:
             return "图像文件（未提取到元数据）"
         return "；".join(bits) + "。"
+
+
+class AIImageAnalyzer(ImageAnalyzer):
+    """Wraps base ImageAnalyzer and enriches description with AI vision analysis.
+
+    Uses the multi-provider system (OmniRoute auto/vision > Gemini > Groq)
+    to produce a natural-language description of image content. Falls back
+    to the base description if no AI provider is available.
+    """
+
+    def __init__(self, chat_fn: Callable | None = None, thumbnail_width: int = THUMBNAIL_WIDTH) -> None:
+        super().__init__(thumbnail_width=thumbnail_width)
+        self._chat_fn = chat_fn
+
+    def analyze(self, path: str | Path, thumbnail_dir: Path) -> ImageAnalysis:
+        analysis = super().analyze(path, thumbnail_dir)
+        if self._chat_fn is None:
+            return analysis
+        try:
+            path = Path(path)
+            image_bytes = path.read_bytes()
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            ext = path.suffix.lstrip(".").lower()
+            mime = _MIME.get(ext, "image/png")
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "用一句中文简短描述这张图片的内容（不超过50字），只输出描述本身。"},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                ],
+            }]
+            response = self._chat_fn(messages, model="auto/vision")
+            desc = (response.get("content") or "").strip()
+            if desc:
+                analysis.description = desc
+        except Exception:
+            pass  # best-effort: keep base description on failure
+        return analysis
 
 
 class VideoAnalyzer:

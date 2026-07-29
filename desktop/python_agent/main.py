@@ -56,6 +56,62 @@ class PendingConfirmation:
         self.store_id: str | None = None
 
 
+def _make_ai_image_analyzer() -> "attachments_mod.AIImageAnalyzer | None":
+    """Build an image analyzer using OmniRoute vision (fallback: Gemini direct)."""
+    import urllib.request, urllib.error
+
+    def chat_fn(messages: list, *, model_name: str = "auto/vision") -> dict:
+        # Try OmniRoute first, then Gemini direct
+        providers = [
+            ("https://kyrozen.chat/ai/v1/chat/completions", {"Authorization": "Bearer auto"}),
+            (f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={os.environ.get('GEMINI_API_KEY', '')}", {}),
+        ]
+        last_error = None
+        for url, headers in providers:
+            try:
+                if "generativelanguage" in url:
+                    # Gemini REST format
+                    import base64 as b64mod
+                    text_parts = []
+                    for m in messages:
+                        content = m.get("content", "")
+                        if isinstance(content, list):
+                            for part in content:
+                                if part.get("type") == "text":
+                                    text_parts.append(part["text"])
+                                elif part.get("type") == "image_url":
+                                    data_url = part["image_url"]["url"]
+                                    if data_url.startswith("data:"):
+                                        b64_data = data_url.split(",", 1)[1]
+                                        text_parts.append({"inline_data": {"mime_type": "image/png", "data": b64_data}})
+                        else:
+                            text_parts.append(str(content))
+                    body = json.dumps({"contents": [{"parts": text_parts}]}).encode()
+                    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        data = json.loads(resp.read())
+                        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        return {"content": text}
+                else:
+                    # OpenAI-compatible format
+                    body = json.dumps({
+                        "model": "auto/vision",
+                        "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
+                        "max_tokens": 100,
+                    }).encode()
+                    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", **headers})
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        data = json.loads(resp.read())
+                        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        return {"content": text}
+            except Exception as e:
+                last_error = e
+                continue
+        raise last_error or RuntimeError("No vision provider available")
+
+    return attachments_mod.AIImageAnalyzer(chat_fn=chat_fn)
+
+
 class PlanDetectingModelProvider:
     """Wraps a model provider and emits the first execution plan it detects."""
 
@@ -579,7 +635,10 @@ class DesktopAgentRuntime:
                 op_log = operation_mod.OperationLog(root_path)
                 op_id = op_log.start("attachment.add", input_summary=f"添加附件 {Path(path).name}")
                 try:
-                    manager = attachments_mod.AttachmentsManager(root_path)
+                    manager = attachments_mod.AttachmentsManager(
+                        root_path,
+                        image_analyzer=_make_ai_image_analyzer(),
+                    )
                     attachment = manager.add(path)
                     payload = {"action": "attach", "attachment": attachment.to_dict()}
                     op_log.end(op_id, output_summary=f"已分析 {attachment.filename}", status="success")

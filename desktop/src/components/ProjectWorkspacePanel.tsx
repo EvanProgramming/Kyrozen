@@ -11,6 +11,7 @@ type WorkspaceData = {
   artifacts?: Row[];
   tasks?: Row[];
   sections?: Record<string, Row>;
+  local?: Row;
 };
 
 const TABS = [
@@ -32,6 +33,9 @@ const LABELS: Record<string, string> = {
   mvp_features: 'MVP 功能', out_of_scope: '本次不做', functional_requirements: '功能要求',
   risks: '风险', status: '状态', title: '标题', decision: '决定', reason: '原因',
   next_action: '建议下一步', action: '行动', target_mode: '对应阶段', result: '结果',
+  confidence: '可信度', summary: '摘要', missing_dimensions: '还需澄清', question: '下一条问题',
+  feature_records: '功能验证', overall_success: '整体结果', preview_url: '预览地址',
+  workspace_root: '本地工作区', files: '本地文件', deliverables: '本地交付物', software: '软件生成结果', stagegate: '本地阶段门禁',
 };
 
 const STAGE_NAMES: Record<string, string> = {
@@ -181,10 +185,11 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                 <Section title={String(data.project?.name || '项目概览')} value={{ description: data.project?.description, goal: data.project?.goal, current_stage: data.project?.current_stage }} />
                 <div className="grid gap-4 md:grid-cols-3">
                   <Section title="当前状态" value={data.state} />
-                  <Section title="已形成资料" value={`${data.artifacts?.length || 0} 份`} />
+                  <Section title="已形成资料" value={`${(data.artifacts?.length || 0) + (Array.isArray(data.local?.deliverables) ? data.local!.deliverables.length : 0)} 份`} />
                   <Section title="执行任务" value={`${data.tasks?.length || 0} 个`} />
                 </div>
-                <Section title="最近任务" description="只展示用户需要关注的任务结果" value={(data.tasks || []).slice(0, 5).map((item) => ({ title: item.title, status: item.status, result: (item.result as Row)?.answer }))} />
+                <Section title="本地成果" description="工作区中真实存在的软件、交付物与阶段记录" value={data.local} />
+                <Section title="最近任务" description="只展示用户需要关注的任务结果" value={(data.tasks || []).slice(0, 5).map((item) => ({ title: String(item.title || '').startsWith('[') ? 'AI 项目任务' : item.title, status: item.status, result: (item.result as Row)?.answer }))} />
               </>
             )}
             {tab === 'problem' && (
@@ -203,6 +208,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
             {tab === 'build' && (
               <div className="grid gap-4 md:grid-cols-2">
                 <Section title="软件开发" value={data.sections?.development} />
+                <Section title="本地软件交付" value={data.local?.software} />
                 <Section title="硬件与采购" value={data.sections?.hardware} />
               </div>
             )}

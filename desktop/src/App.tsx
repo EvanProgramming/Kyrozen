@@ -186,25 +186,34 @@ function App() {
         const verified = await window.kyrozen.verifyOpenToken(openToken);
         if (verified) {
           setToken(verified.wsToken);
-          await loadProjects();
-          await loadUserProfile();
+          void loadProjects();
+          void loadUserProfile();
           if (projectId) {
             setCurrentProjectId(projectId);
-            await window.kyrozen.setCurrentProject(projectId);
+            localStorage.setItem('kyrozen:last-project-id', projectId);
+            void window.kyrozen.setCurrentProject(projectId);
           }
         }
       }
     });
 
-    const unsubSessionResumed = window.kyrozen.onSessionResumed(async (token: string) => {
+    const unsubSessionResumed = window.kyrozen.onSessionResumed((token: string) => {
       setSessionNotice(null);
       setToken(token);
-      await loadProjects();
-      await loadQuota();
-      await loadFullTrust();
-      await loadLanguage();
-      await loadGitHubStatus();
-      await loadUserProfile();
+      const savedProjectId = localStorage.getItem('kyrozen:last-project-id');
+      if (savedProjectId) {
+        setCurrentProjectId(savedProjectId);
+        void window.kyrozen?.setCurrentProject(savedProjectId);
+      }
+      // Hydrate independent panels independently. A slow profile, quota, or
+      // GitHub request must not hold the project list and selected workspace
+      // in an empty startup screen.
+      void loadProjects();
+      void loadQuota();
+      void loadFullTrust();
+      void loadLanguage();
+      void loadGitHubStatus();
+      void loadUserProfile();
     });
 
     const unsubSessionEnded = window.kyrozen.onSessionEnded(() => {
@@ -215,6 +224,7 @@ function App() {
       setFullTrust(false);
       setGithubStatus({ connected: false, scope: '' });
       setUserProfile(null);
+      localStorage.removeItem('kyrozen:last-project-id');
     });
 
     const unsubSessionExpired = window.kyrozen.onSessionExpired((message: string) => {
@@ -226,6 +236,7 @@ function App() {
       setFullTrust(false);
       setGithubStatus({ connected: false, scope: '' });
       setUserProfile(null);
+      localStorage.removeItem('kyrozen:last-project-id');
       setSessionNotice(message || '登录已过期，请重新登录。');
     });
 
@@ -256,23 +267,36 @@ function App() {
       });
     }, 5000);
 
-    window.kyrozen.getInitialSession().then(async (session) => {
-      if (session.wsToken) {
+    let initialSessionTimer: number | null = null;
+    let initialSessionAttempts = 0;
+    const hydrateInitialSession = () => window.kyrozen?.getInitialSession().then((session) => {
+      if (session?.wsToken) {
         setToken(session.wsToken);
-        await loadProjects();
-        if (session.currentProjectId) setCurrentProjectId(session.currentProjectId);
-        await loadQuota();
-        await loadFullTrust();
-        await loadLanguage();
-        await loadGitHubStatus();
-        await loadUserProfile();
+        const savedProjectId = session.currentProjectId || localStorage.getItem('kyrozen:last-project-id');
+        if (savedProjectId) {
+          setCurrentProjectId(savedProjectId);
+          void window.kyrozen?.setCurrentProject(savedProjectId);
+        }
+        void loadProjects();
+        void loadQuota();
+        void loadFullTrust();
+        void loadLanguage();
+        void loadGitHubStatus();
+        void loadUserProfile();
+        window.kyrozen?.requestInitialToken();
+      } else if (initialSessionAttempts < 30) {
+        initialSessionAttempts += 1;
+        window.kyrozen?.requestInitialToken();
+        initialSessionTimer = window.setTimeout(hydrateInitialSession, 1000);
       }
     }).catch(() => {
       window.kyrozen?.requestInitialToken();
     });
+    void hydrateInitialSession();
 
     return () => {
       clearTimeout(updateTimer);
+      if (initialSessionTimer != null) window.clearTimeout(initialSessionTimer);
       unsubProtocolUrl();
       unsubSessionResumed();
       unsubSessionEnded();
@@ -317,6 +341,7 @@ function App() {
     if (!window.kyrozen) return;
     await window.kyrozen.setCurrentProject(projectId);
     setCurrentProjectId(projectId);
+    localStorage.setItem('kyrozen:last-project-id', projectId);
     setPreviewUrl(null);
     setEditingFile(null);
     setShowProjectWorkspace(false);

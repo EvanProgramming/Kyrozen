@@ -4,6 +4,12 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
   workers: 1,
+  webServer: {
+    command: '../.venv/bin/python e2e/local-server.py',
+    url: 'http://127.0.0.1:8001/api/health',
+    timeout: 30_000,
+    reuseExistingServer: false,
+  },
   // 3.6 #4: 每次发布运行保存录像/截图/结果到 e2e/release-runs/
   reporter: [
     ['list'],

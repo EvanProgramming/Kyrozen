@@ -16,5 +16,6 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON public.chat_messages(user_i
 
 ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can access their own chat messages" ON public.chat_messages;
 CREATE POLICY "Users can access their own chat messages" ON public.chat_messages
     FOR ALL USING (auth.uid()::text = user_id);

@@ -18,6 +18,11 @@ from __future__ import annotations
 import sys
 import tempfile
 import json
+import os
+import socket
+import subprocess
+import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -84,6 +89,18 @@ def test_scaffold_writes_real_files(tmp_path: Path):
         assert (tmp_path / f).exists(), f"missing {f}"
     # app.py is valid Python
     assert tmp_path.joinpath("app.py").read_text().count("def main()") == 1
+    source = tmp_path.joinpath("app.py").read_text()
+    assert "创建活动" in source
+    assert "/api/events" in source
+    assert "不能重复提交" in source
+    assert "document.getElementById(id).value" in source
+    assert "title:title.value" not in source
+    assert "const phone=prompt(" not in source
+    assert "document.querySelector(`#phone-${id}`).value" in source
+    assert 'form id="createForm"' in source
+    assert 'class="signup-form row"' in source
+    assert "addEventListener('submit'" in source
+    assert "onclick=" not in source
 
 
 def test_readme_has_required_sections(tmp_path: Path):
@@ -125,6 +142,37 @@ def test_build_and_test_real_subprocess(tmp_path: Path):
     assert build.success, build.stderr
     test = runner.test(tmp_path)
     assert test.success, test.stdout + test.stderr
+
+
+def test_preview_does_not_accept_an_orphan_server_health_check(tmp_path: Path):
+    _scaffold_web(tmp_path)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        occupied_port = probe.getsockname()[1]
+    env = {**os.environ, "PORT": str(occupied_port)}
+    orphan = subprocess.Popen(
+        [sys.executable, "app.py"], cwd=tmp_path, env=env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        for _ in range(50):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{occupied_port}/health", timeout=0.2).close()
+                break
+            except Exception:
+                time.sleep(0.05)
+        run = fg.BuildRunner().start_preview(tmp_path, port=occupied_port, timeout=2)
+        assert run.success, run.stderr
+        # The orphan should be killed; the new preview claims the now-free port
+        assert orphan.poll() is not None, "orphan preview should have been killed"
+    finally:
+        if orphan.poll() is None:
+            orphan.terminate()
+            try: orphan.wait(timeout=5)
+            except Exception: orphan.kill()
+        preview = fg._PREVIEW_PROCESSES.pop(str(tmp_path.resolve()), None)
+        if preview and preview.poll() is None:
+            fg._kill_preview_proc(preview)  # preview uses setsid, safe to killpg
 
 
 def test_core_flow_runs_real_server(tmp_path: Path):
@@ -264,6 +312,18 @@ def test_noncoding_templates_render(dtype, tmp_path: Path):
 def test_noncoding_unknown_type_raises(tmp_path: Path):
     with pytest.raises(ValueError):
         dt.build_deliverable("nope", "x", {}, tmp_path)
+
+
+def test_noncoding_accepts_plain_chinese_field_labels(tmp_path: Path):
+    res = dt.build_deliverable(
+        "research_report",
+        "社区活动报名竞品调研报告",
+        {"背景": "微信群接龙容易漏人", "对比对象": "微信接龙、问卷星", "重点": "无需注册和名额控制", "结论": "先做轻量报名工具"},
+        tmp_path,
+    )
+    assert "微信群接龙容易漏人" in res.markdown
+    assert "微信接龙、问卷星" in res.markdown
+    assert "先做轻量报名工具" in res.markdown
 
 
 # --------------------------------------------------------------------------- #

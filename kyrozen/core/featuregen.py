@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -41,6 +42,28 @@ CLI_APP_TYPES = {"cli_tool", "automation_tool"}
 
 DEFAULT_PORT = 8000
 _PREVIEW_PROCESSES: dict[str, subprocess.Popen] = {}
+
+
+def _kill_preview_proc(proc: subprocess.Popen) -> None:
+    """Kill a preview process — uses process group if available, else direct kill."""
+    if sys.platform == "win32":
+        proc.terminate()
+        try: proc.wait(timeout=3)
+        except Exception: proc.kill()
+    else:
+        try:
+            # Only killpg if the process is in its own session (started with setsid)
+            if os.getsid(proc.pid) != os.getsid(os.getpid()):  # type: ignore[attr-defined]
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)  # type: ignore[attr-defined]
+                try: proc.wait(timeout=3)
+                except Exception:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)  # type: ignore[attr-defined]
+            else:
+                proc.terminate()
+                try: proc.wait(timeout=3)
+                except Exception: proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -860,14 +883,24 @@ class BuildRunner:
         key = str(Path(cwd).resolve())
         previous = _PREVIEW_PROCESSES.pop(key, None)
         if previous and previous.poll() is None:
-            previous.terminate()
-            try: previous.wait(timeout=3)
-            except Exception: previous.kill()
+            _kill_preview_proc(previous)
         preview_id = f"{os.getpid()}-{time.time_ns()}"
-        # A preview can outlive Electron and become an untracked orphan. Never
-        # accept another process's /health response as proof that the newly
-        # generated source started; probe a per-launch ownership nonce and move
-        # to the next local port when the preferred port is occupied.
+        # kill any orphaned process still holding our preferred port range
+        for candidate_port in range(port, port + 21):
+            try:
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{candidate_port}"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                for orphan_pid_s in result.stdout.strip().splitlines():
+                    try:
+                        orphan_pid = int(orphan_pid_s.strip())
+                        if orphan_pid != os.getpid():
+                            os.kill(orphan_pid, signal.SIGKILL)
+                    except (ValueError, OSError):
+                        pass
+            except Exception:
+                pass
         for candidate_port in range(port, port + 21):
             env = {
                 **os.environ,
@@ -877,6 +910,7 @@ class BuildRunner:
             proc = subprocess.Popen(
                 [sys.executable, "app.py"], cwd=key, env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid if sys.platform != "win32" else None,
             )
             url = f"http://127.0.0.1:{candidate_port}/health"
             for _ in range(int(timeout * 10)):
@@ -896,9 +930,7 @@ class BuildRunner:
                 except Exception:
                     time.sleep(0.1)
             if proc.poll() is None:
-                proc.terminate()
-                try: proc.wait(timeout=3)
-                except Exception: proc.kill()
+                _kill_preview_proc(proc)
         return RunResult(command=f"preview (ports {port}-{port + 20})", exit_code=1, stderr="preview server did not become healthy", cwd=key)
 
     def run_all(self, cwd: str | Path, port: int = DEFAULT_PORT) -> "RunSummary":

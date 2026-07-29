@@ -94,8 +94,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
   startPairing: (serverUrl: string) => ipcRenderer.invoke('kyrozen:start-pairing', serverUrl),
   pollPairing: (serverUrl: string, code: string) => ipcRenderer.invoke('kyrozen:poll-pairing', serverUrl, code),
 
-  onChatMessage: (callback: (message: { role: string; content: string; raw?: string; operations?: unknown[] }) => void) => {
-    const handler = (_event: unknown, message: { role: string; content: string; raw?: string; operations?: unknown[] }) => callback(message);
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string; error?: string; operations?: unknown[] }) => void) => {
+    const handler = (_event: unknown, message: { role: string; content: string; raw?: string; error?: string; operations?: unknown[] }) => callback(message);
     ipcRenderer.on('kyrozen:chat-message', handler);
     return () => ipcRenderer.removeListener('kyrozen:chat-message', handler);
   },
@@ -163,8 +163,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
   sendSoftwareFeature: (params: Record<string, unknown>) =>
     ipcRenderer.send('kyzen:software-feature', params),
 
-  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) =>
-    ipcRenderer.invoke('kyrozen:stage-action', action, stage),
+  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string, riskDetails?: Record<string, string>) =>
+    ipcRenderer.invoke('kyrozen:stage-action', action, stage, riskDetails),
 
   onConfirmationRequest: (callback: (request: Record<string, unknown>) => void) => {
     const handler = (_event: unknown, request: Record<string, unknown>) => callback(request);

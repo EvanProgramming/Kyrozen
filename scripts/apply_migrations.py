@@ -28,6 +28,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
 
 
+def migration_files() -> list[Path]:
+    """Return the baseline first, then numbered migrations in stable order."""
+    all_sql_files = list(MIGRATIONS_DIR.glob("*.sql"))
+    return sorted(
+        all_sql_files,
+        key=lambda path: (path.name != "supabase_schema.sql", path.name),
+    )
+
+
 def main() -> int:
     dsn = os.environ.get("KYROZEN_POSTGRES_DSN") or (
         sys.argv[sys.argv.index("--dsn") + 1] if "--dsn" in sys.argv else ""
@@ -47,7 +56,10 @@ def main() -> int:
         print("ERROR: 需要 psycopg2（已内置开发虚拟环境）。", file=sys.stderr)
         return 2
 
-    sql_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+    # The baseline creates the tables consumed by every numbered migration.
+    # Lexicographic ordering would otherwise run 001_* before the baseline on
+    # a fresh database and fail on missing projects/tasks tables.
+    sql_files = migration_files()
     if not sql_files:
         print(f"在 {MIGRATIONS_DIR} 未找到任何迁移文件。")
         return 0
@@ -61,6 +73,9 @@ def main() -> int:
                 sql = sql_file.read_text(encoding="utf-8")
                 print(f"  -> 应用 {sql_file.name} ...")
                 cur.execute(sql)
+            # PostgREST may otherwise keep serving its old schema cache for a
+            # short period after DDL, causing false PGRST204 responses.
+            cur.execute("NOTIFY pgrst, 'reload schema'")
         conn.commit()
         print("迁移完成。")
         return 0

@@ -127,7 +127,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     setLoading(true); setError(null); setFailure(null); setConfirmOpen(false);
     const result = await kyzen.createGitHubRepo(gh.login, repositoryName.trim(), '', repositoryPrivate);
     if (result.success) {
-      setSuccess('GitHub 仓库已创建并连接到当前项目（已设置 origin）');
+      setSuccess('GitHub 仓库已创建，首次提交已推送并连接到当前项目');
       setRepositoryName('');
     } else {
       // 3.5 #6: surface the classified reason + recovery (e.g. name_exists).

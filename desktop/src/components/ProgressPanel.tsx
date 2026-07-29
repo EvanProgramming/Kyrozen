@@ -29,16 +29,19 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
       if (!cancelled && next) setState(next);
     };
     void refresh();
+    const unsubscribeStage = window.kyrozen.onStageUpdated((status) => {
+      const statusProjectId = String((status as unknown as { project_id?: string }).project_id || '');
+      if (!statusProjectId || statusProjectId === projectId) void refresh();
+    });
     // P1-03: 轮询仅用于兜底重同步，WebSocket 事件推送是主要更新路径。
     // 2 秒过长对服务器压力过大；改为 30 秒。
     const timer = window.setInterval(() => void refresh(), 30_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => { cancelled = true; window.clearInterval(timer); unsubscribeStage(); };
   }, [projectId]);
 
   if (!state) return <div className="p-4 text-xs text-ink-faint">正在读取项目进度…</div>;
   const currentIndex = Math.max(0, STAGES.findIndex(([key]) => key === state.stage));
-  const derivedProgress = Math.round((currentIndex / (STAGES.length - 1)) * 100);
-  const progress = Math.max(state.progress || 0, derivedProgress);
+  const progress = Math.max(0, Math.min(100, state.progress || 0));
 
   return (
     <section className="p-4 border-b border-line" aria-label="项目进度">

@@ -30,6 +30,7 @@ def test_validate_ok():
 
 
 def test_get_config_from_env(monkeypatch):
+    monkeypatch.setenv("KYROZEN_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "env-key")
     monkeypatch.setenv("KYROZEN_PERMISSION_MODE", "permissive")
     cfg = get_config()

@@ -44,6 +44,8 @@ PROVIDER_ENV_VARS: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "omniroute": "OMNIROUTE_API_KEY",
     "ollama": "",
 }
 
@@ -51,8 +53,11 @@ PROVIDER_DEFAULT_MODELS: dict[str, tuple[str, str]] = {
     "deepseek": ("deepseek-chat", "deepseek-reasoner"),
     "openai": ("gpt-4o", "gpt-4o"),
     "anthropic": ("claude-sonnet-4-20250514", "claude-sonnet-4-20250514"),
-    "google": ("gemini-2.5-flash", "gemini-2.5-pro"),
+    "google": ("gemini-2.0-flash", "gemini-2.0-flash"),
+    "groq": ("llama-3.3-70b-versatile", "llama-3.3-70b-versatile"),
+    "omniroute": ("auto", "auto"),
     "ollama": ("llama3.2", "llama3.2"),
+    "multi": ("auto", "auto"),
 }
 
 PROVIDER_BASE_URLS: dict[str, str] = {
@@ -60,6 +65,8 @@ PROVIDER_BASE_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com",
     "google": "",
+    "groq": "https://api.groq.com/openai/v1",
+    "omniroute": "http://localhost:20128/v1",
     "ollama": "http://localhost:11434/v1",
 }
 
@@ -167,7 +174,7 @@ class KyrozenConfig:
         issues: list[str] = []
         if self.provider not in PROVIDER_DEFAULT_MODELS:
             issues.append(f"Unknown provider '{self.provider}'")
-        if self.provider != "ollama" and not self.api_key:
+        if self.provider not in ("ollama", "multi") and not self.api_key:
             env_var = PROVIDER_ENV_VARS.get(self.provider, "")
             issues.append(f"No API key for {self.provider} (set {env_var} or KYROZEN_API_KEY)")
         return issues

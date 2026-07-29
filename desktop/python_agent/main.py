@@ -305,7 +305,7 @@ class DesktopAgentRuntime:
         self._notify("task_step", {
             "task_id": self.current_task_id,
             "step": {
-                "description": "Starting local task execution",
+                "description": "正在开始本地任务",
                 "status": "running",
                 "metadata": {"message": message, "agent": decision.agent_name, "mode": decision.mode},
             },
@@ -317,10 +317,16 @@ class DesktopAgentRuntime:
                 self.current_task = task
                 self._cancel_task_timeout_timer()
                 if not self._task_timed_out.is_set():
+                    result = dict(task.result) if isinstance(task.result, dict) else {}
+                    if task.result and not isinstance(task.result, dict):
+                        result["answer"] = str(task.result)
+                    if task.status == "failed" and not result.get("answer"):
+                        errors = list(getattr(task, "errors", []) or [])
+                        result["answer"] = errors[-1] if errors else "AI 服务暂时不可用，请稍后重试。"
                     self._notify("task_result", {
                         "task_id": self.current_task_id,
                         "status": task.status,
-                        "result": task.result or {},
+                        "result": result,
                         "steps": [step.to_dict() for step in task.steps],
                     })
             except Exception as exc:
@@ -365,6 +371,7 @@ class DesktopAgentRuntime:
                 gate = compute_gate(store)
             self._notify("stage_updated", {
                 "task_id": self.current_task_id,
+                "project_id": store.project_id,
                 "stage": store.current_stage,
                 "progress": store.progress,
                 "gate": gate.to_dict(),
@@ -397,14 +404,22 @@ class DesktopAgentRuntime:
             if action == "advance_normal":
                 result = advance(store, "normal")
             elif action == "advance_risk":
-                result = advance(store, "risk")
+                raw_details = params.get("risk_details") or {}
+                result = advance(store, "risk", raw_details if isinstance(raw_details, dict) else {})
             elif action == "return":
                 result = advance(store, "return")
             else:
                 result = {"ok": True, **get_status(store, gate)}
+            # A transition changes which deliverables are relevant. Re-scan
+            # the newly active stage before responding/pushing; otherwise the
+            # UI briefly (and sometimes permanently) reports files such as
+            # docs/TECH_DESIGN.md as missing until a manual refresh.
+            if action in {"advance_normal", "advance_risk", "return"} and result.get("ok"):
+                gate = refresh_gate(store, str(root_path))
+                result = {**result, **get_status(store, gate)}
             self._send_response(req_id, result=result)
             # Push the updated gate to the UI regardless of the action.
-            self._push_stage(store)
+            self._push_stage(store, gate)
         except Exception as exc:
             self.logger.error("stage_action failed: %s", exc, exc_info=True)
             self._send_response(req_id, error=str(exc))
@@ -419,6 +434,31 @@ class DesktopAgentRuntime:
         action = str(params.get("action", "generate"))
         workspace_root = str(params.get("workspace_root", "."))
         root_path = Path(workspace_root).resolve()
+        if action == "load":
+            saved = featuregen_mod.load_software_feature(root_path)
+            if saved:
+                spec_data = saved.get("spec", {})
+                run_data = dict(saved.get("run", {}))
+                payload = {
+                    "action": "run",
+                    "app_type": spec_data.get("application_type", "web_app"),
+                    "run": run_data,
+                    "feature_records": saved.get("feature_records", run_data.get("feature_records", [])),
+                    "preview_url": run_data.get("preview_url", ""),
+                    "command": run_data.get("command", ""),
+                    "artifact_path": run_data.get("artifact_path", ""),
+                    "restored": True,
+                }
+                self._send_response(req_id, result=payload)
+                self._notify("software_feature", payload)
+            else:
+                self._send_response(req_id, result={"action": "load", "restored": False})
+            return
+        op_log = operation_mod.OperationLog(root_path)
+        op_id = op_log.start(f"software.{action}", input_summary={
+            "generate": "生成并写入软件工作区", "run": "安装、构建、测试并启动预览",
+            "repair": "读取失败并自动修复", "noncoding": "生成结构化非代码交付物",
+        }.get(action, action))
         try:
             if action == "generate":
                 prd = params.get("prd") or {}
@@ -450,6 +490,13 @@ class DesktopAgentRuntime:
                 records = featuregen_mod.build_feature_records(spec, run)
                 run.feature_records = records
                 saved = featuregen_mod.save_software_feature(root_path, spec, run, feature_records=records)
+                gate_store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=str(params.get("project_id") or ""))
+                if gate_store.current_stage == "development":
+                    gate_store.record_verification("build_passes", run.overall_success, detail="真实安装、构建、测试与核心流程通过" if run.overall_success else "运行或测试失败")
+                elif gate_store.current_stage == "testing":
+                    gate_store.record_verification("tests_pass", run.overall_success, detail="真实测试与核心流程通过" if run.overall_success else "测试失败")
+                gate = refresh_gate(gate_store, str(root_path))
+                self._push_stage(gate_store, gate)
                 payload = {
                     "action": "run",
                     "run": run.to_dict(),
@@ -469,6 +516,13 @@ class DesktopAgentRuntime:
                 records = featuregen_mod.build_feature_records(spec, run)
                 run.feature_records = records
                 saved = featuregen_mod.save_software_feature(root_path, spec, run, feature_records=records)
+                gate_store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=str(params.get("project_id") or ""))
+                if gate_store.current_stage == "development":
+                    gate_store.record_verification("build_passes", run.overall_success, detail="修复后真实构建与测试通过" if run.overall_success else "修复后仍未通过")
+                elif gate_store.current_stage == "testing":
+                    gate_store.record_verification("tests_pass", run.overall_success, detail="修复后真实测试通过" if run.overall_success else "修复后测试仍失败")
+                gate = refresh_gate(gate_store, str(root_path))
+                self._push_stage(gate_store, gate)
                 payload = {
                     "action": "repair",
                     "repair": outcome.to_dict(),
@@ -497,7 +551,16 @@ class DesktopAgentRuntime:
                 return
             self._send_response(req_id, result=payload)
             self._notify("software_feature", payload)
+            op_log.end(op_id, output_summary={
+                "generate": f"写入 {len(payload.get('files', []))} 个文件",
+                "run": "运行与测试通过" if payload.get("run", {}).get("overall_success") else "运行或测试失败",
+                "repair": f"完成 {payload.get('repair', {}).get('attempts', 0)} 次修复尝试",
+                "noncoding": f"已保存 {payload.get('file', '')}",
+            }.get(action, "操作完成"), status="success")
+            self._notify("interaction", {"action": "op_list", "records": op_log.list()})
         except Exception as exc:
+            op_log.end(op_id, status="failed", error_reason=str(exc))
+            self._notify("interaction", {"action": "op_list", "records": op_log.list()})
             self.logger.error("software_feature failed: %s", exc, exc_info=True)
             self._send_response(req_id, error=str(exc))
 
@@ -513,12 +576,17 @@ class DesktopAgentRuntime:
         try:
             if action == "attach":
                 path = str(params.get("path") or "")
+                op_log = operation_mod.OperationLog(root_path)
+                op_id = op_log.start("attachment.add", input_summary=f"添加附件 {Path(path).name}")
                 try:
                     manager = attachments_mod.AttachmentsManager(root_path)
                     attachment = manager.add(path)
                     payload = {"action": "attach", "attachment": attachment.to_dict()}
+                    op_log.end(op_id, output_summary=f"已分析 {attachment.filename}", status="success")
                 except attachments_mod.AttachmentError as exc:
                     payload = {"action": "attach", "error": exc.args[0] if exc.args else str(exc), "reason": exc.reason}
+                    op_log.end(op_id, status="failed", error_reason=str(exc))
+                self._notify("interaction", {"action": "op_list", "records": op_log.list()})
             elif action == "delete_attachment":
                 manager = attachments_mod.AttachmentsManager(root_path)
                 ok = manager.delete(str(params.get("attachment_id") or ""))

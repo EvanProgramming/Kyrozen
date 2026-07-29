@@ -28,7 +28,10 @@ def _retry_with_backoff(fn, max_retries: int = 3, base_delay: float = 1.0):
         except Exception as e:
             last_exc = e
             msg = str(e).lower()
-            is_rate_limit = "429" in msg or "rate limit" in msg or "too many requests" in msg
+            is_rate_limit = (
+                "429" in msg or "rate limit" in msg or "too many requests" in msg
+                or "resource_exhausted" in msg or "quota exceeded" in msg
+            )
             is_server_error = "500" in msg or "502" in msg or "503" in msg or "server error" in msg
             if (is_rate_limit or is_server_error) and attempt < max_retries:
                 delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
@@ -207,7 +210,10 @@ class GoogleProvider(ModelInterface):
 
 def get_model_provider(config: KyrozenConfig, model: str = "") -> ModelInterface:
     """Factory function for model providers."""
-    if config.provider in ("deepseek", "openai", "ollama"):
+    if config.provider == "multi":
+        from .multi_provider import build_multi_provider  # deferred import
+        return build_multi_provider(config)
+    if config.provider in ("deepseek", "openai", "ollama", "groq", "omniroute"):
         return OpenAICompatProvider(config, model=model)
     if config.provider == "anthropic":
         return AnthropicProvider(config, model=model)

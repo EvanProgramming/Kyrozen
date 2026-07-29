@@ -98,6 +98,9 @@ function friendlyChatError(raw?: string): { summary: string; raw: string } {
   if (/ECONNREFUSED|ETIMEDOUT|timeout|network/i.test(detail)) {
     return { summary: '网络连接异常，请检查网络后重试。', raw: text };
   }
+  if (/模型|model|provider|authentication|api key|no response/i.test(detail)) {
+    return { summary: 'AI 服务暂时不可用，请稍后重试。', raw: text };
+  }
   if (/401|unauthorized|未登录|not logged|no longer logged/i.test(detail)) {
     return { summary: '登录已失效，请重新登录后重试。', raw: text };
   }
@@ -277,6 +280,7 @@ function ConditionIcon({ satisfied, className }: { satisfied: boolean; className
 }
 
 type StageAction = 'refresh' | 'advance_normal' | 'advance_risk' | 'return';
+type RiskDetails = { reason: string; impact: string; recovery: string };
 
 function StageGatePanel({
   status,
@@ -285,7 +289,7 @@ function StageGatePanel({
 }: {
   status: StageGateStatus;
   busy: boolean;
-  onAction: (action: StageAction) => void;
+  onAction: (action: StageAction, riskDetails?: RiskDetails) => void;
 }) {
   const { gate } = status;
   const kindLabel: Record<string, string> = {
@@ -295,6 +299,8 @@ function StageGatePanel({
     task: '任务',
   };
   const [open, setOpen] = useState(true);
+  const [riskOpen, setRiskOpen] = useState(false);
+  const [riskDetails, setRiskDetails] = useState<RiskDetails>({ reason: '', impact: '', recovery: '' });
   return (
     <div className="bg-surface border-b border-line">
       <button
@@ -381,8 +387,8 @@ function StageGatePanel({
           </button>
           <button
             type="button"
-            disabled={busy}
-            onClick={() => onAction('advance_risk')}
+            disabled={busy || gate.missing.some((condition) => !condition.skippable)}
+            onClick={() => setRiskOpen((value) => !value)}
             className="btn-secondary text-xs"
             title="跳过未满足的必需条件并进入下一阶段（会记录风险）"
           >
@@ -397,6 +403,19 @@ function StageGatePanel({
             返回上一阶段
           </button>
         </div>
+
+        {riskOpen && (
+          <div className="panel p-3 border-l-2 border-l-warning bg-warning-soft space-y-2">
+            <div className="text-sm font-medium text-ink">说明为什么需要带风险推进</div>
+            <input className="input text-xs w-full" value={riskDetails.reason} onChange={(event) => setRiskDetails((value) => ({ ...value, reason: event.target.value }))} placeholder="具体原因（必填）" />
+            <input className="input text-xs w-full" value={riskDetails.impact} onChange={(event) => setRiskDetails((value) => ({ ...value, impact: event.target.value }))} placeholder="可能影响" />
+            <input className="input text-xs w-full" value={riskDetails.recovery} onChange={(event) => setRiskDetails((value) => ({ ...value, recovery: event.target.value }))} placeholder="后续补救办法" />
+            <div className="flex gap-2">
+              <button type="button" className="btn-primary text-xs" disabled={!riskDetails.reason.trim() || busy} onClick={() => { onAction('advance_risk', riskDetails); setRiskOpen(false); }}>确认并记录风险</button>
+              <button type="button" className="btn-ghost text-xs" onClick={() => setRiskOpen(false)}>取消</button>
+            </div>
+          </div>
+        )}
 
         {status.skips.length > 0 && (
           <div className="text-xs text-ink-faint pt-1">
@@ -458,7 +477,7 @@ function SoftwareFeaturePanel({
   // P0-07: 软件生成入口必须受门禁约束。仅当 stage 确认为 development
   // 或 gate.can_advance 为 true 时才开放。stageStatus 为 null（加载中）视为阻塞。
   const canGenerate =
-    stageStatus != null && (stageStatus.stage === 'development' || Boolean(gate?.can_advance));
+    stageStatus != null && stageStatus.stage === 'development' && !gate?.blocked_entry_reason;
   const generateBlockReason = canGenerate
     ? null
     : (gate?.blocked_entry_reason || '请先完成当前阶段门禁（问题界定、调研、PRD、方案确认）后再生成代码。');
@@ -473,6 +492,30 @@ function SoftwareFeaturePanel({
   const [deliverableType, setDeliverableType] = useState('research_report');
   const [deliverableTitle, setDeliverableTitle] = useState('竞品调研报告');
   const [deliverableFields, setDeliverableFields] = useState('背景: 行业现状与规模\n目标: 找出 3 个差异化切入点\n结论: 建议优先切入方向');
+
+  useEffect(() => {
+    setFeature(null);
+    setError(null);
+    setBusy(false);
+    if (!projectId) return;
+    const raw = localStorage.getItem(`kyrozen:software-draft:${projectId}`);
+    if (!raw) return;
+    try {
+      const draft = JSON.parse(raw) as Record<string, string>;
+      setAppName(draft.appName || '我的 Web 应用');
+      setGenType(draft.genType || 'web_app');
+      setFeaturesText(draft.featuresText || '用户登录\n数据看板\n导出报表');
+      setDesc(draft.desc || '');
+      setDeliverableType(draft.deliverableType || 'research_report');
+      setDeliverableTitle(draft.deliverableTitle || '竞品调研报告');
+      setDeliverableFields(draft.deliverableFields || '背景: 行业现状与规模\n目标: 找出 3 个差异化切入点\n结论: 建议优先切入方向');
+    } catch { /* ignore a corrupt local draft */ }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    localStorage.setItem(`kyrozen:software-draft:${projectId}`, JSON.stringify({ appName, genType, featuresText, desc, deliverableType, deliverableTitle, deliverableFields }));
+  }, [projectId, appName, genType, featuresText, desc, deliverableType, deliverableTitle, deliverableFields]);
 
   useEffect(() => {
     if (!window.kyrozen) return;
@@ -501,13 +544,20 @@ function SoftwareFeaturePanel({
     }, 60000);
     try {
       const { workspaceRoot } = await window.kyrozen.getWorkspaceRoot(projectId);
-      window.kyrozen.sendSoftwareFeature({ action, workspace_root: workspaceRoot, ...extra });
+      window.kyrozen.sendSoftwareFeature({ action, workspace_root: workspaceRoot, project_id: projectId, ...extra });
     } catch {
       if (busyTimerRef.current) { clearTimeout(busyTimerRef.current); busyTimerRef.current = null; }
       setBusy(false);
       setError('无法发送软件生成请求，请重试。');
     }
   };
+
+  useEffect(() => {
+    if (!window.kyrozen || !projectId || agentReady?.status !== 'ready') return;
+    void window.kyrozen.getWorkspaceRoot(projectId).then(({ workspaceRoot }) => {
+      window.kyrozen?.sendSoftwareFeature({ action: 'load', workspace_root: workspaceRoot, project_id: projectId });
+    });
+  }, [projectId, agentReady?.status]);
 
   const copyCommand = async () => {
     const cmd = feature?.command || (WEB_APP_SET.has(feature?.app_type ?? appType) ? 'python app.py' : 'python main.py');
@@ -819,7 +869,7 @@ function InteractionPanel({
         setRecords((payload.records as OperationLogEntry[]) ?? []);
       }
     });
-    if (projectId) {
+    if (projectId && agentReady?.status === 'ready') {
       void send({ action: 'attach_list' });
       void send({ action: 'op_list' });
     }
@@ -827,7 +877,7 @@ function InteractionPanel({
       unsubStatus();
       unsubInt();
     };
-  }, [projectId]);
+  }, [projectId, agentReady?.status]);
 
   const onPick = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
@@ -1016,6 +1066,12 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     if (!window.kyrozen) return;
     const unsubChat = window.kyrozen.onChatMessage((msg) => {
       if (msg.role === 'system' && /PlatformIO|Python Agent|项目工作目录|Artifact|\[INFO\]|\[model\]|\[tool\]/i.test(msg.content)) return;
+      if (msg.role === 'error') {
+        setChatError(friendlyChatError(msg.error || msg.raw || msg.content));
+        setIsRunning(false);
+        setActivity('');
+        return;
+      }
       setMessages((prev) => [...prev, {
         role: msg.role as Message['role'],
         content: msg.content,
@@ -1071,9 +1127,15 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     });
     const unsubStage = window.kyrozen.onStageUpdated((status) => {
       setStageStatus(status);
+      onProjectChanged?.();
     });
     const unsubAgentReady = window.kyrozen.onAgentReady((info) => {
       setAgentReady(info);
+      if (info.status === 'ready' && projectId) {
+        window.kyrozen?.getProjectState(projectId)
+          .then((state) => { window.kyrozen?.sendStageAction('refresh', state?.stage ?? ''); })
+          .catch(() => {});
+      }
     });
     return () => {
       unsubChat();
@@ -1085,7 +1147,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       unsubStage();
       unsubAgentReady();
     };
-  }, [onProjectChanged]);
+  }, [onProjectChanged, projectId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1106,7 +1168,6 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     if (!result.success) {
       const friendly = friendlyChatError(result.error);
       setChatError(friendly);
-      setMessages((prev) => [...prev, { role: 'system', content: friendly.summary }]);
       setIsRunning(false);
       setActivity('');
     } else if (result.content) {
@@ -1125,11 +1186,12 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     }
   };
 
-  const handleStageAction = async (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return') => {
+  const handleStageAction = async (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', riskDetails?: RiskDetails) => {
     if (!window.kyrozen || !projectId) return;
     setStageBusy(true);
     try {
-      await window.kyrozen.sendStageAction(action, stageStatus?.stage ?? '');
+      await window.kyrozen.sendStageAction(action, stageStatus?.stage ?? '', riskDetails);
+      await new Promise((resolve) => setTimeout(resolve, 800));
     } catch {
       // The Python Agent pushes a fresh stage_updated event on success; ignore
       // transport errors here so the UI stays responsive.

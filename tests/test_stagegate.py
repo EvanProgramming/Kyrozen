@@ -76,6 +76,12 @@ def test_detect_reports_missing(tmp_path: Path):
     assert found["prd"] is False
 
 
+def test_detect_accepts_generated_app_py_as_runnable_source(tmp_path: Path):
+    (tmp_path / "app.py").write_text("print('ready')")
+    found = detect_deliverables(tmp_path, "development")
+    assert found["source_code"] is True
+
+
 # ---------------------------------------------------------------------------
 # 3. Progress is computed from the four real parts
 # ---------------------------------------------------------------------------
@@ -166,6 +172,26 @@ def test_advance_normal_success_after_prd(tmp_path: Path):
     assert result["gate"]["blocked_entry_reason"] is None
 
 
+def test_next_stage_click_is_the_user_confirmation(tmp_path: Path):
+    s = _store(tmp_path, "product_definition")
+    (tmp_path / "PRD.md").write_text("# PRD")
+    gate = refresh_gate(s, tmp_path)
+    assert any(item.item_id == "prd_confirmed" for item in gate.missing)
+    assert gate.can_advance is True
+    result = advance(s, "normal")
+    assert result["ok"] is True
+    assert s.records["prd_confirmed"]["confirmed"] is True
+
+
+def test_refresh_removes_legacy_skip_from_hard_requirement(tmp_path: Path):
+    s = _store(tmp_path, "product_definition")
+    s.record_skip("prd", "旧版本跳过", "影响", "用户", "补救")
+    assert s.records["prd"]["skipped"] is True
+    refresh_gate(s, tmp_path)
+    assert s.records["prd"]["skipped"] is False
+    assert all(skip.item_id != "prd" for skip in s.skips)
+
+
 def test_prd_gates_entry_into_development(tmp_path: Path):
     """Entering development without a PRD is blocked, even via solution_design."""
     s = _store(tmp_path, "solution_design")
@@ -199,10 +225,26 @@ def test_advance_risk_records_skip_with_four_fields(tmp_path: Path):
     result = advance(s, "risk")
     assert result["ok"] is True
     assert result["risk"] is True
-    # market_research has two required items, both skipped on a risk advance.
-    assert len(s.skips) == 2
+    # Only the missing deliverable is skipped. Clicking advance explicitly
+    # confirms the confirmation item instead of recording it as a risk skip.
+    assert len(s.skips) == 1
     for skip in s.skips:
         assert skip.reason and skip.impact and skip.approver and skip.recovery
+
+
+def test_advance_risk_cannot_skip_hard_prd_gate(tmp_path: Path):
+    s = _store(tmp_path, "product_definition")
+    result = advance(s, "risk", {"reason": "赶时间", "impact": "可能返工", "recovery": "之后补齐"})
+    assert result["ok"] is False
+    assert "不可带风险跳过" in result["error"]
+    assert s.current_stage == "product_definition"
+
+
+def test_advance_risk_persists_user_reason(tmp_path: Path):
+    s = _store(tmp_path, "market_research")
+    result = advance(s, "risk", {"reason": "先验证线下需求", "impact": "竞品信息不完整", "recovery": "试点后补充调研"})
+    assert result["ok"] is True
+    assert all(skip.reason == "先验证线下需求" for skip in s.skips)
 
 
 def test_advance_return_moves_back_and_clears(tmp_path: Path):

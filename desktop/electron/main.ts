@@ -95,6 +95,7 @@ let wsClient: WebSocket | null = null;
 let pythonAgent: ChildProcessWithoutNullStreams | null = null;
 let pythonAgentStartPromise: Promise<void> | null = null;
 let pythonAgentStdoutBuffer = '';
+let pythonAgentReady = false;
 let currentProjectId: string | null = null;
 // Default server URL. resolveDefaultServerUrl() seeds this from the
 // KYROZEN_DESKTOP_SERVER_URL env var (so a packaged build can target a server
@@ -176,6 +177,16 @@ interface OnboardingConfig {
   completedAt?: string;
 }
 
+function shouldUseSafeStorage(): boolean {
+  if (process.env.KYROZEN_DISABLE_KEYCHAIN === '1') return false;
+  // The public beta is intentionally ad-hoc signed. On macOS, repeated ad-hoc
+  // package replacement can make safeStorage/Keychain access block for over a
+  // minute. Use a chmod-0600 file for that distribution; an official
+  // Developer-ID build opts back into Keychain with KYROZEN_SIGNED_BUILD=1.
+  if (app.isPackaged && process.env.KYROZEN_SIGNED_BUILD !== '1') return false;
+  return safeStorage.isEncryptionAvailable();
+}
+
 let onboardingConfig: OnboardingConfig = { completed: false, language: 'zh' };
 
 async function loadOnboardingConfig(): Promise<OnboardingConfig> {
@@ -227,9 +238,7 @@ async function saveCredentials(
   // P0-17: 默认使用 macOS Keychain 加密凭据。仅在 Electron safeStorage
   // 不可用时才回退明文（文件权限仍设为 0600）。
   // KYROZEN_DISABLE_KEYCHAIN=1 可强制回退明文（调试/CI 场景）。
-  const encryptAvailable = safeStorage.isEncryptionAvailable();
-  const keychainDisabled = process.env.KYROZEN_DISABLE_KEYCHAIN === '1';
-  const useSafeStorage = encryptAvailable && !keychainDisabled;
+  const useSafeStorage = shouldUseSafeStorage();
   const encrypted = useSafeStorage
     ? safeStorage.encryptString(payload)
     : Buffer.from(payload);
@@ -247,9 +256,7 @@ async function loadCredentials(): Promise<{
   try {
     logInfo(`Loading credentials from ${TOKEN_STORE_PATH}`);
     const raw = await fs.readFile(TOKEN_STORE_PATH);
-    const encryptAvailable = safeStorage.isEncryptionAvailable();
-    const keychainDisabled = process.env.KYROZEN_DISABLE_KEYCHAIN === '1';
-    const useSafeStorage = encryptAvailable && !keychainDisabled;
+    const useSafeStorage = shouldUseSafeStorage();
     // 兼容旧明文凭据：先尝试 Keychain 解密，失败则回退明文 JSON 解析。
     // 迁移到 Keychain 后下次 saveCredentials 会自动加密存储。
     let decrypted: string;
@@ -261,6 +268,12 @@ async function loadCredentials(): Promise<{
       }
     } else {
       decrypted = raw.toString();
+      // One-time migration from an older encrypted beta build. This may be
+      // slow once, but saveCredentials rewrites the value in the unsigned
+      // distribution's stable chmod-0600 format immediately afterwards.
+      if (!decrypted.trimStart().startsWith('{') && safeStorage.isEncryptionAvailable()) {
+        decrypted = safeStorage.decryptString(raw);
+      }
     }
     const data = JSON.parse(decrypted);
     if (data.wsToken) {
@@ -360,6 +373,7 @@ interface ChatMessage {
   role: string;
   content: string;
   raw?: string;
+  error?: string;
   operations?: Array<{ description: string; status: string; timestamp: string }>;
 }
 
@@ -736,10 +750,34 @@ app.whenReady().then(async () => {
           }
         } catch (err: any) {
           if (err?.status === 401 || err?.status === 403) {
-            // The persisted JWT has been rejected by the server: the session is
-            // dead. Do NOT show the logged-in UI with stale tokens (P0-16).
-            sessionExpired = true;
-            logWarn('Stored session is no longer valid (401/403); requiring re-login');
+            // Supabase access tokens are short-lived. Refresh once before
+            // treating the saved login as dead; otherwise a healthy long-lived
+            // GitHub session turns into an empty project list after expiry.
+            if (await refreshAccessToken() && accessToken) {
+              try {
+                const verify = await apiPost('/api/desktop/verify-token', {
+                  access_token: accessToken,
+                  device_name: os.hostname(),
+                  client_version: app.getVersion(),
+                  platform: process.platform,
+                });
+                if (verify.ws_token) {
+                  resumeWsToken = verify.ws_token;
+                  const refreshed = await loadCredentials();
+                  await saveCredentials(
+                    resumeWsToken,
+                    refreshed?.refreshToken || credentials.refreshToken || undefined,
+                    accessToken,
+                  );
+                }
+              } catch (refreshErr: any) {
+                sessionExpired = true;
+                logWarn(`Refreshed session could not be verified: ${refreshErr.message || refreshErr}`);
+              }
+            } else {
+              sessionExpired = true;
+              logWarn('Stored session refresh failed; requiring re-login');
+            }
           } else {
             logWarn(`Could not refresh desktop session; trying stored token: ${err.message || err}`);
           }
@@ -816,12 +854,95 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+let accessRefreshPromise: Promise<boolean> | null = null;
+let websocketTokenRefreshPromise: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  if (accessRefreshPromise) return accessRefreshPromise;
+  accessRefreshPromise = (async () => {
+    try {
+      const credentials = await loadCredentials();
+      if (!credentials?.refreshToken) return false;
+      const response = await fetch(`${serverUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: credentials.refreshToken }),
+      });
+      if (!response.ok) return false;
+      const data = await response.json() as { access_token?: string; refresh_token?: string };
+      if (!data.access_token) return false;
+      accessToken = data.access_token;
+      await saveCredentials(
+        currentWsToken || credentials.wsToken,
+        data.refresh_token || credentials.refreshToken,
+        data.access_token,
+      );
+      logInfo('Refreshed expired API session');
+      return true;
+    } catch (err: any) {
+      logWarn(`Failed to refresh API session: ${err.message || err}`);
+      return false;
+    } finally {
+      accessRefreshPromise = null;
+    }
+  })();
+  return accessRefreshPromise;
+}
+
+async function reconnectWithFreshWebSocketToken(): Promise<boolean> {
+  if (websocketTokenRefreshPromise) return websocketTokenRefreshPromise;
+  websocketTokenRefreshPromise = (async () => {
+    try {
+      const verifyCurrentAccessToken = async () => {
+        if (!accessToken) return null;
+        return apiPost('/api/desktop/verify-token', {
+          access_token: accessToken,
+          device_name: os.hostname(),
+          client_version: app.getVersion(),
+          platform: process.platform,
+        });
+      };
+      let verified: any;
+      try {
+        verified = await verifyCurrentAccessToken();
+      } catch (err: any) {
+        if ((err?.status === 401 || err?.status === 403) && await refreshAccessToken()) {
+          verified = await verifyCurrentAccessToken();
+        } else {
+          throw err;
+        }
+      }
+      if (!verified?.ws_token) throw new Error('服务器未返回新的桌面连接凭据');
+      const credentials = await loadCredentials();
+      currentWsToken = String(verified.ws_token);
+      await saveCredentials(
+        currentWsToken,
+        credentials?.refreshToken || verified.refresh_token || undefined,
+        accessToken || undefined,
+      );
+      connectWebSocket(currentWsToken);
+      return true;
+    } catch (err: any) {
+      logWarn(`Failed to renew WebSocket token: ${err.message || err}`);
+      updateConnection('error', '云端会话恢复失败，请重新登录');
+      mainWindow?.webContents.send('kyrozen:session-expired', '登录已过期，请重新登录。');
+      return false;
+    } finally {
+      websocketTokenRefreshPromise = null;
+    }
+  })();
+  return websocketTokenRefreshPromise;
+}
+
 async function apiGet(endpoint: string, auth = true) {
   const headers: Record<string, string> = {};
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  const response = await fetch(`${serverUrl}${endpoint}`, { headers });
+  let response = await fetch(`${serverUrl}${endpoint}`, { headers });
+  if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
+    response = await fetch(`${serverUrl}${endpoint}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+  }
   if (!response.ok) {
     // Token expired or invalid — clear it so we don't keep using it.
     if (response.status === 401 || response.status === 403) {
@@ -840,11 +961,18 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  const response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await fetch(`${serverUrl}${endpoint}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
   });
+  if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
+    response = await fetch(`${serverUrl}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
       accessToken = null;
@@ -858,7 +986,7 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
 }
 
 async function apiPatch(endpoint: string, body: unknown) {
-  const response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await fetch(`${serverUrl}${endpoint}`, {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
@@ -866,15 +994,48 @@ async function apiPatch(endpoint: string, body: unknown) {
     },
     body: JSON.stringify(body),
   });
+  if ((response.status === 401 || response.status === 403) && await refreshAccessToken()) {
+    response = await fetch(`${serverUrl}${endpoint}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  }
+  if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+  return response.json();
+}
+
+async function apiPut(endpoint: string, body: unknown) {
+  let response = await fetch(`${serverUrl}${endpoint}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if ((response.status === 401 || response.status === 403) && await refreshAccessToken()) {
+    response = await fetch(`${serverUrl}${endpoint}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  }
   if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
   return response.json();
 }
 
 async function apiDelete(endpoint: string) {
-  const response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await fetch(`${serverUrl}${endpoint}`, {
     method: 'DELETE',
     headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
   });
+  if ((response.status === 401 || response.status === 403) && await refreshAccessToken()) {
+    response = await fetch(`${serverUrl}${endpoint}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  }
   if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
   return response.json();
 }
@@ -1533,6 +1694,23 @@ const PROJECT_WORKSPACE_SECTIONS = {
   improvement: 'improvement',
 } as const;
 
+async function loadLocalProjectSummary(projectId: string): Promise<Record<string, unknown>> {
+  const root = workspaceMap[projectId];
+  if (!root) return { files: [], deliverables: [], software: null, stagegate: null };
+  const readJson = async (relative: string): Promise<unknown> => {
+    try { return JSON.parse(await fs.readFile(path.join(root, relative), 'utf-8')); }
+    catch { return null; }
+  };
+  const files = await listWorkspaceFiles(projectId).catch(() => []);
+  return {
+    workspace_root: root,
+    files,
+    deliverables: await readJson('.kyrozen/deliverables.json') || [],
+    software: await readJson('.kyrozen/software_feature.json'),
+    stagegate: await readJson('.kyrozen/stagegate.json'),
+  };
+}
+
 async function loadProjectWorkspace(projectId: string): Promise<Record<string, unknown>> {
   const entries = await Promise.all(
     Object.entries(PROJECT_WORKSPACE_SECTIONS).map(async ([key, endpoint]) => [
@@ -1564,7 +1742,8 @@ async function loadProjectWorkspace(projectId: string): Promise<Record<string, u
       apiGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
     ),
   );
-  return { project, state, decisions, artifacts, tasks, sections };
+  const local = await loadLocalProjectSummary(projectId);
+  return { project, state, decisions, artifacts, tasks, sections, local };
 }
 
 ipcMain.handle('kyrozen:get-project-workspace', async (_event, projectId: string) => {
@@ -1871,6 +2050,17 @@ ipcMain.handle('kyrozen:create-github-repo', async (_event, owner: string, name:
       const root = getCurrentWorkspaceRoot();
       if (root && cloneUrl) {
         await initGitRepo(root, cloneUrl);
+        const pushed = await commitAndPush(root, githubAccessToken, 'chore: publish initial Kyrozen project');
+        if (!pushed.success) {
+          return {
+            success: false,
+            failureKind: pushed.failureKind || 'push_failed',
+            reason: pushed.reason || pushed.error || '仓库已创建，但首次推送失败',
+            recovery: pushed.recovery || '检查网络与 GitHub 权限后重试推送。',
+            url: (repoData as any).html_url,
+            cloneUrl,
+          };
+        }
       }
       logInfo(`Created GitHub repo ${name}: ${cloneUrl}`);
       return { success: true, url: (repoData as any).html_url, cloneUrl, owner: owner || (repoData as any).owner?.login };
@@ -2076,6 +2266,9 @@ ipcMain.on('kyrozen:request-initial-token', () => {
   // Send the current connection state in case the renderer missed earlier events
   // (for example, when resuming a saved session before the window finished loading).
   mainWindow?.webContents.send('kyrozen:connection-change', currentConnectionState, currentConnectionMessage);
+  if (pythonAgentReady) {
+    mainWindow?.webContents.send('kyzon:agent-ready', { status: 'ready', version: app.getVersion(), mode: 'local' });
+  }
 });
 
 ipcMain.handle('kyrozen:get-initial-session', () => ({
@@ -2131,9 +2324,26 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
       iteration: 'learning',
     };
     const mode = modeByStage[String(projectState.stage || '')] || 'discovery';
+    // P0-04: 开发阶段注入本地 PRD / TECH_DESIGN 上下文，Agent 不必依赖 Supabase artifacts。
+    let enrichedMessage = message;
+    if (mode === 'development') {
+      try {
+        const root = await getWorkspaceRoot(currentProjectId);
+        if (root) {
+          const parts: string[] = [];
+          for (const doc of ['docs/PRD.md', 'docs/TECH_DESIGN.md']) {
+            const docPath = path.join(root, doc);
+            try { const content = await fs.readFile(docPath, 'utf-8'); if (content.trim()) parts.push(content); } catch {}
+          }
+          if (parts.length > 0) {
+            enrichedMessage = `[Project Documents from workspace]\n\n${parts.join('\n\n---\n\n')}\n\n[End of project documents]\n\n${message}`;
+          }
+        }
+      } catch { /* best-effort */ }
+    }
     sendTaskActivity({ description: '正在理解你的需求' });
     const task = await apiPost('/api/chat', {
-      message,
+      message: enrichedMessage,
       project_id: currentProjectId,
       mode,
       stream: false,
@@ -2188,14 +2398,14 @@ ipcMain.on('kyrozen:cancel-task', () => {
 // Stage gate (feature 3.2): forward the renderer's gate action to the Python
 // Agent. The agent re-scans deliverables, applies the transition and pushes a
 // fresh `stage_updated` event back to the UI.
-ipcMain.handle('kyrozen:stage-action', async (_event, action: string, stage: string) => {
+ipcMain.handle('kyrozen:stage-action', async (_event, action: string, stage: string, riskDetails?: Record<string, string>) => {
   const projectId = currentProjectId || '';
   const workspaceRoot = await chooseWorkspaceRoot(projectId);
   sendToPythonAgent({
     jsonrpc: '2.0',
     id: Date.now(),
     method: 'stage_action',
-    params: { action, workspace_root: workspaceRoot, project_id: projectId, stage },
+    params: { action, workspace_root: workspaceRoot, project_id: projectId, stage, risk_details: riskDetails || {} },
   });
   return { ok: true };
 });
@@ -2221,7 +2431,7 @@ function connectWebSocket(token: string) {
           current_project_id: currentProjectId,
         })
       );
-      updateConnection('connected', '已连接云端');
+      updateConnection('connecting', '正在验证云端会话...');
       pythonAgentRestartCount = 0;
       startHeartbeat();
       flushPendingCloudMessages();
@@ -2261,7 +2471,13 @@ function connectWebSocket(token: string) {
     });
 
     wsClient.on('close', (code: number, reason: Buffer) => {
-      logWarn(`WebSocket closed: code=${code}, reason=${reason.toString() || 'none'}`);
+      const closeReason = reason.toString();
+      logWarn(`WebSocket closed: code=${code}, reason=${closeReason || 'none'}`);
+      if (code === 1008 && /invalid websocket token/i.test(closeReason)) {
+        updateConnection('connecting', '会话已更新，正在安全重连...');
+        void reconnectWithFreshWebSocketToken();
+        return;
+      }
       updateConnection('disconnected', '连接已断开，5 秒后重连');
       scheduleReconnect(token);
     });
@@ -2404,6 +2620,10 @@ async function processNextQueuedTask(): Promise<void> {
 async function handleServerMessage(message: Record<string, unknown>) {
   const type = message.type as string;
   logInfo(`Received server message: ${type}`);
+
+  if (type === 'auth_success') {
+    updateConnection('connected', '已连接云端');
+  }
 
   if (type === 'assign_task') {
     if (currentTaskRunning && String(message.task_id) === currentTaskId) {
@@ -2634,6 +2854,7 @@ async function startPythonAgentInternal() {
       ...extraEnv,
     },
   });
+  pythonAgentReady = false;
 
   // A JSON-RPC line can span multiple pipe chunks. Decode UTF-8 as a stream
   // and retain the incomplete tail instead of attempting to parse each chunk.
@@ -2668,6 +2889,7 @@ async function startPythonAgentInternal() {
       retrying: !pythonAgentStopping && code !== 0,
     });
     pythonAgent = null;
+    pythonAgentReady = false;
     if (!pythonAgentStopping && code !== 0) {
       if (pythonAgentRestartCount < PYTHON_AGENT_MAX_RESTARTS) {
         pythonAgentRestartCount += 1;
@@ -2696,6 +2918,7 @@ function stopPythonAgent() {
     pythonAgentStopping = true;
     pythonAgent.kill();
     pythonAgent = null;
+    pythonAgentReady = false;
   }
   pythonAgentStdoutBuffer = '';
 }
@@ -2767,6 +2990,7 @@ function handlePythonAgentLine(line: string) {
       // undefined loading state and can detect an Agent that later dies
       // (P0-03 / P0-04 / P0-06).
       logInfo(`Python Agent ready: ${String(message.params?.version || 'unknown')}`);
+      pythonAgentReady = true;
       mainWindow?.webContents.send('kyzon:agent-ready', {
         status: 'ready',
         version: String(message.params?.version || ''),
@@ -2774,6 +2998,18 @@ function handlePythonAgentLine(line: string) {
       });
     } else if (message.method === 'stage_updated') {
       mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
+      const stageProjectId = String(message.params?.project_id || currentProjectId || '');
+      if (stageProjectId && accessToken) {
+        void apiPut(`/api/projects/${encodeURIComponent(stageProjectId)}`, {
+          current_stage: String(message.params?.stage || 'problem_discovery'),
+          progress: Number(message.params?.progress || 0),
+        }).then(() => {
+          // Notify once more after the cloud row is durable so consumers that
+          // reload the project list cannot race the PUT and keep stale stage /
+          // progress values in the sidebar.
+          mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
+        }).catch((err: any) => logWarn(`Failed to sync stage to cloud: ${err.message || err}`));
+      }
     } else if (message.method === 'software_feature') {
       // 3.3 real software generation / run / repair results for the UI panel.
       mainWindow?.webContents.send('kyzen:software-feature', message.params);
@@ -2831,12 +3067,31 @@ function handlePythonAgentLine(line: string) {
         steps: message.params.steps,
       });
       const status = message.params.status;
-      const answer = message.params.result?.answer || '任务完成';
-      sendChatMessage({
-        role: 'assistant',
-        content: answer,
-        operations: taskOperations.get(String(message.params.task_id || currentTaskId || '')) || [],
-      });
+      const answer = message.params.result?.answer
+        || message.params.result?.error
+        || (status === 'failed' ? 'AI 服务暂时不可用，请稍后重试。' : '任务完成');
+      const operations = taskOperations.get(String(message.params.task_id || currentTaskId || '')) || [];
+      if (status === 'failed') {
+        sendTaskActivity({
+          task_id: String(message.params.task_id || currentTaskId || ''),
+          description: '处理失败，请查看提示后重试',
+          status: 'failed',
+        });
+        sendChatMessage({ role: 'error', content: '', error: answer, operations });
+      } else if (status === 'cancelled') {
+        sendTaskActivity({
+          task_id: String(message.params.task_id || currentTaskId || ''),
+          description: '任务已取消',
+          status: 'failed',
+        });
+      } else {
+        sendTaskActivity({
+          task_id: String(message.params.task_id || currentTaskId || ''),
+          description: '回复已完成',
+          status: 'completed',
+        });
+        sendChatMessage({ role: 'assistant', content: answer, operations });
+      }
       taskOperations.delete(String(message.params.task_id || currentTaskId || ''));
       if (status === 'failed') {
         showNotification('Kyrozen', '任务执行失败');

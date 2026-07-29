@@ -220,7 +220,7 @@ export interface KyrozenAPI {
   cancelTask: () => void;
   startPairing: (serverUrl: string) => Promise<{ success: boolean; code?: string; expiresIn?: number; error?: string }>;
   pollPairing: (serverUrl: string, code: string) => Promise<{ success: boolean; ready?: boolean; wsToken?: string; error?: string }>;
-  onChatMessage: (callback: (message: { role: string; content: string; raw?: string; operations?: Array<{ description: string; status: string; timestamp: string }> }) => void) => () => void;
+  onChatMessage: (callback: (message: { role: string; content: string; raw?: string; error?: string; operations?: Array<{ description: string; status: string; timestamp: string }> }) => void) => () => void;
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => () => void;
   onTaskActivity: (callback: (activity: { task_id: string; description: string; status: string }) => void) => () => void;
   onAgentRouted: (callback: (decision: { task_id: string; mode: string; mode_label: string; agent_name: string; agent_display_name: string; reason: string; available_tools: string[]; restricted_tools: string[]; degraded: boolean }) => void) => () => void;
@@ -229,7 +229,7 @@ export interface KyrozenAPI {
   onAgentReady: (callback: (info: { status: 'ready' | 'down'; version?: string; mode?: string; code?: number | null; retrying?: boolean }) => void) => () => void;
   onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => () => void;
   sendSoftwareFeature: (params: Record<string, unknown>) => void;
-  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) => Promise<{ ok: boolean }>;
+  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string, riskDetails?: Record<string, string>) => Promise<{ ok: boolean }>;
   onConfirmationRequest: (callback: (request: { confirmation_id: string; store_id?: string | null; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string; choices?: string[] }) => void) => () => void;
   respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean, storeId?: string | null) => Promise<{ success: boolean; error?: string }>;
   onStatusUpdated: (callback: (status: InteractionStatus) => void) => () => void;

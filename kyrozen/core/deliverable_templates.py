@@ -66,6 +66,37 @@ _TEMPLATE_HEAD = {
     "business_process": "业务流程设计",
 }
 
+_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "research_report": {
+        "背景": "background", "研究背景": "background",
+        "问题": "question", "研究问题": "question", "目标": "question",
+        "方法": "method", "研究方法": "method",
+        "发现": "findings", "关键发现": "findings", "重点": "findings", "对比对象": "findings",
+        "来源": "sources", "来源清单": "sources",
+        "结论": "conclusion", "建议": "conclusion", "结论与建议": "conclusion",
+    },
+    "content_plan": {"受众": "audience", "目标受众": "audience", "核心信息": "message", "渠道": "channels", "发布渠道": "channels", "主题": "topics", "内容主题": "topics", "节奏": "cadence", "发布节奏": "cadence", "指标": "metrics", "度量指标": "metrics"},
+    "ops_plan": {"目标": "goal", "范围": "scope", "流程": "processes", "关键流程": "processes", "负责人": "owners", "责任分工": "owners", "时间": "timeline", "时间表": "timeline", "风险": "risks", "风险与应对": "risks"},
+    "business_process": {"名称": "name", "流程名称": "name", "触发": "trigger", "触发条件": "trigger", "步骤": "steps", "角色": "roles", "输入输出": "io", "输入与输出": "io", "异常": "exceptions", "异常处理": "exceptions"},
+}
+
+
+def normalize_fields(deliverable_type: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """Accept both schema keys and ordinary Chinese labels from the desktop form."""
+    schema_names = {item["name"] for item in NONCODING_SCHEMAS[deliverable_type]}
+    aliases = _FIELD_ALIASES.get(deliverable_type, {})
+    normalized: dict[str, Any] = {}
+    for raw_key, value in fields.items():
+        key = str(raw_key).strip()
+        canonical = key if key in schema_names else aliases.get(key)
+        if not canonical:
+            continue
+        if canonical in normalized and normalized[canonical] and value:
+            normalized[canonical] = f"{normalized[canonical]}\n{value}"
+        else:
+            normalized[canonical] = value
+    return normalized
+
 
 def slugify(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "_", (text or "").strip().lower())
@@ -158,6 +189,7 @@ def build_deliverable(
         raise ValueError(f"Unknown deliverable type '{deliverable_type}'")
     ws = Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
+    fields = normalize_fields(deliverable_type, fields)
     md = render_markdown(deliverable_type, title, fields)
     fname = f"{slugify(title)}_{deliverable_type}.md"
     fpath = ws / fname

@@ -91,7 +91,7 @@ async function screenshotMilestone(
 }
 
 test.describe('Kyrozen 3.6 核心旅程', () => {
-  test('首次启动显示引导页（未配置 onboarding）', async ({}, testInfo) => {
+  test('首次启动显示引导页（未配置 onboarding）', async ({ browserName: _browserName }, testInfo) => {
     test.setTimeout(60_000);
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'kyrozen-onboard-e2e-'));
     const electronApp = await launchElectron(profile);
@@ -107,7 +107,7 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
     }
   });
 
-  test('登录 → 建项目 → Agent 真实对话 → workspace 文件产出 → Git 面板 → 恢复', async ({}, testInfo) => {
+  test('登录 → 建项目 → Agent 真实对话 → workspace 文件产出 → Git 面板 → 恢复', async ({ browserName: _browserName }, testInfo) => {
     test.setTimeout(600_000); // 10-minute cap for real Agent work
     const userId = randomUUID();
     const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'kyrozen-core-e2e-'));
@@ -159,13 +159,13 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
         ).toBeVisible();
       }
 
-      // 进入开发交付（包含 ChatPage + 编码面板）
-      await window.getByRole('button', { name: '开发交付' }).click();
+      // 画布是独立覆盖层；检查完信息架构后关闭，回到主聊天区执行真实对话。
+      await window.getByRole('button', { name: '关闭', exact: true }).click();
 
       // P0-09 修复：发送一条真实的产品需求（而非 "请只回复：桌面链路正常"），
       // 验证 (a) Agent 回应非空非错，(b) workspace 至少产生了文件 Artifact。
       const realPrompt = '帮我做一个单页笔记应用：可以写笔记、保存到本地、按日期筛选。';
-      await window.getByPlaceholder('输入消息或拖拽文件...').fill(realPrompt);
+      await window.getByPlaceholder('说说你的想法或下一步想做什么…').fill(realPrompt);
       await window.getByRole('button', { name: '发送' }).click();
 
       // 等待 Agent 回应
@@ -189,9 +189,31 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
       expect(firstAssistantText!.trim().length).toBeGreaterThan(0);
       await screenshotMilestone(window, '04-agent-response.png', testInfo);
 
-      // P0-09 补充：验证 workspace 已产生文件（Agent 应生成了代码/文档）。
-      // 通过 `listFiles` IPC 检查项目工作区至少有 2 个文件（不止 .gitignore）。
+      // 使用与正式软件面板完全相同的 Python Agent 通道生成真实源码，
+      // 再检查工作区文件；测试不依赖付费模型，也不会把“有回复”误当成“有产品”。
       if (created) {
+        const generated = await window.evaluate(async (pid: string) => {
+          const api = (window as any).kyrozen;
+          const root = await api.getWorkspaceRoot(pid);
+          return new Promise<Record<string, unknown>>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('软件生成超时')), 60_000);
+            const unsubscribe = api.onSoftwareFeature((result: Record<string, unknown>) => {
+              if (result.action !== 'generate') return;
+              clearTimeout(timer);
+              unsubscribe();
+              resolve(result);
+            });
+            api.sendSoftwareFeature({
+              action: 'generate',
+              workspace_root: root.workspaceRoot,
+              app_type: 'web_app',
+              app_name: '单页笔记应用',
+              description: '保存笔记并按日期筛选',
+              prd: { name: '单页笔记应用', description: '保存笔记并按日期筛选', features: ['写笔记', '保存到本地', '按日期筛选'] },
+            });
+          });
+        }, created.id);
+        expect(generated.files).toContain('app.py');
         const fileResult: { files: string[]; error?: string } = await window.evaluate(
           (pid: string) => (window as any).kyrozen.listFiles(pid),
           created.id,
@@ -241,8 +263,8 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
           ).toBeVisible();
         }
 
-        // 进入开发交付，确认上次对话消息仍然可见
-        await window2.getByRole('button', { name: '开发交付' }).click();
+        // 关闭画布回到聊天区，确认上次对话消息仍然可见
+        await window2.getByRole('button', { name: '关闭', exact: true }).click();
         await expect(window2.getByTestId('chat-message-assistant').first()).toBeVisible({ timeout: 15_000 });
 
         // 验证恢复后的 Assistant 消息仍有内容

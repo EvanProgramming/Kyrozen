@@ -125,7 +125,7 @@ STAGE_DEFINITIONS: dict[str, StageDefinition] = {
         note="实现 PRD 中的功能，产出可运行产品。",
         items=(
             _d("prd", "产品需求文档 PRD（进入开发的硬门槛）", ("PRD.md", "prd.md", "docs/PRD.md")),
-            _d("source_code", "可运行源码（package.json / main.py / index.html）", ("package.json", "pyproject.toml", "main.py", "index.html")),
+            _d("source_code", "可运行源码（package.json / app.py / main.py / index.html）", ("package.json", "pyproject.toml", "app.py", "main.py", "index.html")),
             _d("readme", "项目说明 README.md", ("README.md",), skippable=True),
             _v("build_passes", "构建通过", skippable=True),
             _c("dev_review", "开发自审确认", skippable=True),
@@ -464,7 +464,11 @@ def compute_gate(store: StageGateStore) -> GateStatus:
     if stage == "development" and not _item_satisfied(store.records.get("prd", {}), "deliverable"):
         blocked_entry_reason = "缺少产品需求文档(PRD)，无法进入开发阶段。请先在「产品定义」阶段完成 PRD。"
 
-    can_advance = len(missing) == 0 and blocked_entry_reason is None
+    # Clicking “进入下一阶段” is itself the explicit user confirmation. A
+    # confirmation item is displayed as pending, but must not make that button
+    # impossible to click once all deliverables/verifications are ready.
+    blocking_missing = [condition for condition in missing if condition.kind != "confirmation"]
+    can_advance = len(blocking_missing) == 0 and blocked_entry_reason is None
     progress = compute_progress(store)
     return GateStatus(
         stage=stage,
@@ -489,6 +493,17 @@ def entry_blocked(store: StageGateStore, stage: str) -> str | None:
 
 def refresh_gate(store: StageGateStore, workspace_root: str | Path) -> GateStatus:
     """Re-scan the workspace, recompute progress, persist and return the gate."""
+    # Migrate state created by older clients that allowed hard requirements to
+    # be skipped. A non-skippable item must never remain satisfied by a legacy
+    # skip record after upgrading.
+    hard_ids = {item.id for definition in STAGE_DEFINITIONS.values() for item in definition.items if not item.skippable}
+    for item_id in hard_ids:
+        rec = store.records.get(item_id)
+        if rec and rec.get("skipped"):
+            rec["skipped"] = False
+            if str(rec.get("detail") or "").startswith("已跳过："):
+                rec["detail"] = ""
+    store.skips = [skip for skip in store.skips if skip.item_id not in hard_ids]
     # PRD is a cross-stage prerequisite for development, so always re-detect it
     # regardless of the current stage (it may have been created in an earlier stage).
     prd_found = detect_deliverables(workspace_root, "product_definition").get("prd", False)
@@ -526,7 +541,7 @@ def get_status(store: StageGateStore, gate: GateStatus | None = None) -> dict[st
     return _status_dict(store, gate)
 
 
-def advance(store: StageGateStore, mode: str) -> dict[str, Any]:
+def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | None = None) -> dict[str, Any]:
     """Perform a stage transition.
 
     mode:
@@ -556,19 +571,35 @@ def advance(store: StageGateStore, mode: str) -> dict[str, Any]:
     if idx >= len(STAGES) - 1:
         return {"ok": False, "error": "已是最后阶段，无法继续推进。", **_status_dict(store, gate)}
 
-    required_missing = [c for c in gate.missing if c.kind != "task" and c.required]
+    required_missing = [c for c in gate.missing if c.kind not in {"task", "confirmation"} and c.required]
     if mode == "normal" and required_missing:
         reason = gate.blocked_entry_reason or ("未满足：" + "、".join(c.label for c in required_missing))
         return {"ok": False, "error": reason, **_status_dict(store, gate)}
 
+    if mode == "risk":
+        hard_missing = [c for c in required_missing if not c.skippable]
+        if hard_missing:
+            return {
+                "ok": False,
+                "error": "以下硬性条件不可带风险跳过：" + "、".join(c.label for c in hard_missing),
+                **_status_dict(store, gate),
+            }
+
     if mode == "risk" and required_missing:
+        details = risk_details if risk_details is not None else {
+            "reason": "系统兼容推进：未提供用户风险说明",
+            "impact": "跳过的内容可能在后续引发返工或缺陷",
+            "recovery": "返回上一阶段补齐该条件",
+        }
+        if risk_details is not None and not str(details.get("reason") or "").strip():
+            return {"ok": False, "error": "带风险推进前必须填写具体原因。", **_status_dict(store, gate)}
         for c in required_missing:
             store.record_skip(
                 c.item_id,
-                reason="带风险推进：未满足必需条件",
-                impact="跳过的内容可能在后续引发返工或缺陷",
+                reason=str(details.get("reason") or "").strip(),
+                impact=str(details.get("impact") or "跳过的内容可能在后续引发返工或缺陷").strip(),
                 approver="用户",
-                recovery="返回上一阶段补齐该条件",
+                recovery=str(details.get("recovery") or "返回上一阶段补齐该条件").strip(),
             )
 
     # Advancing = the user confirms the current stage's required confirmations.
@@ -580,7 +611,7 @@ def advance(store: StageGateStore, mode: str) -> dict[str, Any]:
 
     nxt = STAGES[idx + 1]
     entry_reason = entry_blocked(store, nxt)
-    if mode == "normal" and entry_reason:
+    if entry_reason:
         return {"ok": False, "error": entry_reason, **_status_dict(store, gate)}
     store.current_stage = nxt
     store.tasks = {}

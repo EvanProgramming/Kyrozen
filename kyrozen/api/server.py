@@ -1162,7 +1162,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "client_id": config.github_oauth_client_id,
             "redirect_uri": callback_uri,
             "state": state,
-            "scope": "repo read:user",
+            "scope": "repo read:user user:email",
         }
         authorize_url = "https://github.com/login/oauth/authorize?" + "&".join(f"{k}={v}" for k, v in params.items())
         return {"authorize_url": authorize_url}

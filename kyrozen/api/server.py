@@ -1374,19 +1374,31 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         github_username = github_user.get("login", "")
         github_name = github_user.get("name") or github_username
 
-        emails_resp = requests.get(
-            "https://api.github.com/user/emails",
-            headers={"Authorization": f"Bearer {github_token}", "Accept": "application/vnd.github+json"},
-            timeout=15,
-        )
-        emails_resp.raise_for_status()
-        emails = emails_resp.json()
-        primary = next((e for e in emails if e.get("primary")), None)
-        email = (
-            primary["email"]
-            if primary
-            else (emails[0]["email"] if emails else f"{github_username}@github.com")
-        )
+        # 2b. Resolve email — prefer /user/emails but gracefully fall back
+        #     to the public email on /user (or a synthetic one) because the
+        #     /user/emails endpoint requires the OAuth app to have email
+        #     access enabled in its GitHub settings. Without that, GitHub
+        #     returns 404 and the whole login fails.
+        email = github_user.get("email")
+        try:
+            emails_resp = requests.get(
+                "https://api.github.com/user/emails",
+                headers={"Authorization": f"Bearer {github_token}", "Accept": "application/vnd.github+json"},
+                timeout=15,
+            )
+            if emails_resp.status_code == 200:
+                emails = emails_resp.json()
+                primary = next((e for e in emails if e.get("primary")), None)
+                email = (
+                    primary["email"]
+                    if primary
+                    else (emails[0]["email"] if emails else email)
+                ) or email
+        except requests.RequestException:
+            # Network error reaching GitHub — keep whatever we already have.
+            pass
+        if not email:
+            email = f"{github_username}@github.com"
 
         # 3. Create or find Kyrozen user
         admin_client = create_client(config.supabase_url, config.supabase_service_role_key)

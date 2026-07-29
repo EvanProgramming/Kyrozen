@@ -61,7 +61,6 @@ def _make_ai_image_analyzer() -> "attachments_mod.AIImageAnalyzer | None":
     import urllib.request, urllib.error
 
     def chat_fn(messages: list, *, model_name: str = "auto/vision") -> dict:
-        # Try OmniRoute first, then Gemini direct
         providers = [
             ("https://kyrozen.chat/ai/v1/chat/completions", {"Authorization": "Bearer auto"}),
             (f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={os.environ.get('GEMINI_API_KEY', '')}", {}),
@@ -70,7 +69,6 @@ def _make_ai_image_analyzer() -> "attachments_mod.AIImageAnalyzer | None":
         for url, headers in providers:
             try:
                 if "generativelanguage" in url:
-                    # Gemini REST format
                     import base64 as b64mod
                     text_parts = []
                     for m in messages:
@@ -93,7 +91,6 @@ def _make_ai_image_analyzer() -> "attachments_mod.AIImageAnalyzer | None":
                         text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
                         return {"content": text}
                 else:
-                    # OpenAI-compatible format
                     body = json.dumps({
                         "model": "auto/vision",
                         "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
@@ -110,6 +107,59 @@ def _make_ai_image_analyzer() -> "attachments_mod.AIImageAnalyzer | None":
         raise last_error or RuntimeError("No vision provider available")
 
     return attachments_mod.AIImageAnalyzer(chat_fn=chat_fn)
+
+
+def _make_asr_fn():
+    """Build a Gemini-based speech-to-text function for video transcription."""
+    import urllib.request, subprocess, tempfile
+
+    def asr_fn(video_path):
+        key = os.environ.get("GEMINI_API_KEY", "")
+        if not key:
+            return None, []
+        # Extract audio as MP3 via ffmpeg
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path),
+                 "-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", tmp_path],
+                check=True, timeout=60,
+            )
+            audio_bytes = Path(tmp_path).read_bytes()
+            import base64 as b64mod
+            b64 = b64mod.b64encode(audio_bytes).decode("ascii")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}"
+            body = json.dumps({
+                "contents": [{"parts": [
+                    {"text": "请将这段音频转录为中文文本，按时间点分段输出。格式：每行 'MM:SS 文本内容'"},
+                    {"inline_data": {"mime_type": "audio/mp3", "data": b64}},
+                ]}],
+            }).encode()
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read())
+                text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            # Parse timestamped lines into segments
+            from kyrozen.core.attachments import TranscriptSegment
+            import re
+            segments = []
+            for line in (text or "").splitlines():
+                m = re.match(r"(\d+):(\d+)\s+(.+)", line.strip())
+                if m:
+                    mins, secs, content = int(m.group(1)), int(m.group(2)), m.group(3)
+                    t = mins * 60 + secs
+                    segments.append(TranscriptSegment(start=t, end=t + 5, text=content))
+                elif line.strip():
+                    segments.append(TranscriptSegment(start=len(segments) * 5, end=len(segments) * 5 + 5, text=line.strip()))
+            return text, segments
+        except Exception:
+            return None, []
+        finally:
+            try: Path(tmp_path).unlink(missing_ok=True)
+            except Exception: pass
+
+    return asr_fn
 
 
 class PlanDetectingModelProvider:
@@ -638,6 +688,7 @@ class DesktopAgentRuntime:
                     manager = attachments_mod.AttachmentsManager(
                         root_path,
                         image_analyzer=_make_ai_image_analyzer(),
+                        video_analyzer=attachments_mod.VideoAnalyzer(asr_fn=_make_asr_fn()),
                     )
                     attachment = manager.add(path)
                     payload = {"action": "attach", "attachment": attachment.to_dict()}

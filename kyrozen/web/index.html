@@ -3,329 +3,184 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Kyrozen — AI 产品创造者 & 管家，即将上线。">
   <title>Kyrozen — 即将上线</title>
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Long+Cang&display=swap');
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    /*
+     * Kyrozen 设计系统 —— 暖色手绘风（见 docs/DESIGN_SYSTEM.md）
+     * 三主色：暖米背景 / 墨色文字 / 深蓝强调
+     * 禁止渐变、禁止阴影、扁平化、无圆角卡片
+     */
     :root {
-      --bg: #0a0f17;
-      --surface: rgba(20, 26, 38, 0.7);
-      --text: #e8ecf2;
-      --muted: #9fb0c7;
-      --accent: #00f0ff;
-      --accent-glow: rgba(0, 240, 255, 0.35);
-      --success: #2ce48a;
-      --error: #ff5e7d;
+      color-scheme: light;
+      --paper: #f0eee6;
+      --paper-sink: #eae8dc;
+      --paper-edge: #e1ded2;
+      --surface: #faf9f2;
+      --ink: #201b15;
+      --ink-soft: #4e4841;
+      --ink-faint: #6e6862;
+      --ink-ghost: #8a857e;
+      --line: rgba(32, 27, 21, 0.14);
+      --line-strong: rgba(32, 27, 21, 0.3);
+      --accent: #1e40af;
+      --accent-deep: #1e3a8a;
+      --accent-soft: #dce5f7;
+      --hl-green: #dce7c5;
+      --hl-blue: #d9e4f7;
+      --success: #3f7a44;
+      --radius: 4px;
+      --radius-panel: 2px;
     }
 
     html, body {
       height: 100%;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      overflow-x: hidden;
     }
 
     body {
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background-color: var(--paper);
+      color: var(--ink);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
       display: flex;
       align-items: center;
       justify-content: center;
-      position: relative;
+      padding: 24px;
     }
 
-    /* Animated gradient background */
-    .bg-gradient {
-      position: fixed;
-      inset: 0;
-      background:
-        radial-gradient(circle at 20% 30%, rgba(0, 240, 255, 0.12) 0%, transparent 40%),
-        radial-gradient(circle at 80% 70%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
-        radial-gradient(circle at 50% 50%, rgba(0, 240, 255, 0.05) 0%, transparent 60%);
-      animation: pulse 12s ease-in-out infinite alternate;
-      z-index: 0;
+    ::selection {
+      background-color: var(--hl-blue);
+      color: var(--ink);
     }
 
-    .grid-overlay {
-      position: fixed;
-      inset: 0;
-      background-image:
-        linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-      background-size: 60px 60px;
-      mask-image: radial-gradient(circle at center, black 0%, transparent 70%);
-      -webkit-mask-image: radial-gradient(circle at center, black 0%, transparent 70%);
-      z-index: 0;
-      pointer-events: none;
-    }
-
-    @keyframes pulse {
-      0% { opacity: 0.8; transform: scale(1); }
-      100% { opacity: 1; transform: scale(1.05); }
+    .font-hand {
+      font-family: 'Caveat', 'Long Cang', 'PingFang SC', cursive;
+      font-weight: 600;
+      letter-spacing: 0.01em;
     }
 
     .card {
-      position: relative;
-      z-index: 1;
-      width: min(520px, 92vw);
+      width: min(560px, 100%);
       background: var(--surface);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 24px;
-      padding: 56px 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-panel);
+      padding: 64px 48px 48px;
       text-align: center;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      box-shadow:
-        0 24px 80px rgba(0, 0, 0, 0.45),
-        0 0 0 1px rgba(255, 255, 255, 0.04) inset;
     }
 
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 8px 16px;
-      border-radius: 999px;
-      background: rgba(0, 240, 255, 0.1);
-      border: 1px solid rgba(0, 240, 255, 0.2);
+      padding: 4px 12px;
+      border-radius: var(--radius-panel);
+      background: var(--accent-soft);
       color: var(--accent);
       font-size: 12px;
       font-weight: 600;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-      margin-bottom: 28px;
+      letter-spacing: 1px;
+      margin-bottom: 32px;
     }
 
     .badge::before {
       content: '';
-      width: 8px;
-      height: 8px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       background: var(--accent);
-      box-shadow: 0 0 12px var(--accent-glow);
       animation: blink 2s ease-in-out infinite;
     }
 
     @keyframes blink {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
+      50% { opacity: 0.35; }
     }
 
     h1 {
-      font-size: 42px;
-      font-weight: 800;
-      margin-bottom: 16px;
-      letter-spacing: -1px;
-      background: linear-gradient(135deg, #ffffff 0%, var(--accent) 100%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
+      font-size: 72px;
+      line-height: 1;
+      color: var(--ink);
+      margin-bottom: 24px;
     }
 
     .tagline {
-      color: var(--muted);
-      font-size: 17px;
-      line-height: 1.7;
+      color: var(--ink-soft);
+      font-size: 16px;
+      line-height: 1.9;
       margin-bottom: 40px;
     }
 
-    .form {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
+    /* 荧光笔行内高亮（实色，非渐变） */
+    .hl-green {
+      background-color: var(--hl-green);
+      padding: 0 0.15em;
     }
 
-    .input-row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
+    /* 手绘波浪下划线（实色 SVG 笔触，非渐变） */
+    .wavy-blue {
+      text-decoration: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='4' viewBox='0 0 24 4'%3E%3Cpath d='M0 2 Q3 0.5 6 2 T12 2 T18 2 T24 2' fill='none' stroke='%231e40af' stroke-width='1.6'/%3E%3C/svg%3E");
+      background-repeat: repeat-x;
+      background-position: 0 100%;
+      padding-bottom: 3px;
     }
-
-    input[type="email"] {
-      flex: 1;
-      min-width: 220px;
-      padding: 14px 18px;
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(10, 15, 23, 0.6);
-      color: var(--text);
-      font-size: 15px;
-      outline: none;
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
-
-    input[type="email"]::placeholder {
-      color: rgba(159, 176, 199, 0.5);
-    }
-
-    input[type="email"]:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-glow);
-    }
-
-    button {
-      padding: 14px 24px;
-      border-radius: 12px;
-      border: none;
-      background: linear-gradient(135deg, var(--accent) 0%, #00c2ff 100%);
-      color: #00141a;
-      font-size: 15px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: transform 0.15s, box-shadow 0.2s;
-      white-space: nowrap;
-    }
-
-    button:hover:not(:disabled) {
-      transform: translateY(-1px);
-      box-shadow: 0 8px 24px var(--accent-glow);
-    }
-
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-
-    .message {
-      min-height: 24px;
-      font-size: 14px;
-      font-weight: 500;
-      opacity: 0;
-      transform: translateY(4px);
-      transition: opacity 0.3s, transform 0.3s;
-    }
-
-    .message.visible {
-      opacity: 1;
-      transform: translateY(0);
-    }
-
-    .message.success { color: var(--success); }
-    .message.error { color: var(--error); }
 
     .features {
       display: flex;
       justify-content: center;
-      gap: 32px;
-      margin-top: 40px;
-      flex-wrap: wrap;
-    }
-
-    .feature {
-      display: flex;
       align-items: center;
-      gap: 10px;
-      color: var(--muted);
+      gap: 20px;
+      flex-wrap: wrap;
+      padding-top: 32px;
+      border-top: 1px solid var(--line);
+      color: var(--ink-soft);
       font-size: 14px;
     }
 
-    .feature::before {
-      content: '✦';
+    .features .star {
       color: var(--accent);
-      font-size: 16px;
+      font-size: 12px;
+      user-select: none;
     }
 
     .footer {
-      margin-top: 36px;
+      margin-top: 32px;
       font-size: 12px;
-      color: rgba(159, 176, 199, 0.5);
+      color: var(--ink-ghost);
     }
 
     @media (max-width: 480px) {
-      .card { padding: 40px 24px; }
-      h1 { font-size: 32px; }
+      .card { padding: 48px 24px 36px; }
+      h1 { font-size: 52px; }
       .tagline { font-size: 15px; }
-      .input-row { flex-direction: column; }
-      button { width: 100%; }
-      .features { gap: 16px; }
     }
   </style>
 </head>
 <body>
-  <div class="bg-gradient"></div>
-  <div class="grid-overlay"></div>
-
   <main class="card">
-    <div class="badge">Coming Soon</div>
-    <h1>Kyrozen</h1>
+    <div class="badge">COMING SOON</div>
+    <h1 class="font-hand">Kyrozen</h1>
     <p class="tagline">
-      AI 驱动的项目工作流平台，让创意从想法到产品一气呵成。<br>
-      我们正在打磨最后的细节，很快与你见面。
+      AI 产品创造者 &amp; 管家。<br>
+      让创意从想法到产品<span class="hl-green">一气呵成</span>。<br>
+      我们正在<span class="wavy-blue">打磨最后的细节</span>，很快与你见面。
     </p>
 
-    <form class="form" id="waitlist-form">
-      <div class="input-row">
-        <input
-          type="email"
-          id="email"
-          placeholder="输入你的邮箱"
-          autocomplete="email"
-          required
-        />
-        <button type="submit" id="submit-btn">Join Waitlist</button>
-      </div>
-      <div class="message" id="message"></div>
-    </form>
-
     <div class="features">
-      <div class="feature">AI 规划</div>
-      <div class="feature">自动开发</div>
-      <div class="feature">硬件集成</div>
+      <span>AI 规划</span>
+      <span class="star">✦</span>
+      <span>自动开发</span>
+      <span class="star">✦</span>
+      <span>硬件集成</span>
     </div>
 
     <div class="footer">© 2026 Kyrozen. All rights reserved.</div>
   </main>
-
-  <script>
-    const form = document.getElementById('waitlist-form');
-    const emailInput = document.getElementById('email');
-    const submitBtn = document.getElementById('submit-btn');
-    const messageEl = document.getElementById('message');
-
-    function showMessage(text, type) {
-      messageEl.textContent = text;
-      messageEl.className = 'message ' + type + ' visible';
-    }
-
-    function clearMessage() {
-      messageEl.className = 'message';
-      messageEl.textContent = '';
-    }
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      clearMessage();
-
-      const email = emailInput.value.trim();
-      if (!email) {
-        showMessage('请输入邮箱地址', 'error');
-        return;
-      }
-
-      submitBtn.disabled = true;
-      submitBtn.textContent = '提交中...';
-
-      try {
-        const res = await fetch('/api/waitlist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, source: 'website' }),
-        });
-
-        const data = await res.json().catch(() => ({}));
-
-        if (res.ok) {
-          showMessage('已成功加入等待列表，上线后我们会第一时间通知你。', 'success');
-          emailInput.value = '';
-        } else {
-          showMessage(data.detail || '提交失败，请稍后重试', 'error');
-        }
-      } catch (err) {
-        showMessage('网络错误，请稍后重试', 'error');
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Join Waitlist';
-      }
-    });
-  </script>
 </body>
 </html>

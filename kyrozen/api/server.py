@@ -49,13 +49,20 @@ from kyrozen.project.project import PROJECT_STAGES
 from kyrozen.research.agent import MarketResearchAgent
 
 
-def _encode_github_oauth_state(redirect_uri: str, secret: str, ttl_seconds: int = 600) -> str:
+def _encode_github_oauth_state(
+    redirect_uri: str, secret: str, ttl_seconds: int = 600,
+    user_id: str | None = None, desktop: bool = False,
+) -> str:
     """Create a short-lived signed OAuth state that survives process changes."""
-    payload = {
+    payload: dict[str, Any] = {
         "redirect_uri": redirect_uri,
         "exp": int(datetime.now(timezone.utc).timestamp()) + ttl_seconds,
         "nonce": uuid.uuid4().hex,
     }
+    if user_id:
+        payload["user_id"] = user_id
+    if desktop:
+        payload["desktop"] = True
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
     signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
@@ -537,6 +544,11 @@ class UpdateProjectRequest(BaseModel):
     current_stage: str | None = None
     next_steps: str | None = None
     risks: list[str] | None = None
+    progress: int | None = Field(default=None, ge=0, le=100)
+
+
+class RefreshSessionRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
 
 
 class CreateDecisionRequest(BaseModel):
@@ -893,6 +905,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
         try:
             active_model = model if model is not None else get_model_provider(_config)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to initialize model provider: {e}")
             active_model = None
@@ -1101,20 +1115,31 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         except Exception as exc:
             raise HTTPException(status_code=401, detail=f"Invalid credentials: {exc}") from exc
 
+    @app.post("/api/auth/refresh")
+    async def api_auth_refresh(request: RefreshSessionRequest):
+        """Exchange a Supabase refresh token without forcing GitHub login again."""
+        config = get_config()
+        if not config.supabase_url or not config.supabase_anon_key:
+            raise HTTPException(status_code=500, detail="Supabase auth is not configured on the server")
+        try:
+            anon_client = create_client(config.supabase_url, config.supabase_anon_key)
+            session = anon_client.auth.refresh_session(request.refresh_token)
+            if not session.session or not session.session.access_token:
+                raise ValueError("refresh did not return a session")
+            return {
+                "access_token": session.session.access_token,
+                "refresh_token": session.session.refresh_token or request.refresh_token,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail=f"Session refresh failed: {exc}") from exc
+
     # ------------------------------------------------------------------
     # GitHub OAuth
     # ------------------------------------------------------------------
-    _github_oauth_states: dict[str, dict[str, Any]] = {}
 
     class GitHubAuthorizeRequest(BaseModel):
         redirect_uri: str | None = None
         desktop: bool = False
-
-    def _cleanup_github_oauth_states() -> None:
-        now = datetime.now(timezone.utc).timestamp()
-        expired = [k for k, v in _github_oauth_states.items() if v.get("expires_at", 0) < now]
-        for k in expired:
-            _github_oauth_states.pop(k, None)
 
     @app.get("/api/auth/github/authorize")
     async def api_github_authorize(
@@ -1127,15 +1152,11 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if not config.github_oauth_client_id or not config.github_oauth_client_secret:
             raise HTTPException(status_code=503, detail="GitHub OAuth is not configured on the server")
 
-        _cleanup_github_oauth_states()
-        state = uuid.uuid4().hex
         callback_uri = redirect_uri or config.github_oauth_redirect_uri or str(request.base_url).rstrip("/") + "/api/auth/github/callback"
-        _github_oauth_states[state] = {
-            "user_id": current_user.user_id,
-            "desktop": desktop,
-            "redirect_uri": callback_uri,
-            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp(),
-        }
+        state = _encode_github_oauth_state(
+            callback_uri, config.github_oauth_client_secret,
+            user_id=current_user.user_id, desktop=desktop,
+        )
 
         params = {
             "client_id": config.github_oauth_client_id,
@@ -1151,8 +1172,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         code: str,
         state: str,
     ):
-        _cleanup_github_oauth_states()
-        state_data = _github_oauth_states.pop(state, None)
+        config = get_config()
+        state_data = _decode_github_oauth_state(state, config.github_oauth_client_secret)
         if not state_data:
             raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
@@ -1656,7 +1677,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
         def _assistant_content(task: Any) -> str:
             if not task.result:
-                return "(no response)"
+                return ""
             if isinstance(task.result, dict):
                 return task.result.get("answer") or str(task.result)
             return str(task.result)
@@ -1695,22 +1716,6 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             if _requires_local_client(request.mode):
                 routed = await _route_task_to_desktop(task, current_user.user_id)
                 if routed:
-                    content = (
-                        "任务已推送到你的 Kyrozen 桌面客户端执行。"
-                        "请在桌面客户端中查看进度。"
-                    )
-                    if request.project_id and user_message is not None:
-                        pm.save_chat_message(
-                            {
-                                "id": str(uuid.uuid4()),
-                                "user_id": current_user.user_id,
-                                "project_id": request.project_id,
-                                "role": "assistant",
-                                "content": content,
-                                "metadata": {"dispatched_to_desktop": True},
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            }
-                        )
                     return {
                         "task_id": task.id,
                         "status": task.status,
@@ -1720,6 +1725,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                     }
 
             agent.run_task(task, user_input, confirmed=request.confirmed)
+            if task.status == "failed" or (task.status == "completed" and not _assistant_content(task).strip()):
+                task_errors = list(getattr(task, "errors", []) or [])
+                detail = str(task_errors[-1] if task_errors else "模型服务暂时不可用，请稍后重试。")
+                raise HTTPException(status_code=502, detail=detail)
             if request.project_id and user_message is not None:
                 pm.save_chat_message(
                     {
@@ -1740,6 +1749,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 "content": _assistant_content(task),
                 "steps": [step.to_dict() for step in task.steps],
             }
+        except HTTPException:
+            raise
         except Exception as e:
             if request.project_id and user_message is not None:
                 pm.save_chat_message(
@@ -1748,8 +1759,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                         "user_id": current_user.user_id,
                         "project_id": request.project_id,
                         "role": "assistant",
-                        "content": f"Error: {e}",
-                        "metadata": {},
+                        "content": "任务执行失败，请重试。",
+                        "metadata": {"error_type": type(e).__name__},
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
                 )
@@ -1981,10 +1992,22 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     ):
         _get_owned_project(project_id, current_user)
         pm = _get_project_manager()
-        return pm.list_chat_messages(
+        messages = pm.list_chat_messages(
             project_id=project_id,
             user_id=current_user.user_id,
         )
+        # Desktop dispatch acknowledgements and legacy empty model replies are
+        # transport state, not assistant answers. Keep them out of user chat.
+        return [
+            message for message in messages
+            if not (
+                message.get("role") == "assistant"
+                and (
+                    message.get("metadata", {}).get("dispatched_to_desktop")
+                    or str(message.get("content", "")).strip().lower() in {"(no response)", "no response"}
+                )
+            )
+        ]
 
     @app.post("/api/projects/{project_id}/advance")
     async def api_advance_project(
@@ -3231,6 +3254,23 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                             if status in {"completed", "failed", "cancelled"}:
                                 task.update_status(status)
                             _db.save_task(task)
+                            if (
+                                status == "completed"
+                                and task.project_id
+                                and isinstance(result, dict)
+                                and str(result.get("answer", "")).strip()
+                            ):
+                                pm.save_chat_message(
+                                    {
+                                        "id": str(uuid.uuid4()),
+                                        "user_id": user_id,
+                                        "project_id": task.project_id,
+                                        "role": "assistant",
+                                        "content": str(result["answer"]),
+                                        "metadata": {"task_id": task_id},
+                                        "created_at": datetime.now(timezone.utc).isoformat(),
+                                    }
+                                )
 
                 elif msg_type == "confirmation_response":
                     # TODO: wire into running agent confirmation queue

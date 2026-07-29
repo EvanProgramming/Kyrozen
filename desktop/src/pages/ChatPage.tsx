@@ -1065,7 +1065,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   useEffect(() => {
     if (!window.kyrozen) return;
     const unsubChat = window.kyrozen.onChatMessage((msg) => {
-      if (msg.role === 'system' && /PlatformIO|Python Agent|项目工作目录|Artifact|\[INFO\]|\[model\]|\[tool\]/i.test(msg.content)) return;
+      if (msg.role === 'system' && /PlatformIO|Python Agent|项目工作目录|Artifact|\[INFO\]|\[model\]|\[tool\]|Failed to persist/i.test(msg.content)) return;
       if (msg.role === 'error') {
         setChatError(friendlyChatError(msg.error || msg.raw || msg.content));
         setIsRunning(false);

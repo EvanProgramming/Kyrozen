@@ -1227,10 +1227,56 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         scope = token_data.get("scope", "")
         is_desktop = state_data.get("desktop", False)
         if is_desktop:
-            # Redirect the desktop callback back to the kyrozen:// URL scheme so
-            # the client can capture the GitHub token without further polling.
+            # Serve an HTML page that auto-redirects to kyrozen:// but also
+            # shows a manual "Open Kyrozen" button if the browser blocks it.
             redirect_url = f"kyrozen://auth/github?token={access_token}&scope={scope}"
-            return RedirectResponse(url=redirect_url)
+            return HTMLResponse(
+                status_code=200,
+                content=f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <title>Kyrozen GitHub 授权</title>
+  <style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; background: #f5f5f5; color: #333;
+    }}
+    .card {{
+      background: white; border-radius: 12px; box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      padding: 36px 40px; max-width: 420px; width: 90%; text-align: center;
+    }}
+    .logo {{ font-size: 32px; margin-bottom: 12px; }}
+    h1 {{ font-size: 20px; font-weight: 600; margin-bottom: 8px; }}
+    p {{ font-size: 14px; color: #666; margin-bottom: 20px; line-height: 1.5; }}
+    .btn {{
+      display: inline-block; padding: 12px 28px; border-radius: 8px;
+      font-size: 15px; font-weight: 500; cursor: pointer; text-decoration: none;
+      transition: background 0.15s; margin: 6px;
+    }}
+    .btn-primary {{ background: #7c3aed; color: white; border: none; }}
+    .btn-primary:hover {{ background: #6d28d9; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🔗</div>
+    <h1>正在连接 GitHub…</h1>
+    <p id="status">如果浏览器未能自动打开应用，请点击下方按钮。</p>
+    <a class="btn btn-primary" id="open-btn" href="{redirect_url}">打开 Kyrozen</a>
+  </div>
+  <script>
+    setTimeout(function () {{ window.location.href = "{redirect_url}"; }}, 200);
+    setTimeout(function () {{
+      document.getElementById("status").textContent =
+        "浏览器已阻止自动跳转。请手动点击下方按钮打开 Kyrozen。";
+    }}, 1200);
+  </script>
+</body>
+</html>""",
+            )
         return {
             "success": True,
             "scope": scope,
@@ -1399,7 +1445,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         kyrozen_token = session.session.access_token
         refresh_token = session.session.refresh_token
 
-        # 5. Redirect desktop via kyrozen:// custom URL scheme
+        # 5. Redirect desktop via kyrozen:// custom URL scheme.
+        #    Serve an HTML page that auto-redirects but also shows a
+        #    manual "Open Kyrozen" button if the browser blocks the
+        #    custom protocol handler.
         redirect_url = (
             f"kyrozen://auth/login?"
             f"kyrozen_token={kyrozen_token}&"
@@ -1408,7 +1457,76 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             f"scope={scope}&"
             f"user_id={user_id}"
         )
-        return RedirectResponse(url=redirect_url)
+        return HTMLResponse(
+            status_code=200,
+            content=f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <title>Kyrozen 登录</title>
+  <style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; background: #f5f5f5; color: #333;
+    }}
+    .card {{
+      background: white; border-radius: 12px; box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      padding: 36px 40px; max-width: 420px; width: 90%; text-align: center;
+    }}
+    .logo {{ font-size: 32px; margin-bottom: 12px; }}
+    h1 {{ font-size: 20px; font-weight: 600; margin-bottom: 8px; }}
+    p {{ font-size: 14px; color: #666; margin-bottom: 20px; line-height: 1.5; }}
+    .btn {{
+      display: inline-block; padding: 12px 28px; border-radius: 8px;
+      font-size: 15px; font-weight: 500; cursor: pointer; text-decoration: none;
+      transition: background 0.15s; margin: 6px;
+    }}
+    .btn-primary {{ background: #7c3aed; color: white; border: none; }}
+    .btn-primary:hover {{ background: #6d28d9; }}
+    .btn-outline {{ background: white; color: #7c3aed; border: 2px solid #7c3aed; }}
+    .btn-outline:hover {{ background: #f5f3ff; }}
+    .copied {{ background: #34d399 !important; color: white !important; border-color: #34d399 !important; }}
+    .note {{ font-size: 12px; color: #999; margin-top: 16px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🔐</div>
+    <h1>正在打开 Kyrozen…</h1>
+    <p id="status">如果浏览器未能自动打开应用，请点击下方按钮。</p>
+    <a class="btn btn-primary" id="open-btn" href="{redirect_url}">打开 Kyrozen</a>
+    <br>
+    <button class="btn btn-outline" id="copy-btn" onclick="copyLink()">复制登录链接</button>
+    <p class="note" id="copy-note" style="display:none">链接已复制，请在 Safari 地址栏中粘贴打开。</p>
+  </div>
+
+  <script>
+    // Auto-redirect via location — most browsers allow this once user clicked "Login".
+    setTimeout(function () {{
+      window.location.href = "{redirect_url}";
+    }}, 200);
+
+    // If the page is still visible after 1s, the redirect was blocked.
+    setTimeout(function () {{
+      document.getElementById("status").textContent =
+        "浏览器已阻止自动跳转。请手动点击下方按钮打开 Kyrozen。";
+      document.getElementById("open-btn").style.display = "inline-block";
+    }}, 1200);
+
+    function copyLink() {{
+      navigator.clipboard.writeText("{redirect_url}").then(function () {{
+        var btn = document.getElementById("copy-btn");
+        btn.textContent = "已复制！";
+        btn.classList.add("copied");
+        document.getElementById("copy-note").style.display = "block";
+      }});
+    }}
+  </script>
+</body>
+</html>""",
+        )
 
     # ------------------------------------------------------------------
     # Desktop update signatures

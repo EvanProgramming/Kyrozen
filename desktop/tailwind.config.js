@@ -42,7 +42,7 @@ export default {
         'line-strong': 'rgba(32, 27, 21, 0.3)',
       },
       fontFamily: {
-        hand: ['Caveat', 'Long Cang', 'PingFang SC', 'cursive'],
+        display: ['Caveat', 'Noto Serif SC', 'Songti SC', 'serif'],
         sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
         mono: ['Spline Sans Mono', 'ui-monospace', 'SF Mono', 'Menlo', 'monospace'],
       },

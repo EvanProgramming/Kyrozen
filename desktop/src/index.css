@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Long+Cang&family=Spline+Sans+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600;6..72,700&family=Noto+Serif+SC:wght@500;600;700&family=Spline+Sans+Mono:wght@400;500&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -98,11 +98,11 @@
 }
 
 @layer components {
-  /* 手绘标题体：Caveat 拉丁 + Long Cang 中文 */
-  .font-hand {
-    font-family: 'Caveat', 'Long Cang', 'PingFang SC', cursive;
+  /* UI 标题体：Caveat 拉丁手写 + Noto Serif SC 中文衬线（claude.ai 风）
+     —— 拉丁字符走 Caveat 手写体，汉字自动回退到优雅宋体 */
+  .font-display {
+    font-family: 'Caveat', 'Noto Serif SC', 'Songti SC', serif;
     font-weight: 600;
-    letter-spacing: 0.01em;
   }
 
   .font-mono {
@@ -237,7 +237,7 @@
   .markdown-body > :last-child { margin-bottom: 0; }
   .markdown-body p { margin: 0.45rem 0; }
   .markdown-body h1, .markdown-body h2, .markdown-body h3 {
-    font-family: 'Caveat', 'Long Cang', 'PingFang SC', cursive;
+    font-family: 'Newsreader', 'Noto Serif SC', 'Songti SC', Georgia, serif;
     font-weight: 600;
     color: inherit;
     margin: 0.9rem 0 0.35rem;

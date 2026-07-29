@@ -49,6 +49,7 @@ def get_default_registry(
     serper_api_key: str | None = None,
     github_token: str | None = None,
     semantic_scholar_api_key: str | None = None,
+    config: Any = None,
 ) -> ToolRegistry:
     """Return a registry with Phase 1-9 tools pre-registered."""
     from .development_tools import (
@@ -126,7 +127,7 @@ def get_default_registry(
     registry.register(WebCaptureTool(project_manager))
     registry.register(UpdateProjectTool(project_manager))
     registry.register(RecordDecisionTool(project_manager))
-    registry.register(SaveProblemBriefTool(project_manager))
+    registry.register(SaveProblemBriefTool(project_manager, config=config))
     registry.register(RecordEvidenceTool(project_manager))
     registry.register(AssessConfidenceTool(project_manager))
     registry.register(RecordProblemDecisionTool(project_manager))

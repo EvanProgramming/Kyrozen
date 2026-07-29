@@ -1639,20 +1639,47 @@ ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePa
   }
 });
 
-ipcMain.handle('kyrozen:get-projects', async () => {
-  if (!accessToken) {
-    logWarn('get-projects called without access token');
-    return [];
-  }
+async function localProjectName(root: string, projectId: string): Promise<string> {
   try {
-    const list = await apiGet('/api/projects');
-    logInfo(`Loaded ${Array.isArray(list) ? list.length : 0} projects from cloud`);
-    return list;
-  } catch (err: any) {
-    logError(`Failed to load projects: ${err.message || err}`);
-    logWarn(`Failed to load project list: ${err.message || err}`);
-    return [];
+    for (const rel of ['docs/PROBLEM.md', 'README.md', 'PROBLEM.md']) {
+      const p = path.join(root, rel);
+      try {
+        const text = await fs.readFile(p, 'utf-8');
+        const m = text.match(/^#\s+(.+)$/m);
+        if (m) return m[1].trim().slice(0, 60);
+      } catch { /* not present */ }
+    }
+  } catch { /* ignore */ }
+  return `本地项目 ${projectId.slice(0, 8)}`;
+}
+
+ipcMain.handle('kyrozen:get-projects', async () => {
+  let cloud: Record<string, unknown>[] = [];
+  if (accessToken) {
+    try {
+      const list = await apiGet('/api/projects');
+      cloud = Array.isArray(list) ? (list as Record<string, unknown>[]) : [];
+    } catch (err: any) {
+      logError(`Failed to load projects: ${err.message || err}`);
+    }
   }
+  // P0-R4/P0-R10: the sidebar must reflect locally-known workspaces even before
+  // (or without) a cloud sync, so the list is never empty while the Git panel
+  // already shows a connected local repo. Union cloud projects with the local
+  // workspace map, de-duplicated by project id (cloud entry wins when present).
+  const cloudIds = new Set(cloud.map((p) => String(p.id)));
+  const merged: Record<string, unknown>[] = [...cloud];
+  for (const [pid, root] of Object.entries(workspaceMap)) {
+    if (cloudIds.has(pid)) continue;
+    merged.push({
+      id: pid,
+      name: await localProjectName(String(root), pid),
+      local_only: true,
+      workspace_root: root,
+    });
+  }
+  logInfo(`Loaded ${merged.length} projects (cloud ${cloud.length}, local ${merged.length - cloud.length})`);
+  return merged;
 });
 
 ipcMain.handle('kyrozen:create-project', async (_event, name: string, description?: string, goal?: string) => {
@@ -2584,6 +2611,8 @@ async function handleTaskTimeout() {
     status: 'failed',
     result: { error: 'Task timed out after retries' },
   });
+  // Finalize the chat so the renderer never stays stuck on "正在理解你的需求".
+  sendChatMessage({ role: 'error', content: '', error: '任务执行超时，请稍后重试或重启本地 Agent。', operations: [] });
 }
 
 function startTaskTimeout(timeoutMs = TASK_TIMEOUT_MS) {
@@ -2834,7 +2863,13 @@ async function startPythonAgentInternal() {
       logWarn(`Arduino CLI setup failed: ${err.message || err}`);
     }
     try {
-      const pio = await ensurePlatformIO((msg) => logInfo(msg));
+      // P0-R11: the bundled PlatformIO is intentionally not on PATH, so the
+      // "not found, installing" message fires on every agent start even when it
+      // is already installed (the pip install is then a no-op). Suppress that
+      // specific noisy line from the main log; real install progress still logs.
+      const pio = await ensurePlatformIO((msg) => {
+        if (!/not found|installing/i.test(msg)) logInfo(msg);
+      });
       if (pio.path) {
         extraEnv.KYROZEN_PIO_PATH = pio.path;
       }
@@ -2881,6 +2916,21 @@ async function startPythonAgentInternal() {
   pythonAgent.on('exit', (code) => {
     logWarn(`Python Agent exited with code ${code ?? 'unknown'}`);
     sendTaskActivity({ description: '本地 Agent 已停止', status: code === 0 ? 'completed' : 'failed' });
+    // If a chat task was still running when the Agent died, finalize it so the
+    // renderer does not stay stuck on "正在理解你的需求" forever.
+    if (currentTaskRunning) {
+      currentTaskRunning = false;
+      clearTaskTimeout();
+      const diedTaskId = currentTaskId;
+      sendToCloud({
+        type: 'task_result',
+        task_id: diedTaskId,
+        status: 'failed',
+        result: { error: 'Local agent process exited unexpectedly' },
+      });
+      sendChatMessage({ role: 'error', content: '', error: '本地 Agent 已停止，请稍后重试。', operations: [] });
+      if (diedTaskId) taskOperations.delete(String(diedTaskId));
+    }
     // Tell the renderer the Agent is no longer available so it can stop any
     // infinite loading state and show a degraded/offline notice (P0-03/04/06).
     mainWindow?.webContents.send('kyzon:agent-ready', {

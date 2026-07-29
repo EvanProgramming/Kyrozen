@@ -239,7 +239,7 @@ class DesktopAgentRuntime:
         self.send_message = send_message
         inner_model = CloudProxyModelProvider(send_message=send_message)
         self.model = PlanDetectingModelProvider(inner_model, self._emit_execution_plan)
-        tools = get_default_registry()
+        tools = get_default_registry(config=self.config)
         self.agent = BaseAgent(
             config=self.config,
             model=self.model,
@@ -284,6 +284,14 @@ class DesktopAgentRuntime:
                 self._send_response(req_id, error=f"Unknown method: {method}")
         except Exception as exc:
             self.logger.error("Error handling request: %s", exc, exc_info=True)
+            # If the failing request was a task, emit a task_result so the
+            # desktop UI never stays stuck on "正在理解你的需求".
+            if method == "run_task":
+                self._notify("task_result", {
+                    "task_id": self.current_task_id,
+                    "status": "failed",
+                    "result": {"answer": f"任务启动失败：{exc}"},
+                })
             self._send_response(req_id, error=str(exc))
 
     def _emit_execution_plan(self, steps: list[str]) -> None:
@@ -332,7 +340,7 @@ class DesktopAgentRuntime:
         state_dir = root_path / ".kyrozen"
         handoff_store = HandoffStore(state_dir / "handoff.json", project_id=project_id)
         handoff_tool = HandoffTool(handoff_store)
-        registry = get_default_registry()
+        registry = get_default_registry(config=self.config)
         registry.register(handoff_tool)
 
         # Stage gate (feature 3.2): keep the local gate in sync with the
@@ -429,6 +437,13 @@ class DesktopAgentRuntime:
                     if task.status == "failed" and not result.get("answer"):
                         errors = list(getattr(task, "errors", []) or [])
                         result["answer"] = errors[-1] if errors else "AI 服务暂时不可用，请稍后重试。"
+                    # Re-scan the stage gate AFTER the agent's tool calls so any
+                    # deliverable it just wrote (e.g. docs/PROBLEM.md) is detected
+                    # and the gate advances without requiring a manual refresh.
+                    try:
+                        self._sync_and_push_stage(root_path, stage, project_id)
+                    except Exception:
+                        self.logger.debug("post-task stage re-sync skipped", exc_info=True)
                     self._notify("task_result", {
                         "task_id": self.current_task_id,
                         "status": task.status,
@@ -721,7 +736,15 @@ class DesktopAgentRuntime:
                         status=str(params.get("status") or "success"), error_reason=str(params.get("error_reason") or ""))
                 payload = {"action": "op_end", "ok": True}
             elif action == "op_list":
-                log = operation_mod.OperationLog(root_path)
+                # Fall back to the real task workspace when the renderer passes a
+                # placeholder root (e.g. ".") so the count always reflects the
+                # operations actually recorded during the session (P0-R8).
+                resolved_root = root_path
+                if str(resolved_root) in (".", "") or not resolved_root.is_absolute():
+                    fallback = self._workspace_path()
+                    if fallback is not None:
+                        resolved_root = fallback
+                log = operation_mod.OperationLog(resolved_root)
                 limit = params.get("limit")
                 payload = {"action": "op_list", "records": log.list(limit=int(limit) if limit is not None else None)}
             elif action == "diagnostic":

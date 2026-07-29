@@ -12,6 +12,7 @@ venv/
 # Storage & logs
 chroma_memory/
 /logs/
+desktop/logs/
 projects/
 *.log
 *.db
@@ -47,6 +48,9 @@ docs/*
 !docs/CLOUDFLARE_TUNNEL.md
 !docs/DEPLOYMENT.md
 !docs/SELFHOSTED_DEPLOYMENT.md
+!docs/MACOS_UNSIGNED_INSTALLATION.md
+!docs/PHASE1_REAL_REACCEPTANCE_REPORT_2026-07-29.md
+!docs/PHASE1_REAL_ACCEPTANCE_RERUN_2026-07-29.md
 
 # Playwright / E2E artifacts
 desktop/test-results/

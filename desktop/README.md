@@ -113,7 +113,7 @@ npm run build
 - `dist-electron/`：Electron 主进程与预加载脚本编译输出
 - `release/`：最终安装包（按平台生成 dmg / nsis / AppImage）
 
-macOS 包默认使用完整的 ad-hoc 签名，不需要付费 Apple Developer 账号。首次打开网络下载的 DMG 时，macOS 仍会提示无法验证开发者；尝试打开一次后，在“系统设置 → 隐私与安全 → 安全性”选择“仍要打开”。之后该应用可以正常启动。正式包必须保持 `codesign --verify --deep --strict` 验证通过，不能发布构建日志中出现 `skipped macOS application code signing` 的产物。
+macOS 包默认使用完整的 ad-hoc 签名，不需要付费 Apple Developer 账号，但这不等同于 Apple Developer ID 签名或公证。网络下载的应用可能被 Gatekeeper 直接拒绝，且“隐私与安全”不一定显示“仍要打开”。免费发布版应使用 DMG 内的 `Install Kyrozen.command`：用户在终端中主动运行它，脚本只清除 Kyrozen 自身的 quarantine 属性，不关闭系统 Gatekeeper。详见 [`docs/MACOS_UNSIGNED_INSTALLATION.md`](../docs/MACOS_UNSIGNED_INSTALLATION.md)。正式包必须保持 `codesign --verify --deep --strict` 验证通过；没有 Developer ID 时必须明确标注“未公证”，不能宣称 Gatekeeper 已通过。
 
 ## 8. 安全说明
 

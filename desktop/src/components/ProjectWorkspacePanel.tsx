@@ -49,14 +49,63 @@ function empty(value: unknown) {
     || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0);
 }
 
-// P0-13: block raw runtime fields from canvas rendering
+// P0-13/P0-R6: block raw runtime + internal engine fields from canvas rendering.
+// The canvas must show user-readable summaries, never internal JSON such as
+// stagegate records, software_feature.json internals, question-dimension blobs,
+// or task blobs.
 const BLOCKED_KEYS = new Set([
   'command', 'stdout', 'stderr', 'exit_code', 'duration_ms', 'cwd',
   'previous_error', 'stderr_snippet', 'error_type',
 ]);
 
+// Internal-only keys that should never reach the user-facing canvas.
+const SANITIZE_KEYS = new Set([
+  'stagegate', 'software', 'deliverables', 'files', 'records', 'skips',
+  'events', 'tasks', 'raw', 'blobs', 'runtime', 'debug', 'metadata', 'internal',
+  'verifications', 'gate_state', 'question_dimension', 'dimension', 'blocked_entry_reason',
+  'missing_dimensions', 'question', 'log', 'metrics', 'trace', 'debug_info',
+  'raw_response', 'tool_calls', 'intermediate', 'notes_internal',
+]);
+
 function readableKey(key: string) {
   return LABELS[key] || key.replace(/_/g, ' ');
+}
+
+// Recursively strip internal-only keys before rendering.
+function sanitize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitize);
+  if (value && typeof value === 'object') {
+    const out: Row = {};
+    for (const [k, v] of Object.entries(value as Row)) {
+      if (SANITIZE_KEYS.has(k) || BLOCKED_KEYS.has(k)) continue;
+      out[k] = sanitize(v) as Row[string];
+    }
+    return out;
+  }
+  return value;
+}
+
+// Build a human-readable summary of the local workspace instead of dumping the
+// raw .kyrozen engine blobs (stagegate.json / software_feature.json / files).
+function localSummary(local: Row | undefined): Row {
+  if (!local) return {};
+  const files = Array.isArray(local.files) ? (local.files as unknown[]) : [];
+  const docsFiles = files.filter((f) => {
+    const s = String(f);
+    return s.startsWith('docs/') || /PROBLEM\.md|PRD\.md|MARKET\.md|TECH_DESIGN\.md|README\.md/i.test(s);
+  }).length;
+  const otherFiles = Math.max(0, files.length - docsFiles);
+  const stagegate = (local.stagegate as Row | null) || null;
+  const software = local.software as Row | null;
+  const stageLabel = stagegate && stagegate.stage ? (STAGE_NAMES[String(stagegate.stage)] || String(stagegate.stage)) : '';
+  const progress = stagegate && typeof stagegate.progress === 'number' ? `${stagegate.progress}%` : '';
+  return {
+    '本地工作区': local.workspace_root,
+    '文档资料': docsFiles > 0 ? `${docsFiles} 份文档已生成` : '尚未生成',
+    '其他文件': otherFiles > 0 ? `${otherFiles} 个` : '无',
+    '软件生成': software ? '已完成' : '尚未开始',
+    '当前阶段': stageLabel ? `${stageLabel}${progress ? `（${progress}）` : ''}` : '未知',
+  };
 }
 
 function Value({ value }: { value: unknown }) {
@@ -81,9 +130,10 @@ function Value({ value }: { value: unknown }) {
       </div>
     );
   }
+  const cleaned = sanitize(value) as Row;
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      {Object.entries(value as Row).filter(([key, item]) =>
+      {Object.entries(cleaned).filter(([key, item]) =>
         !key.endsWith('_id') && !['id', 'user_id', 'created_at', 'updated_at'].includes(key)
         && !BLOCKED_KEYS.has(key) && !empty(item)
       ).map(([key, item]) => (
@@ -193,23 +243,26 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
               <>
                 <Section title={String(data.project?.name || '项目概览')} value={{ description: data.project?.description, goal: data.project?.goal, current_stage: data.project?.current_stage }} />
                 <div className="grid gap-4 md:grid-cols-3">
-                  <Section title="当前状态" value={data.state} />
+                  <Section title="当前状态" value={sanitize(data.state)} />
                   <Section title="已形成资料" value={`${(
                     (data.artifacts?.length || 0) +
-                    (Array.isArray(data.local?.deliverables) ? data.local!.deliverables.length : 0) +
-                    (Array.isArray(data.local?.files) ? data.local!.files.length : 0) +
-                    (data.local?.software ? 1 : 0) +
-                    (data.local?.stagegate ? 1 : 0)
+                    (Array.isArray(data.local?.files)
+                      ? (data.local!.files as unknown[]).filter((f) => {
+                          const s = String(f);
+                          return s.startsWith('docs/') || /PROBLEM\.md|PRD\.md|MARKET\.md|TECH_DESIGN\.md|README\.md/i.test(s);
+                        }).length
+                      : 0) +
+                    (data.local?.software ? 1 : 0)
                   )} 份`} />
                   <Section title="执行任务" value={`${data.tasks?.length || 0} 个`} />
                 </div>
-                <Section title="本地成果" description="工作区中真实存在的软件、交付物与阶段记录" value={data.local} />
+                <Section title="本地成果" description="工作区中真实存在的软件、交付物与阶段记录" value={localSummary(data.local)} />
                 <Section title="最近任务" description="只展示用户需要关注的任务结果" value={(data.tasks || []).slice(0, 5).map((item) => ({ title: String(item.title || '').startsWith('[') ? 'AI 项目任务' : item.title, status: item.status, result: (item.result as Row)?.answer }))} />
               </>
             )}
             {tab === 'problem' && (
               <>
-                <Section title="问题定义" value={data.sections?.discovery} />
+                <Section title="问题定义" value={sanitize(data.sections?.discovery)} />
                 <Section title="市场与竞品" value={data.sections?.research} />
                 <Section title="研究资料" value={[...(artifactsByType.problem_brief || []), ...(artifactsByType.market_research_report || [])]} />
               </>

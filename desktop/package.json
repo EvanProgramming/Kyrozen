@@ -105,6 +105,32 @@
         }
       ]
     },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 390,
+          "type": "file",
+          "path": "build/Install Kyrozen.command"
+        },
+        {
+          "x": 270,
+          "y": 480,
+          "type": "file",
+          "path": "build/安装说明.txt"
+        }
+      ]
+    },
     "win": {
       "target": "nsis"
     },

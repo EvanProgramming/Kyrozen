@@ -464,8 +464,15 @@ function SoftwareFeaturePanel({
   const [busy, setBusy] = useState(false);
   const busyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(true);
-  const [formOpen, setFormOpen] = useState(true);
+  // P0-R9: do NOT expand the software-generation form during problem discovery
+  // or market research. It is disabled there and should not dominate the flow.
+  const earlyStage = stageStatus?.stage === 'problem_discovery' || stageStatus?.stage === 'market_research';
+  const [open, setOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  useEffect(() => {
+    if (earlyStage && open) setOpen(false);
+    if (earlyStage && formOpen) setFormOpen(false);
+  }, [earlyStage, open, formOpen]);
   const [copied, setCopied] = useState(false);
 
   // P0-07: the development entry must be gated by the stage gate. Code may only
@@ -1085,6 +1092,14 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           steps: current.steps.map((step) => ({ ...step, status: 'completed' })),
         } : null);
         onProjectChanged?.();
+        // P0-R8: refresh the operation log after each assistant turn so the
+        // panel count reflects work actually performed this session (not just
+        // the empty list captured at mount time).
+        if (window.kyrozen && projectId) {
+          window.kyrozen.getWorkspaceRoot(projectId)
+            .then(({ workspaceRoot }) => { window.kyrozen?.sendInteraction({ action: 'op_list', workspace_root: workspaceRoot }); })
+            .catch(() => {});
+        }
       }
     });
     const unsubPlan = window.kyrozen.onExecutionPlan((incoming) => {
@@ -1366,7 +1381,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
                   <div className="font-medium text-ink mb-2">{parsed.question.question}</div>
                   <div className="flex flex-wrap gap-2">
                     {parsed.question.options.map((option) => (
-                      <button key={option.value} type="button" onClick={() => void sendMessage(option.value)} disabled={isRunning} className="btn-secondary text-xs">
+                      <button key={option.value} type="button" onClick={() => void sendMessage(option.label)} disabled={isRunning} className="btn-secondary text-xs">
                         {option.label}
                       </button>
                     ))}

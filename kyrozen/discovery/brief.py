@@ -156,6 +156,59 @@ class ProblemBrief:
             decision_reason=data.get("decision_reason", ""),
         )
 
+    def to_markdown(self) -> str:
+        """Render the brief as a human-readable Markdown document.
+
+        Used to persist a real ``docs/PROBLEM.md`` deliverable into the
+        workspace so the stage gate can detect the problem statement and the
+        user has a readable artifact they can open (not just a JSON blob).
+        """
+        lines: list[str] = []
+        lines.append(f"# 问题定义：{self.title or '未命名问题'}")
+        lines.append("")
+        lines.append("> 本文档由 Kyrozen 在问题探索阶段自动整理，记录了已确认的问题、目标用户与价值。")
+        lines.append("")
+
+        def add(label: str, value: str) -> None:
+            value = (value or "").strip()
+            if value:
+                lines.append(f"**{label}**：{value}")
+                lines.append("")
+
+        add("目标用户", self.target_user)
+        add("使用场景", self.scenario)
+        add("表面问题", self.surface_problem)
+        add("深层需求", self.deep_need)
+        add("现有解决方案", self.current_solution)
+        add("现有方案的问题", self.current_solution_problem)
+        add("发生频率", self.frequency)
+        add("影响程度", self.impact)
+        add("机会方向", self.opportunity_direction)
+
+        if self.unknown_assumptions:
+            lines.append("## 待验证的假设")
+            lines.append("")
+            for item in self.unknown_assumptions:
+                mark = "✅ 已验证" if item.verified else "❓ 待验证"
+                lines.append(f"- {item.claim}（{mark}，来源：{item.source}）")
+            lines.append("")
+
+        if self.confidence:
+            lines.append(f"**置信度**：{self.confidence}")
+            if self.confidence_reason:
+                lines.append("")
+                lines.append(f"> {self.confidence_reason}")
+            lines.append("")
+
+        if self.decision and self.decision != "need_more_information":
+            lines.append(f"**阶段结论**：{self.decision}")
+            if self.decision_reason:
+                lines.append("")
+                lines.append(f"> {self.decision_reason}")
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
+
     def merge(self, other: "ProblemBrief") -> "ProblemBrief":
         """Return a new brief where non-empty fields from other override self."""
         def pick(self_value: Any, other_value: Any) -> Any:

@@ -128,9 +128,10 @@ export async function initGitRepo(workspaceRoot: string, remoteUrl?: string): Pr
     if (!name.value) await git.addConfig('user.name', 'Kyrozen', false, 'local');
     if (!email.value) await git.addConfig('user.email', 'kyrozen@users.noreply.github.com', false, 'local');
 
-    // P0-13 修复：首个提交不能只包含 .gitignore。
+    // P0-13/P0-R7 修复：首个提交不能只包含 .gitignore。
     // 当 workspace 已有真实项目文件且尚无提交时，创建首个提交；
-    // 若仅有 .gitignore，跳过——让 Agent 自动提交产生第一个有意义提交。
+    // 若只有 .gitignore，先写入一份 README.md 作为真实交付物，再提交，
+    // 避免出现“首提交只有 .gitignore、没有真实项目内容”的误导状态。
     const hasCommits = await git.revparse(['--verify', 'HEAD']).then(() => true).catch(() => false);
     if (!hasCommits) {
       await git.add('-A');
@@ -139,6 +140,19 @@ export async function initGitRepo(workspaceRoot: string, remoteUrl?: string): Pr
         .filter((f) => f !== '.gitignore' && f !== '.kyrozen_gitignore');
       if (realFiles.length > 0) {
         await git.commit('chore: initial Kyrozen project commit');
+      } else {
+        const readmePath = path.join(workspaceRoot, 'README.md');
+        const fs = await import('fs/promises');
+        const exists = await fs.stat(readmePath).then(() => true).catch(() => false);
+        if (!exists) {
+          await fs.writeFile(
+            readmePath,
+            '# Kyrozen 项目\n\n本仓库由 Kyrozen 初始化。问题定义、调研、PRD 与生成的软件将逐步提交到此处。\n',
+            'utf-8',
+          );
+        }
+        await git.add('-A');
+        await git.commit('chore: initialize Kyrozen project');
       }
     }
 

@@ -63,6 +63,9 @@ function App() {
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string; login?: string; avatarUrl?: string; expired?: boolean }>({ connected: false, scope: '' });
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  // P0-16: prevent the 4-second window where the UI shows free-account
+  // restrictions before quota / fullTrust / gitHubStatus finish loading.
+  const [sessionRestoring, setSessionRestoring] = useState(false);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
@@ -200,20 +203,21 @@ function App() {
     const unsubSessionResumed = window.kyrozen.onSessionResumed((token: string) => {
       setSessionNotice(null);
       setToken(token);
+      setSessionRestoring(true);
       const savedProjectId = localStorage.getItem('kyrozen:last-project-id');
       if (savedProjectId) {
         setCurrentProjectId(savedProjectId);
         void window.kyrozen?.setCurrentProject(savedProjectId);
       }
-      // Hydrate independent panels independently. A slow profile, quota, or
-      // GitHub request must not hold the project list and selected workspace
-      // in an empty startup screen.
-      void loadProjects();
-      void loadQuota();
-      void loadFullTrust();
-      void loadLanguage();
-      void loadGitHubStatus();
-      void loadUserProfile();
+      // Load all panels; hide the loading screen only after everything settles.
+      Promise.all([
+        loadProjects(),
+        loadQuota(),
+        loadGitHubStatus(),
+        loadUserProfile(),
+        loadLanguage(),
+      ]).finally(() => setSessionRestoring(false));
+      loadFullTrust(); // non-blocking
     });
 
     const unsubSessionEnded = window.kyrozen.onSessionEnded(() => {
@@ -416,7 +420,28 @@ function App() {
   if (!token) {
     return (
       <div className="h-screen w-screen flex flex-col bg-paper">
+        {sessionRestoring && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-paper">
+            <div className="text-center">
+              <div className="font-hand text-3xl">Kyrozen</div>
+              <div className="text-sm text-ink-faint mt-2">正在恢复会话...</div>
+            </div>
+          </div>
+        )}
         <LoginPage notice={sessionNotice} />
+      </div>
+    );
+  }
+
+  // P0-16: show loading overlay while session state hydrates to prevent the
+  // 4-second window of stale free-account / disabled-state UI.
+  if (sessionRestoring) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-paper text-ink">
+        <div className="text-center">
+          <div className="font-hand text-3xl">Kyrozen</div>
+          <div className="text-sm text-ink-faint mt-2">正在恢复项目数据...</div>
+        </div>
       </div>
     );
   }

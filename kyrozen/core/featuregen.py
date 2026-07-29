@@ -368,7 +368,8 @@ __FEATURE_ROUTES__
             if not event: self._send({"error": "活动不存在"}, 404); return
             if not name or not phone: self._send({"error": "请填写姓名和手机号"}, 400); return
             with LOCK:
-                if any(r["phone"] == phone for e in EVENTS for r in e["registrations"]): self._send({"error": "该手机号已经报名，不能重复提交"}, 409); return
+                # P0-08: phone uniqueness is per-event, not global
+                if any(r["phone"] == phone for r in event["registrations"]): self._send({"error": "该手机号已经报名此活动，不能重复提交"}, 409); return
                 if len(event["registrations"]) >= event["capacity"]: self._send({"error": "名额已满，请联系组织者候补"}, 409); return
                 event["registrations"].append({"name": name, "phone": phone})
             self._send({"ok": True, "event": event}, 201); return

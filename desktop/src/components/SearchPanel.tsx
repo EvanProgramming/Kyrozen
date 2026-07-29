@@ -31,16 +31,18 @@ export function SearchPanel({ onOpenFile }: Props) {
     }
   };
 
+  // UI cleanup: rendered inside an expandable dropdown next to "我的项目",
+  // so no standalone title — just the input and results.
   return (
-    <div className="p-3 border-t border-line">
-      <div className="text-xs font-medium text-ink-soft mb-2">跨项目搜索</div>
+    <div className="p-3">
       <div className="flex gap-2 mb-2">
         <input
           type="text"
+          autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-          placeholder="搜索文件或内容..."
+          placeholder="跨项目搜索文件或内容…"
           className="input flex-1 px-2 py-1 text-xs"
         />
         <button

@@ -80,7 +80,7 @@ function LanguageStep({
 }) {
   return (
     <div className="space-y-6">
-      <h2 className="font-hand text-2xl leading-none text-center text-ink">{t.languageTitle}</h2>
+      <h2 className="font-display text-2xl leading-none text-center text-ink">{t.languageTitle}</h2>
       <div className="grid grid-cols-2 gap-4">
         <button
           type="button"
@@ -159,7 +159,7 @@ function PythonStep({
 
   return (
     <div className="space-y-4">
-      <h2 className="font-hand text-2xl leading-none text-center text-ink">{t.pythonTitle}</h2>
+      <h2 className="font-display text-2xl leading-none text-center text-ink">{t.pythonTitle}</h2>
       <div className="text-sm text-ink-soft">
         {state.pythonStatus === 'ready' ? (
           <div className="text-success">{t.pythonReady}</div>
@@ -261,7 +261,7 @@ function ProjectStep({
 
   return (
     <div className="space-y-4">
-      <h2 className="font-hand text-2xl leading-none text-center text-ink">{t.projectTitle}</h2>
+      <h2 className="font-display text-2xl leading-none text-center text-ink">{t.projectTitle}</h2>
       <p className="text-sm text-ink-faint">{t.projectSubtitle}</p>
 
       {state.projects.length > 0 ? (
@@ -317,7 +317,7 @@ function ProjectStep({
 function CompleteStep({ t, onFinish }: { t: (typeof dict)['zh']; onFinish: () => void }) {
   return (
     <div className="space-y-6 text-center">
-      <h2 className="font-hand text-2xl leading-none text-ink">{t.completeTitle}</h2>
+      <h2 className="font-display text-2xl leading-none text-ink">{t.completeTitle}</h2>
       <button
         type="button"
         onClick={onFinish}
@@ -372,7 +372,7 @@ export function OnboardingPage({ onComplete }: Props) {
   return (
     <div className="h-screen w-screen flex items-center justify-center bg-paper p-6" data-testid="onboarding-page">
       <div className="w-full max-w-md panel p-8">
-        <h1 className="font-hand text-3xl leading-none mb-6 text-center text-ink">{t.welcome}</h1>
+        <h1 className="font-display text-3xl leading-none mb-6 text-center text-ink">{t.welcome}</h1>
 
         <div className="flex items-center justify-between mb-8">
           {steps.map((s, index) => (

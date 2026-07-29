@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { StageGateStatus, SoftwareFeatureResult, SoftwareRunResult, AttachmentInfo, OperationLogEntry, InteractionStatus } from '../types/global';
+import type { StageGateStatus, SoftwareFeatureResult, SoftwareRunResult, AttachmentInfo, InteractionStatus } from '../types/global';
 
 type OperationStatus = 'pending' | 'running' | 'failed' | 'completed';
 
@@ -71,6 +71,10 @@ interface ChatPageProps {
 }
 
 const QUESTION_BLOCK_RE = /```kyrozen-question\s*\n([\s\S]*?)```/i;
+
+// UI cleanup: the software generation panel is only relevant from the
+// development stage onwards; earlier stages keep the chat clean.
+const DEV_AND_LATER = new Set(['development', 'testing', 'iteration']);
 
 function splitQuestionBlock(content: string): { markdown: string; question: QuestionCard | null } {
   const match = content.match(QUESTION_BLOCK_RE);
@@ -277,184 +281,9 @@ function AgentModeIcon({ mode, className }: { mode: string; className?: string }
   );
 }
 
-/** Small check / alert glyph for stage-gate conditions (single accent color). */
-function ConditionIcon({ satisfied, className }: { satisfied: boolean; className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden
-    >
-      {satisfied ? (
-        <>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M8 12.5l2.5 2.5L16 9" />
-        </>
-      ) : (
-        <>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7.5v5" />
-          <path d="M12 16.5v.5" />
-        </>
-      )}
-    </svg>
-  );
-}
-
-type StageAction = 'refresh' | 'advance_normal' | 'advance_risk' | 'return';
-type RiskDetails = { reason: string; impact: string; recovery: string };
-
-function StageGatePanel({
-  status,
-  busy,
-  onAction,
-}: {
-  status: StageGateStatus;
-  busy: boolean;
-  onAction: (action: StageAction, riskDetails?: RiskDetails) => void;
-}) {
-  const { gate } = status;
-  const kindLabel: Record<string, string> = {
-    deliverable: '交付物',
-    confirmation: '确认',
-    verification: '验证',
-    task: '任务',
-  };
-  const [open, setOpen] = useState(true);
-  const [riskOpen, setRiskOpen] = useState(false);
-  const [riskDetails, setRiskDetails] = useState<RiskDetails>({ reason: '', impact: '', recovery: '' });
-  return (
-    <div className="bg-surface border-b border-line">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="w-full px-4 py-2 flex items-center justify-between text-left"
-      >
-        <span className="flex items-center gap-2">
-          <span className="font-display text-lg text-ink">阶段门禁 · {gate.stage_label}</span>
-          <span className="text-xs text-ink-faint">{gate.index + 1}/{gate.total}</span>
-        </span>
-        <span className="flex items-center gap-3">
-          <span className="text-xs tabular-nums text-ink-soft">{status.progress}%</span>
-          <span className="text-xs text-ink-faint">{open ? '收起' : '展开'}</span>
-        </span>
-      </button>
-      {/* Progress is computed from real signals, always visible. */}
-      <div className="px-4 pb-2">
-        <div className="h-1.5 w-full bg-paper-sink rounded-sm overflow-hidden">
-          <div className="h-full bg-accent transition-all" style={{ width: `${status.progress}%` }} />
-        </div>
-      </div>
-      {open && (
-      <div className="px-4 pb-3 space-y-3">
-        {gate.blocked_entry_reason && (
-          <div className="panel p-3 border-l-2 border-l-danger bg-danger-soft">
-            <div className="text-sm text-danger">{gate.blocked_entry_reason}</div>
-          </div>
-        )}
-        {gate.failed_tasks.length > 0 && (
-          <div className="panel p-3 border-l-2 border-l-danger bg-danger-soft space-y-1.5">
-            <div className="text-sm text-danger font-medium">存在失败任务，需先修复</div>
-            {gate.failed_tasks.map((task) => (
-              <div key={task.task_id} className="text-xs text-ink-soft">
-                <span className="text-danger font-medium">{task.task_id}</span> · {task.error}
-                <div className="text-ink-faint mt-0.5">修复：{task.repair}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {gate.missing.length > 0 && (
-          <div className="space-y-1.5">
-            <div className="text-xs font-medium text-danger">尚未满足（{gate.missing.length}）</div>
-            {gate.missing.map((condition) => (
-              <div key={condition.item_id} className="flex items-start gap-2 text-sm text-ink-soft">
-                <ConditionIcon satisfied={false} className="w-4 h-4 flex-shrink-0 text-danger mt-0.5" />
-                <div className="flex-1">
-                  <span>{condition.label}</span>
-                  <span className="ml-1 text-xs text-ink-faint">[{kindLabel[condition.kind] ?? condition.kind}]</span>
-                  {condition.detail && <span className="text-xs text-ink-faint"> · {condition.detail}</span>}
-                  {condition.skippable && <span className="ml-1 text-xs text-ink-faint">（可跳过）</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {gate.satisfied.length > 0 && (
-          <div className="space-y-1.5">
-            <div className="text-xs font-medium text-accent">已满足（{gate.satisfied.length}）</div>
-            {gate.satisfied.map((condition) => (
-              <div key={condition.item_id} className="flex items-start gap-2 text-sm text-ink-soft">
-                <ConditionIcon satisfied={condition.satisfied} className="w-4 h-4 flex-shrink-0 text-accent mt-0.5" />
-                <div className="flex-1">
-                  <span>{condition.label}</span>
-                  <span className="ml-1 text-xs text-ink-faint">[{kindLabel[condition.kind] ?? condition.kind}]</span>
-                  {condition.detail && <span className="text-xs text-ink-faint"> · {condition.detail}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex flex-wrap gap-2 pt-1">
-          <button
-            type="button"
-            disabled={!gate.can_advance || busy}
-            onClick={() => onAction('advance_normal')}
-            className="btn-primary text-xs"
-            title={gate.can_advance ? '当前阶段条件已满足，进入下一阶段' : '当前阶段仍有未满足条件'}
-          >
-            进入下一阶段
-          </button>
-          <button
-            type="button"
-            disabled={busy || gate.missing.some((condition) => !condition.skippable)}
-            onClick={() => setRiskOpen((value) => !value)}
-            className="btn-secondary text-xs"
-            title="跳过未满足的必需条件并进入下一阶段（会记录风险）"
-          >
-            带风险推进
-          </button>
-          <button
-            type="button"
-            disabled={busy || gate.index === 0}
-            onClick={() => onAction('return')}
-            className="btn-ghost text-xs"
-          >
-            返回上一阶段
-          </button>
-        </div>
-
-        {riskOpen && (
-          <div className="panel p-3 border-l-2 border-l-warning bg-warning-soft space-y-2">
-            <div className="text-sm font-medium text-ink">说明为什么需要带风险推进</div>
-            <input className="input text-xs w-full" value={riskDetails.reason} onChange={(event) => setRiskDetails((value) => ({ ...value, reason: event.target.value }))} placeholder="具体原因（必填）" />
-            <input className="input text-xs w-full" value={riskDetails.impact} onChange={(event) => setRiskDetails((value) => ({ ...value, impact: event.target.value }))} placeholder="可能影响" />
-            <input className="input text-xs w-full" value={riskDetails.recovery} onChange={(event) => setRiskDetails((value) => ({ ...value, recovery: event.target.value }))} placeholder="后续补救办法" />
-            <div className="flex gap-2">
-              <button type="button" className="btn-primary text-xs" disabled={!riskDetails.reason.trim() || busy} onClick={() => { onAction('advance_risk', riskDetails); setRiskOpen(false); }}>确认并记录风险</button>
-              <button type="button" className="btn-ghost text-xs" onClick={() => setRiskOpen(false)}>取消</button>
-            </div>
-          </div>
-        )}
-
-        {status.skips.length > 0 && (
-          <div className="text-xs text-ink-faint pt-1">
-            已带风险跳过 {status.skips.length} 项：
-            {status.skips.map((skip) => skip.item_id).join('、')}
-          </div>
-        )}
-      </div>
-      )}
-    </div>
-  );
-}
+// UI cleanup: the StageGatePanel that used to sit at the top of the chat is
+// merged into the right-side ProgressPanel (components/ProgressPanel.tsx).
+// Stage requirements + control buttons ("更多操作") now live there.
 
 // Feature 3.3: real software generation / run / repair panel. Talks to the
 // deterministic SoftwareFeatureTool in the desktop Python Agent (no LLM needed).
@@ -855,20 +684,17 @@ const STATUS_LABEL: Record<string, string> = {
   retrying: '重试中',
 };
 
-function InteractionPanel({
-  projectId,
-  agentReady,
-}: {
-  projectId: string | null;
-  agentReady: { status: string; version?: string; mode?: string; reason?: string } | null;
-}) {
+// UI cleanup: the former "附件 · 状态 · 操作" bar is gone. Media attachments are
+// managed by this hook and surfaced as a "+" button + compact chips inside the
+// chat composer at the bottom of the window.
+function useMediaAttachments(
+  projectId: string | null,
+  agentReady: { status: string; version?: string; mode?: string; reason?: string } | null,
+) {
   const [status, setStatus] = useState<InteractionStatus | null>(null);
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([]);
-  const [records, setRecords] = useState<OperationLogEntry[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [attOpen, setAttOpen] = useState(true);
-  const [opOpen, setOpOpen] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
   const uploadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agentDown = agentReady != null && agentReady.status !== 'ready';
@@ -899,13 +725,10 @@ function InteractionPanel({
         void send({ action: 'attach_list' });
       } else if (action === 'attach_list') {
         setAttachments((payload.attachments as AttachmentInfo[]) ?? []);
-      } else if (action === 'op_list') {
-        setRecords((payload.records as OperationLogEntry[]) ?? []);
       }
     });
     if (projectId && agentReady?.status === 'ready') {
       void send({ action: 'attach_list' });
-      void send({ action: 'op_list' });
     }
     return () => {
       unsubStatus();
@@ -943,96 +766,9 @@ function InteractionPanel({
     void send({ action: 'delete_attachment', attachment_id: id });
   };
 
-  const statusText = status?.state ? (STATUS_LABEL[status.state] ?? status.state) : '就绪';
+  const statusText = status?.state ? (STATUS_LABEL[status.state] ?? status.state) : '';
 
-  return (
-    <div className="bg-surface border-b border-line">
-      <div className="flex items-center justify-between px-4 py-2">
-        <button type="button" onClick={() => { setAttOpen((v) => !v); setOpOpen((v) => !v); }} className="flex items-center gap-2">
-          <span className="font-display text-lg text-ink">附件 · 状态 · 操作</span>
-        </button>
-        <span className={`inline-flex items-center gap-1.5 rounded-sm border border-line-strong px-2 py-0.5 text-xs ${status?.state ? 'text-accent' : 'text-ink-faint'}`}>
-          <span className={`w-2 h-2 rounded-full ${status?.state ? 'bg-accent' : 'bg-ink-faint'}`} />
-          {statusText}
-        </span>
-      </div>
-
-      {attOpen && (
-        <div className="px-4 pb-3 space-y-2">
-          <div className="flex items-center gap-2">
-            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple className="hidden" onChange={onPick} />
-            <button type="button" disabled={uploading || !projectId} onClick={() => fileRef.current?.click()} className="btn-secondary text-xs">
-              {uploading ? '上传中…' : '添加附件'}
-            </button>
-            {uploadError && <span className="text-xs text-danger">{uploadError}</span>}
-          </div>
-
-          {attachments.length === 0 && !uploading && (
-            <div className="text-xs text-ink-faint">暂无附件。支持 PNG/JPEG/WebP/MP4/MOV，将生成缩略图与视觉分析。</div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {attachments.map((att) => (
-              <div key={att.id} className="panel p-2 border-l-2 border-l-accent bg-paper-sink space-y-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-ink truncate">{att.filename}</div>
-                    <div className="text-[11px] text-ink-faint">{att.kind} · {(att.size_bytes / 1024).toFixed(1)} KB</div>
-                  </div>
-                  <button type="button" onClick={() => onDelete(att.id)} className="text-xs text-ink-faint hover:text-danger">删除</button>
-                </div>
-                {att.kind === 'image' && att.thumbnail_path && (
-                  <img src={att.thumbnail_path} alt={att.filename} className="w-24 h-auto rounded-sm border border-line" />
-                )}
-                {att.kind === 'video' && (
-                  <div className="space-y-1">
-                    {att.thumbnail_path && <img src={att.thumbnail_path} alt={att.filename} className="w-24 h-auto rounded-sm border border-line" />}
-                    {Array.isArray(att.analysis?.keyframes) && (att.analysis?.keyframes as Array<{ timestamp: number; path: string }>).length > 0 && (
-                      <div className="flex gap-1 overflow-x-auto">
-                        {(att.analysis?.keyframes as Array<{ timestamp: number; path: string }>).map((kf, i) => (
-                          <div key={i} className="flex-shrink-0">
-                            <img src={kf.path} alt={`关键帧 ${kf.timestamp}s`} className="w-12 h-9 object-cover rounded-sm border border-line" />
-                            <div className="text-[10px] text-ink-faint text-center">{kf.timestamp}s</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {Boolean(att.analysis?.description) && <div className="text-xs text-ink-soft">{String(att.analysis?.description)}</div>}
-                {Boolean(att.analysis?.summary) && <div className="text-xs text-ink-soft">{String(att.analysis?.summary)}</div>}
-                {att.error && <div className="text-xs text-danger">{att.error}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {opOpen && (
-        <div className="px-4 pb-3">
-          <button type="button" onClick={() => setOpOpen((v) => !v)} className="text-xs text-ink-faint hover:text-accent">
-            操作记录（{records.length}）{opOpen ? '收起' : '展开'}
-          </button>
-          {opOpen && records.length > 0 && (
-            <div className="mt-2 max-h-48 overflow-auto bg-paper-sink border border-line rounded-sm p-2 space-y-1">
-              {records.map((rec) => (
-                <div key={rec.id} className="flex items-start gap-2 text-xs">
-                  <span className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${rec.status === 'failed' ? 'bg-danger' : 'bg-accent'}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-ink-soft truncate">{rec.input_summary || rec.action}</div>
-                    {rec.error_reason && <div className="text-danger">{rec.error_reason}</div>}
-                  </div>
-                  <span className="text-ink-faint flex-shrink-0">
-                    {rec.duration_ms != null ? `${rec.duration_ms}ms` : '…'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  return { attachments, uploading, uploadError, statusText, fileRef, onPick, onDelete };
 }
 
 export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPageProps) {
@@ -1050,11 +786,11 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   const [degraded, setDegraded] = useState<DegradedInfo | null>(null);
   const [chatError, setChatError] = useState<{ summary: string; raw: string } | null>(null);
   const [stageStatus, setStageStatus] = useState<StageGateStatus | null>(null);
-  const [stageBusy, setStageBusy] = useState(false);
   // P0-03/04/06: whether the bundled Python Agent is alive. null = unknown
   // (optimistic), 'down'/'degraded' means we must not hang on a dead Agent.
   const [agentReady, setAgentReady] = useState<{ status: string; version?: string; mode?: string; reason?: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const media = useMediaAttachments(projectId, agentReady);
 
   useEffect(() => {
     // Conversation UI is project-scoped. Never carry a user's messages,
@@ -1236,20 +972,6 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     }
   };
 
-  const handleStageAction = async (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', riskDetails?: RiskDetails) => {
-    if (!window.kyrozen || !projectId) return;
-    setStageBusy(true);
-    try {
-      await window.kyrozen.sendStageAction(action, stageStatus?.stage ?? '', riskDetails);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-    } catch {
-      // The Python Agent pushes a fresh stage_updated event on success; ignore
-      // transport errors here so the UI stays responsive.
-    } finally {
-      setStageBusy(false);
-    }
-  };
-
   const handleSend = async () => {
     if (!input.trim() && pendingAttachments.length === 0) return;
     if (!projectId) {
@@ -1338,20 +1060,15 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         </div>
       )}
 
-      {stageStatus && (
-        <StageGatePanel status={stageStatus} busy={stageBusy} onAction={handleStageAction} />
-      )}
-
-      {projectId && (
-        <>
-          <SoftwareFeaturePanel
-            projectId={projectId}
-            onOpenPreview={onOpenPreview}
-            agentReady={agentReady}
-            stageStatus={stageStatus}
-          />
-          <InteractionPanel projectId={projectId} agentReady={agentReady} />
-        </>
+      {/* UI cleanup: stage gate moved to the right-side ProgressPanel; the
+          software generation panel only appears from the development stage on. */}
+      {projectId && stageStatus && DEV_AND_LATER.has(stageStatus.stage) && (
+        <SoftwareFeaturePanel
+          projectId={projectId}
+          onOpenPreview={onOpenPreview}
+          agentReady={agentReady}
+          stageStatus={stageStatus}
+        />
       )}
 
       {routedAgent && (
@@ -1506,17 +1223,37 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
             </details>
           </div>
         )}
-        {pendingAttachments.length > 0 && (
-          <div className="flex flex-wrap gap-2">
+        {(pendingAttachments.length > 0 || media.attachments.length > 0 || media.uploadError) && (
+          <div className="flex flex-wrap items-center gap-2">
             {pendingAttachments.map((attachment, index) => (
               <div key={`${attachment.name}-${index}`} className="inline-flex items-center gap-2 px-3 py-1 bg-surface border border-line-strong rounded text-xs text-ink-soft">
                 <span className="truncate max-w-[200px]">{attachment.name}</span>
                 <button type="button" onClick={() => setPendingAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))} className="text-ink-faint hover:text-danger">×</button>
               </div>
             ))}
+            {media.attachments.map((att) => (
+              <div key={att.id} className="inline-flex items-center gap-2 px-2 py-1 bg-surface border border-line-strong rounded text-xs text-ink-soft" title={String(att.analysis?.description || att.analysis?.summary || att.filename)}>
+                {att.thumbnail_path && <img src={att.thumbnail_path} alt={att.filename} className="w-6 h-6 object-cover rounded-sm border border-line" />}
+                <span className="truncate max-w-[160px]">{att.filename}</span>
+                {att.error && <span className="text-danger" title={att.error}>!</span>}
+                <button type="button" onClick={() => media.onDelete(att.id)} className="text-ink-faint hover:text-danger">×</button>
+              </div>
+            ))}
+            {media.uploadError && <span className="text-xs text-danger">{media.uploadError}</span>}
           </div>
         )}
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <input ref={media.fileRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple className="hidden" onChange={media.onPick} />
+          <button
+            type="button"
+            onClick={() => media.fileRef.current?.click()}
+            disabled={!projectId || media.uploading}
+            className="btn-secondary w-9 h-9 flex items-center justify-center text-lg leading-none flex-shrink-0"
+            title="上传附件（PNG/JPEG/WebP/MP4/MOV，将生成缩略图与视觉分析）"
+            aria-label="上传附件"
+          >
+            {media.uploading ? '…' : '+'}
+          </button>
           <input
             type="text"
             value={input}
@@ -1532,6 +1269,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
             <button type="button" onClick={() => void handleSend()} disabled={!projectId || (!input.trim() && pendingAttachments.length === 0)} className="btn-primary px-5">发送</button>
           )}
         </div>
+        {media.statusText && (
+          <div className="flex justify-end text-[11px] text-ink-faint" aria-live="polite">{media.statusText}</div>
+        )}
       </div>
     </div>
   );

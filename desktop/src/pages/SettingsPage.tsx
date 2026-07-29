@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { FileTree } from '../components/FileTree';
+import { HardwarePanel } from '../components/HardwarePanel';
 
 export interface Props {
   onClose: () => void;
@@ -10,6 +12,9 @@ export interface Props {
   language: 'zh' | 'en';
   onChangeLanguage: (lang: 'zh' | 'en') => void;
   onLogout: () => void;
+  /** UI cleanup: 本地文件 moved here from the sidebar. */
+  projectId: string | null;
+  onOpenLocalFile: (relativePath: string) => void;
 }
 
 export function SettingsPage({
@@ -22,14 +27,16 @@ export function SettingsPage({
   language,
   onChangeLanguage,
   onLogout,
+  projectId,
+  onOpenLocalFile,
 }: Props) {
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(true);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
-      <div className="w-full max-w-md panel overflow-hidden">
+      <div className="w-full max-w-md panel overflow-hidden max-h-[85vh] flex flex-col">
         <div className="px-5 py-4 border-b border-line flex items-center justify-between">
-          <h2 className="font-hand text-2xl leading-none text-ink">设置</h2>
+          <h2 className="font-display text-2xl leading-none text-ink">设置</h2>
           <button
             type="button"
             onClick={onClose}
@@ -40,7 +47,7 @@ export function SettingsPage({
           </button>
         </div>
 
-        <div className="p-5 space-y-6">
+        <div className="p-5 space-y-6 overflow-y-auto">
           <section>
             <h3 className="text-sm font-medium text-ink-soft mb-3">账号</h3>
             <div className="flex items-center justify-between text-sm">
@@ -177,6 +184,24 @@ export function SettingsPage({
                 </button>
               </div>
             )}
+          </section>
+
+          <section>
+            <h3 className="text-sm font-medium text-ink-soft mb-3">本地文件</h3>
+            {projectId ? (
+              <div className="max-h-56 overflow-y-auto border border-line rounded-sm bg-paper-sink p-2 text-xs">
+                <FileTree projectId={projectId} onSelectFile={onOpenLocalFile} />
+              </div>
+            ) : (
+              <div className="text-xs text-ink-faint">请先选择一个项目。</div>
+            )}
+          </section>
+
+          <section>
+            <h3 className="text-sm font-medium text-ink-soft mb-3">硬件工具链</h3>
+            <div className="border border-line rounded-sm bg-paper-sink text-xs">
+              <HardwarePanel />
+            </div>
           </section>
 
           <section>

@@ -149,7 +149,7 @@ function Value({ value }: { value: unknown }) {
 function Section({ title, description, value }: { title: string; description?: string; value: unknown }) {
   return (
     <section className="panel p-4">
-      <h3 className="font-hand text-xl text-ink">{title}</h3>
+      <h3 className="font-display text-xl text-ink">{title}</h3>
       {description && <p className="text-xs text-ink-faint mt-1 mb-3">{description}</p>}
       <Value value={value} />
     </section>
@@ -214,7 +214,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     <div className="absolute inset-0 z-30 bg-paper flex flex-col" data-testid="project-workspace-panel">
       <header className="flex items-center justify-between px-5 py-3 border-b border-line bg-surface">
         <div>
-          <h2 className="font-hand text-2xl leading-none">项目画布</h2>
+          <h2 className="font-display text-2xl leading-none">项目画布</h2>
           <p className="text-xs text-ink-faint mt-1">把项目从问题、方案到交付结果整理成可读的工作台</p>
         </div>
         <div className="flex gap-2">
@@ -235,7 +235,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
         {loading || !data ? <div className="text-sm text-ink-faint">{loadingSlow ? '项目资料较多，仍在整理中…' : '正在整理项目资料…'}</div> : (
           <div className="max-w-5xl mx-auto space-y-4">
             <div className="mb-2">
-              <h3 className="font-hand text-2xl">{TABS.find(([key]) => key === tab)?.[1]}</h3>
+              <h3 className="font-display text-2xl">{TABS.find(([key]) => key === tab)?.[1]}</h3>
               <p className="text-xs text-ink-faint">{TABS.find(([key]) => key === tab)?.[2]}</p>
             </div>
 
@@ -283,7 +283,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
             {tab === 'validation' && (
               <>
                 <div className="panel p-4 space-y-3">
-                  <h3 className="font-hand text-xl">记录真实用户反馈</h3>
+                  <h3 className="font-display text-xl">记录真实用户反馈</h3>
                   <textarea className="input" value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="用户完成了什么、遇到什么问题、是否愿意继续使用？" rows={3} />
                   <button type="button" onClick={() => void saveFeedback()} disabled={!feedback.trim()} className="btn-primary text-sm">保存反馈</button>
                 </div>
@@ -299,7 +299,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
             {tab === 'decisions' && (
               <>
                 <div className="panel p-4 space-y-3">
-                  <h3 className="font-hand text-xl">记录项目决策</h3>
+                  <h3 className="font-display text-xl">记录项目决策</h3>
                   <input className="input" value={decision} onChange={(event) => setDecision(event.target.value)} placeholder="做出了什么决定？" />
                   <textarea className="input" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="为什么这样决定？依据和取舍是什么？" rows={2} />
                   <button type="button" onClick={() => void saveDecision()} disabled={!decision.trim()} className="btn-primary text-sm">保存决策</button>

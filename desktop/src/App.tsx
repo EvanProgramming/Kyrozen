@@ -4,10 +4,8 @@ import { LoginPage } from './pages/LoginPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { EditorPanel } from './components/EditorPanel';
-import { FileTree } from './components/FileTree';
 import { GitPanel } from './components/GitPanel';
 import { ProgressPanel } from './components/ProgressPanel';
-import { HardwarePanel } from './components/HardwarePanel';
 import { PreviewPanel } from './components/PreviewPanel';
 import { SearchPanel } from './components/SearchPanel';
 import { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel';
@@ -60,6 +58,7 @@ function App() {
   const [onboardingStatus, setOnboardingStatus] = useState<'loading' | 'needed' | 'completed'>('loading');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string; login?: string; avatarUrl?: string; expired?: boolean }>({ connected: false, scope: '' });
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
@@ -406,7 +405,7 @@ function App() {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-paper text-ink">
         <div className="text-center">
-          <div className="font-hand text-3xl">Kyrozen</div>
+          <div className="font-display text-3xl">Kyrozen</div>
           <div className="text-sm text-ink-faint mt-2">正在初始化...</div>
         </div>
       </div>
@@ -423,7 +422,7 @@ function App() {
         {sessionRestoring && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-paper">
             <div className="text-center">
-              <div className="font-hand text-3xl">Kyrozen</div>
+              <div className="font-display text-3xl">Kyrozen</div>
               <div className="text-sm text-ink-faint mt-2">正在恢复会话...</div>
             </div>
           </div>
@@ -439,7 +438,7 @@ function App() {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-paper text-ink">
         <div className="text-center">
-          <div className="font-hand text-3xl">Kyrozen</div>
+          <div className="font-display text-3xl">Kyrozen</div>
           <div className="text-sm text-ink-faint mt-2">正在恢复项目数据...</div>
         </div>
       </div>
@@ -453,7 +452,7 @@ function App() {
     <div className="h-screen w-screen flex flex-col bg-paper text-ink">
       <header className="app-drag h-12 border-b border-line bg-surface flex items-center justify-between pl-20 pr-4 flex-shrink-0">
         <div className="flex items-center gap-3 app-no-drag">
-          <span className="font-hand text-2xl leading-none text-ink">Kyrozen</span>
+          <span className="font-display text-2xl leading-none text-ink">Kyrozen</span>
           {currentProject && (
             <select
               value={currentProjectId || ''}
@@ -514,7 +513,24 @@ function App() {
       <div className="flex-1 flex overflow-hidden">
         <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-line bg-paper-sink flex flex-col">
           <div className="p-4 border-b border-line flex items-center justify-between">
-            <h2 className="font-hand text-lg leading-none text-ink">我的项目</h2>
+            <div className="flex items-center gap-1.5">
+              <h2 className="font-display text-lg leading-none text-ink">我的项目</h2>
+              {/* UI cleanup: cross-project search condensed into a small icon
+                  next to "我的项目"; click to expand the input below. */}
+              <button
+                type="button"
+                onClick={() => setShowSearch((value) => !value)}
+                title="跨项目搜索"
+                aria-label="跨项目搜索"
+                aria-expanded={showSearch}
+                className={`p-1 rounded-sm transition-colors ${showSearch ? 'text-accent bg-accent-soft' : 'text-ink-faint hover:text-ink'}`}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" className="w-3.5 h-3.5" aria-hidden>
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M20 20l-3.5-3.5" />
+                </svg>
+              </button>
+            </div>
             <div className="flex gap-1">
               <button
                 type="button"
@@ -535,6 +551,11 @@ function App() {
               </button>
             </div>
           </div>
+          {showSearch && (
+            <div className="border-b border-line text-xs">
+              <SearchPanel onOpenFile={handleOpenFileFromSearch} />
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {projects.length === 0 && (
               <div className="text-xs text-ink-faint p-2">暂无项目</div>
@@ -557,14 +578,9 @@ function App() {
             ))}
           </div>
 
+          {/* UI cleanup: 本地文件 / 硬件工具链 moved into 设置; 会员权益 sits at the
+              bottom-left corner of the sidebar. */}
           <div className="p-3 border-t border-line space-y-3 text-xs">
-            {quota && (
-              <div className="text-ink-soft" title={quota.reason}>
-                <div className="font-medium mb-1">会员权益</div>
-                <div className="text-ink-faint">{formatQuota(quota)}</div>
-              </div>
-            )}
-
             <label className="flex items-center justify-between cursor-pointer group">
               <span className={`${fullTrust ? 'text-warning font-medium' : 'text-ink-soft'}`}>
                 完全信任模式
@@ -589,14 +605,12 @@ function App() {
               </div>
             )}
 
-            <SearchPanel onOpenFile={handleOpenFileFromSearch} />
-
-            <div className="border-t border-line pt-2">
-              <div className="px-2 font-medium text-ink-soft mb-1">本地文件</div>
-              <FileTree projectId={currentProjectId} onSelectFile={setEditingFile} />
-            </div>
-
-            <HardwarePanel />
+            {quota && (
+              <div className="text-ink-soft border-t border-line pt-3" title={quota.reason}>
+                <div className="font-medium mb-1">会员权益</div>
+                <div className="text-ink-faint">{formatQuota(quota)}</div>
+              </div>
+            )}
           </div>
         </aside>
         <main className="flex-1 flex flex-col overflow-hidden relative">
@@ -645,7 +659,7 @@ function App() {
       {showCreateProject && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
           <div className="w-full max-w-sm panel p-6">
-            <h2 className="font-hand text-2xl text-ink mb-4">新建项目</h2>
+            <h2 className="font-display text-2xl text-ink mb-4">新建项目</h2>
             <div className="space-y-3">
               <div>
                 <label className="label">项目名称 *</label>
@@ -714,12 +728,17 @@ function App() {
           language={language}
           onChangeLanguage={handleChangeLanguage}
           onLogout={handleLogout}
+          projectId={currentProjectId}
+          onOpenLocalFile={(relativePath) => {
+            setEditingFile(relativePath);
+            setShowSettings(false);
+          }}
         />
       )}
       {showFullTrustConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
           <div className="panel w-full max-w-md p-5">
-            <h2 className="font-hand text-2xl">开启完全信任模式？</h2>
+            <h2 className="font-display text-2xl">开启完全信任模式？</h2>
             <p className="text-sm text-ink-soft mt-2">本次会话内，文件写入和命令执行等高风险操作将自动继续，不再逐次询问。</p>
             <div className="flex justify-end gap-2 mt-5">
               <button type="button" onClick={() => setShowFullTrustConfirm(false)} className="btn-ghost text-sm">取消</button>

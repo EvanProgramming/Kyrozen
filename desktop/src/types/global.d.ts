@@ -278,7 +278,7 @@ export interface KyrozenAPI {
   }>;
   getGitHubStatus: () => Promise<{ connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean }>;
   initGitRepo: (remoteUrl?: string) => Promise<{ success: boolean; error?: string }>;
-  getGitStatus: () => Promise<{
+  getGitStatus: (projectId?: string) => Promise<{
     success: boolean;
     isRepo: boolean;
     branch?: string;
@@ -291,7 +291,7 @@ export interface KyrozenAPI {
     remoteUrl?: string | null;
     error?: string;
   }>;
-  getGitCommits: () => Promise<{ success: boolean; commits: Array<{ hash: string; message: string; date: string; author: string; files?: string[] }>; remoteUrl: string | null; error?: string }>;
+  getGitCommits: (projectId?: string) => Promise<{ success: boolean; commits: Array<{ hash: string; message: string; date: string; author: string; files?: string[] }>; remoteUrl: string | null; error?: string }>;
   commitAndPush: (message: string) => Promise<{
     success: boolean;
     committed?: boolean;

@@ -218,9 +218,9 @@ contextBridge.exposeInMainWorld('kyrozen', {
   disconnectGitHub: () => ipcRenderer.invoke('kyrozen:disconnect-github'),
   createGitHubRepo: (owner: string, name: string, description?: string, isPrivate?: boolean) =>
     ipcRenderer.invoke('kyrozen:create-github-repo', owner, name, description, isPrivate),
-  getGitCommits: () => ipcRenderer.invoke('kyrozen:get-git-commits'),
+  getGitCommits: (projectId?: string) => ipcRenderer.invoke('kyrozen:get-git-commits', projectId || ''),
   initGitRepo: (remoteUrl?: string) => ipcRenderer.invoke('kyrozen:init-git-repo', remoteUrl),
-  getGitStatus: () => ipcRenderer.invoke('kyrozen:get-git-status'),
+  getGitStatus: (projectId?: string) => ipcRenderer.invoke('kyrozen:get-git-status', projectId || ''),
   commitAndPush: (message: string) => ipcRenderer.invoke('kyrozen:commit-and-push', message),
   setAutoCommit: (enabled: boolean) => ipcRenderer.invoke('kyrozen:set-auto-commit', enabled),
   getAutoCommit: () => ipcRenderer.invoke('kyrozen:get-auto-commit'),

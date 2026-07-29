@@ -1125,7 +1125,11 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     const unsubDegraded = window.kyrozen.onAgentDegraded((info) => {
       setDegraded(info);
     });
+    // P0-06: on stage update, ignore events for other projects to prevent
+    // brief cross-project state leakage during project switches.
     const unsubStage = window.kyrozen.onStageUpdated((status) => {
+      const eventPid = String((status as any).project_id || '');
+      if (eventPid && eventPid !== projectId) return;
       setStageStatus(status);
       onProjectChanged?.();
     });

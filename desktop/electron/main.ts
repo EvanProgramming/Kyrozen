@@ -2007,8 +2007,8 @@ ipcMain.handle('kyrozen:init-git-repo', async (_event, remoteUrl?: string) => {
   return result;
 });
 
-ipcMain.handle('kyrozen:get-git-status', async () => {
-  const root = getCurrentWorkspaceRoot();
+ipcMain.handle('kyrozen:get-git-status', async (_event, projectId?: string) => {
+  const root = projectId ? await getWorkspaceRoot(projectId) : getCurrentWorkspaceRoot();
   if (!root) {
     return { success: false, isRepo: false, error: '未选择项目工作区' };
   }
@@ -2080,8 +2080,8 @@ ipcMain.handle('kyrozen:create-github-repo', async (_event, owner: string, name:
   }
 });
 
-ipcMain.handle('kyrozen:get-git-commits', async () => {
-  const root = getCurrentWorkspaceRoot();
+ipcMain.handle('kyrozen:get-git-commits', async (_event, projectId?: string) => {
+  const root = projectId ? await getWorkspaceRoot(projectId) : getCurrentWorkspaceRoot();
   if (!root) {
     return { success: false, commits: [], remoteUrl: null, error: '未选择项目工作区' };
   }
@@ -3004,9 +3004,8 @@ function handlePythonAgentLine(line: string) {
           current_stage: String(message.params?.stage || 'problem_discovery'),
           progress: Number(message.params?.progress || 0),
         }).then(() => {
-          // Notify once more after the cloud row is durable so consumers that
-          // reload the project list cannot race the PUT and keep stale stage /
-          // progress values in the sidebar.
+          // P0-06: only re-dispatch if the user is still on the same project.
+          if (currentProjectId && currentProjectId !== stageProjectId) return;
           mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
         }).catch((err: any) => logWarn(`Failed to sync stage to cloud: ${err.message || err}`));
       }

@@ -56,7 +56,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   const loadStatus = async () => {
     const github = await kyzen.getGitHubStatus();
     setGh(github);
-    const git = await kyzen.getGitStatus();
+    const git = await kyzen.getGitStatus(projectId ?? undefined);
     setStatus(git);
     const auto = await kyzen.getAutoCommit();
     setAutoCommit(auto.enabled);
@@ -78,7 +78,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     if (!projectId || !autoCommit) return;
     const timer = setInterval(async () => {
       try {
-        const result = await kyzen.getGitCommits();
+        const result = await kyzen.getGitCommits(projectId ?? undefined);
         const latest = result.commits?.[0];
         if (latest && lastHashRef.current && latest.hash !== lastHashRef.current) {
           lastHashRef.current = latest.hash;

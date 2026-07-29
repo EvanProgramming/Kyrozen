@@ -589,6 +589,7 @@ def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | Non
         details = risk_details if risk_details is not None else {
             "reason": "系统兼容推进：未提供用户风险说明",
             "impact": "跳过的内容可能在后续引发返工或缺陷",
+            "approver": "用户",
             "recovery": "返回上一阶段补齐该条件",
         }
         if risk_details is not None and not str(details.get("reason") or "").strip():
@@ -607,7 +608,19 @@ def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | Non
     if definition is not None:
         for item in definition.items:
             if item.kind == "confirmation":
-                store.record_confirmation(item.id, True, detail="用户确认（进入下一阶段）")
+                if mode == "risk":
+                    # P0-17: carry full risk context into the confirmation record
+                    reason = str(details.get("reason") or "").strip()
+                    impact = str(details.get("impact") or "").strip()
+                    approver = str(details.get("approver") or "用户").strip()
+                    recovery = str(details.get("recovery") or "").strip()
+                    store.record_confirmation(
+                        item.id, True,
+                        detail=f"带风险推进（原因：{reason}；影响：{impact}；批准人：{approver}；恢复条件：{recovery}）",
+                    )
+                    store.record_skip(item.id, reason=reason, impact=impact, approver=approver, recovery=recovery)
+                else:
+                    store.record_confirmation(item.id, True, detail="用户确认（进入下一阶段）")
 
     nxt = STAGES[idx + 1]
     entry_reason = entry_blocked(store, nxt)

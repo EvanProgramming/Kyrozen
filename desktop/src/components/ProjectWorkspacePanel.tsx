@@ -194,7 +194,13 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                 <Section title={String(data.project?.name || '项目概览')} value={{ description: data.project?.description, goal: data.project?.goal, current_stage: data.project?.current_stage }} />
                 <div className="grid gap-4 md:grid-cols-3">
                   <Section title="当前状态" value={data.state} />
-                  <Section title="已形成资料" value={`${(data.artifacts?.length || 0) + (Array.isArray(data.local?.deliverables) ? data.local!.deliverables.length : 0)} 份`} />
+                  <Section title="已形成资料" value={`${(
+                    (data.artifacts?.length || 0) +
+                    (Array.isArray(data.local?.deliverables) ? data.local!.deliverables.length : 0) +
+                    (Array.isArray(data.local?.files) ? data.local!.files.length : 0) +
+                    (data.local?.software ? 1 : 0) +
+                    (data.local?.stagegate ? 1 : 0)
+                  )} 份`} />
                   <Section title="执行任务" value={`${data.tasks?.length || 0} 个`} />
                 </div>
                 <Section title="本地成果" description="工作区中真实存在的软件、交付物与阶段记录" value={data.local} />

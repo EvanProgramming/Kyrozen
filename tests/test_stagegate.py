@@ -225,9 +225,9 @@ def test_advance_risk_records_skip_with_four_fields(tmp_path: Path):
     result = advance(s, "risk")
     assert result["ok"] is True
     assert result["risk"] is True
-    # Only the missing deliverable is skipped. Clicking advance explicitly
-    # confirms the confirmation item instead of recording it as a risk skip.
-    assert len(s.skips) == 1
+    # P0-17: risk advance now records skip for both missing deliverables AND
+    # confirmation items, each with full reason/impact/approver/recovery detail.
+    assert len(s.skips) == 2
     for skip in s.skips:
         assert skip.reason and skip.impact and skip.approver and skip.recovery
 

@@ -48,6 +48,21 @@ def _parse_fields(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def _persist_feature_status(ws: str, success: bool) -> None:
+    """Update kyrozen_feature.json file tasks to reflect run/repair outcome."""
+    from pathlib import Path
+    manifest_path = Path(ws) / fg.MANIFEST_FILE
+    if not manifest_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+        for task in manifest.get("spec", {}).get("file_tasks", []):
+            task["status"] = "tested" if success else "failed"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 class SoftwareFeatureTool(Tool):
     name = "software_feature"
     description = "真实软件生成、运行与修复：从 PRD 搭建可运行项目、执行构建/测试、失败自动修复、生成非编码交付物。"
@@ -130,6 +145,8 @@ class SoftwareFeatureTool(Tool):
         records = fg.build_feature_records(spec, run)
         run.feature_records = records
         saved = fg.save_software_feature(ws, spec, run, feature_records=records)
+        # P0-10: update kyrozen_feature.json manifest to reflect run result
+        _persist_feature_status(ws, run.overall_success)
         return ToolResult(
             success=run.overall_success,
             data={

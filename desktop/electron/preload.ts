@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.invoke('kyrozen:login', email, password, serverUrl),
 
   verifyOpenToken: (token: string) => ipcRenderer.invoke('kyrozen:verify-open-token', token),
+  loadChatMessages: (projectId: string) => ipcRenderer.invoke('kyrozen:load-chat-messages', projectId),
 
   setCurrentProject: (projectId: string) => ipcRenderer.invoke('kyrozen:set-current-project', projectId),
   pickWorkspace: (projectId: string) => ipcRenderer.invoke('kyrozen:pick-workspace', projectId),
@@ -76,6 +77,12 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:session-ended', handler);
   },
 
+  onSessionExpired: (callback: (message: string) => void) => {
+    const handler = (_event: unknown, message: string) => callback(message);
+    ipcRenderer.on('kyrozen:session-expired', handler);
+    return () => ipcRenderer.removeListener('kyrozen:session-expired', handler);
+  },
+
   onOpenSettings: (callback: () => void) => {
     const handler = () => callback();
     ipcRenderer.on('kyrozen:open-settings', handler);
@@ -115,6 +122,14 @@ contextBridge.exposeInMainWorld('kyrozen', {
     const handler = (_event: unknown, info: Record<string, unknown>) => callback(info);
     ipcRenderer.on('kyrozen:agent-degraded', handler);
     return () => ipcRenderer.removeListener('kyrozen:agent-degraded', handler);
+  },
+
+  // P0-03/04/06: surface whether the bundled Python Agent is alive so the UI
+  // can stop infinite loading and show a degraded/offline notice.
+  onAgentReady: (callback: (info: { status: string; version?: string; mode?: string; code?: number | null; reason?: string; retrying?: boolean }) => void) => {
+    const handler = (_event: unknown, info: { status: string; version?: string; mode?: string; code?: number | null; reason?: string; retrying?: boolean }) => callback(info);
+    ipcRenderer.on('kyzon:agent-ready', handler);
+    return () => ipcRenderer.removeListener('kyzon:agent-ready', handler);
   },
 
   onStageUpdated: (callback: (status: Record<string, unknown>) => void) => {

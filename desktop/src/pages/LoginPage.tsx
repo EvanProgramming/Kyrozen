@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 
-export function LoginPage() {
+export function LoginPage({ notice }: { notice?: string | null }) {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,6 +33,12 @@ export function LoginPage() {
       <div className="w-full max-w-sm panel p-8 text-center">
         <h1 className="font-hand text-4xl leading-none mb-1 text-ink">Kyrozen</h1>
         <p className="text-ink-faint text-sm mb-8">AI 产品创造者 & 管家</p>
+
+        {notice && !error && (
+          <div data-testid="session-expired-notice" className="text-sm text-ink-soft bg-paper-sink border border-line rounded-sm px-3 py-2 mb-4">
+            {notice}
+          </div>
+        )}
 
         {error && (
           <div className="text-sm text-danger bg-danger-soft border border-line rounded-sm px-3 py-2 mb-4">

@@ -898,6 +898,20 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             active_model = None
 
         _db = create_database(_config)
+        # P0-02: refuse to start (in production) if the desktop client schema is
+        # missing, instead of failing on the first chat message at runtime.
+        try:
+            from kyrozen.db.schema_check import SchemaError, verify_desktop_schema
+
+            verify_desktop_schema(_config)
+        except SchemaError as se:
+            if os.environ.get("KYROZEN_ALLOW_MISSING_SCHEMA") == "1":
+                logger.warning(f"跳过数据库结构预检：{se}")
+            else:
+                logger.error(f"数据库结构预检失败，服务拒绝启动：{se}")
+                raise
+        except Exception as se:  # noqa: BLE001 - verification infra (network) issue
+            logger.warning(f"无法完成数据库结构预检（将继续启动）：{se}")
         _project_manager = ProjectManager(_db, workspace_root=_config.workspace_root)
         _context_builder = ProjectContextBuilder(_project_manager, InMemoryMemory())
         os.makedirs(_config.workspace_root, exist_ok=True)

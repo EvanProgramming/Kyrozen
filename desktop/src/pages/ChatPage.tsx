@@ -80,6 +80,31 @@ function splitQuestionBlock(content: string): { markdown: string; question: Ques
   }
 }
 
+// P0-15: never surface raw backend JSON (task IDs, exception text) to a normal
+// user. Map known failure shapes to a friendly summary and keep the technical
+// detail in a collapsible diagnostic block.
+function friendlyChatError(raw?: string): { summary: string; raw: string } {
+  const text = (raw || '未知错误').trim();
+  let detail = text;
+  try {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj === 'object' && obj.detail) detail = String(obj.detail);
+  } catch {
+    /* not JSON; use as-is */
+  }
+  if (/persist task|failed to persist/i.test(detail)) {
+    return { summary: '消息暂时无法保存，请稍后重试；若持续出现请联系支持。', raw: text };
+  }
+  if (/ECONNREFUSED|ETIMEDOUT|timeout|network/i.test(detail)) {
+    return { summary: '网络连接异常，请检查网络后重试。', raw: text };
+  }
+  if (/401|unauthorized|未登录|not logged|no longer logged/i.test(detail)) {
+    return { summary: '登录已失效，请重新登录后重试。', raw: text };
+  }
+  const short = detail.length > 80 ? `${detail.slice(0, 80)}…` : detail;
+  return { summary: `发送失败：${short}`, raw: text };
+}
+
 function Markdown({ content, onOpenPreview }: { content: string; onOpenPreview?: (url: string) => void }) {
   return (
     <ReactMarkdown
@@ -352,7 +377,7 @@ function StageGatePanel({
             className="btn-primary text-xs"
             title={gate.can_advance ? '当前阶段条件已满足，进入下一阶段' : '当前阶段仍有未满足条件'}
           >
-            继续当前阶段
+            进入下一阶段
           </button>
           <button
             type="button"
@@ -404,13 +429,39 @@ const DELIVERABLE_LABELS: Record<string, string> = {
   business_process: '业务流程',
 };
 
-function SoftwareFeaturePanel({ projectId, onOpenPreview }: { projectId: string | null; onOpenPreview?: (url: string) => void }) {
+function SoftwareFeaturePanel({
+  projectId,
+  onOpenPreview,
+  agentReady,
+  stageStatus,
+}: {
+  projectId: string | null;
+  onOpenPreview?: (url: string) => void;
+  agentReady: { status: string; version?: string; mode?: string; reason?: string } | null;
+  stageStatus: StageGateStatus | null;
+}) {
   const [feature, setFeature] = useState<SoftwareFeatureResult | null>(null);
   const [appType, setAppType] = useState<string>('web_app');
   const [busy, setBusy] = useState(false);
+  const busyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(true);
   const [formOpen, setFormOpen] = useState(true);
   const [copied, setCopied] = useState(false);
+
+  // P0-07: the development entry must be gated by the stage gate. Code may only
+  // be generated once the gate for entering development is satisfied (or we are
+  // already in the development stage). Otherwise we surface the reason and a
+  // "return to current stage" hint instead of letting the user skip the lifecycle.
+  const agentDown = agentReady != null && agentReady.status !== 'ready';
+  const gate = stageStatus?.gate;
+  // P0-07: 软件生成入口必须受门禁约束。仅当 stage 确认为 development
+  // 或 gate.can_advance 为 true 时才开放。stageStatus 为 null（加载中）视为阻塞。
+  const canGenerate =
+    stageStatus != null && (stageStatus.stage === 'development' || Boolean(gate?.can_advance));
+  const generateBlockReason = canGenerate
+    ? null
+    : (gate?.blocked_entry_reason || '请先完成当前阶段门禁（问题界定、调研、PRD、方案确认）后再生成代码。');
 
   // Generate form state.
   const [appName, setAppName] = useState('我的 Web 应用');
@@ -426,21 +477,35 @@ function SoftwareFeaturePanel({ projectId, onOpenPreview }: { projectId: string 
   useEffect(() => {
     if (!window.kyrozen) return;
     const unsub = window.kyrozen.onSoftwareFeature((result) => {
+      if (busyTimerRef.current) { clearTimeout(busyTimerRef.current); busyTimerRef.current = null; }
       setFeature(result);
       if (result.app_type) setAppType(result.app_type);
       setBusy(false);
+      setError(null);
     });
     return unsub;
   }, []);
 
   const send = async (action: string, extra: Record<string, unknown> = {}) => {
     if (!window.kyrozen || !projectId) return;
+    if (agentDown) {
+      setError('本地 Agent 当前不可用，无法生成或运行软件。请检查 Python 运行环境后重试。');
+      return;
+    }
+    setError(null);
     setBusy(true);
+    busyTimerRef.current = setTimeout(() => {
+      busyTimerRef.current = null;
+      setBusy(false);
+      setError('操作超时：本地 Agent 未在预期时间内响应，请重试或检查运行环境。');
+    }, 60000);
     try {
       const { workspaceRoot } = await window.kyrozen.getWorkspaceRoot(projectId);
       window.kyrozen.sendSoftwareFeature({ action, workspace_root: workspaceRoot, ...extra });
     } catch {
+      if (busyTimerRef.current) { clearTimeout(busyTimerRef.current); busyTimerRef.current = null; }
       setBusy(false);
+      setError('无法发送软件生成请求，请重试。');
     }
   };
 
@@ -502,6 +567,24 @@ function SoftwareFeaturePanel({ projectId, onOpenPreview }: { projectId: string 
         <div className="px-4 pb-3 space-y-3">
           {!projectId && (
             <div className="text-xs text-ink-faint">请先选择左侧项目后再生成软件。</div>
+          )}
+
+          {generateBlockReason && (
+            <div className="panel p-3 border-l-2 border-l-danger bg-danger-soft space-y-1">
+              <div className="text-sm text-danger font-medium">开发入口暂未开放</div>
+              <div className="text-xs text-ink-soft">{generateBlockReason}</div>
+              {stageStatus && (
+                <button type="button" onClick={() => void send('return')} className="btn-ghost text-xs mt-1">
+                  返回当前阶段
+                </button>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div className="panel p-3 border-l-2 border-l-danger bg-danger-soft">
+              <div className="text-sm text-danger">{error}</div>
+            </div>
           )}
 
           {feature && (
@@ -639,7 +722,7 @@ function SoftwareFeaturePanel({ projectId, onOpenPreview }: { projectId: string 
                   className="input text-xs w-full font-mono"
                 />
                 <input value={desc} onChange={(event) => setDesc(event.target.value)} placeholder="一句话描述（可选）" className="input text-xs w-full" />
-                <button type="button" disabled={busy || !projectId} onClick={handleGenerate} className="btn-primary text-xs">
+                <button type="button" disabled={busy || !projectId || !canGenerate} onClick={handleGenerate} className="btn-primary text-xs" title={canGenerate ? '生成并写入可运行软件到工作区' : generateBlockReason ?? undefined}>
                   生成并写入工作区
                 </button>
               </div>
@@ -688,7 +771,13 @@ const STATUS_LABEL: Record<string, string> = {
   retrying: '重试中',
 };
 
-function InteractionPanel({ projectId }: { projectId: string | null }) {
+function InteractionPanel({
+  projectId,
+  agentReady,
+}: {
+  projectId: string | null;
+  agentReady: { status: string; version?: string; mode?: string; reason?: string } | null;
+}) {
   const [status, setStatus] = useState<InteractionStatus | null>(null);
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([]);
   const [records, setRecords] = useState<OperationLogEntry[]>([]);
@@ -697,6 +786,8 @@ function InteractionPanel({ projectId }: { projectId: string | null }) {
   const [attOpen, setAttOpen] = useState(true);
   const [opOpen, setOpOpen] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const agentDown = agentReady != null && agentReady.status !== 'ready';
 
   const send = async (extra: Record<string, unknown>) => {
     if (!window.kyrozen || !projectId) return;
@@ -710,6 +801,7 @@ function InteractionPanel({ projectId }: { projectId: string | null }) {
     const unsubInt = window.kyrozen.onInteraction((payload) => {
       const action = String(payload.action || '');
       if (action === 'attach') {
+        if (uploadTimerRef.current) { clearTimeout(uploadTimerRef.current); uploadTimerRef.current = null; }
         if (payload.error) {
           setUploadError(String(payload.error));
         } else if (payload.attachment) {
@@ -740,8 +832,20 @@ function InteractionPanel({ projectId }: { projectId: string | null }) {
   const onPick = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
+    // P0-04: fail fast (don't hang) when the Agent is known to be down.
+    if (agentDown) {
+      setUploadError('本地 Agent 当前不可用，无法处理附件。请检查 Python 运行环境后重试。');
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     setUploading(true);
     setUploadError(null);
+    // Reset uploading after a timeout so the button never stays "上传中…".
+    uploadTimerRef.current = setTimeout(() => {
+      uploadTimerRef.current = null;
+      setUploading(false);
+      setUploadError('附件处理超时，请重试或检查本地 Agent 状态。');
+    }, 60000);
     for (const file of files) {
       // Electron exposes the real on-disk path on the File object.
       const filePath = (file as unknown as { path?: string }).path || file.name;
@@ -860,8 +964,12 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [routedAgent, setRoutedAgent] = useState<RoutedAgent | null>(null);
   const [degraded, setDegraded] = useState<DegradedInfo | null>(null);
+  const [chatError, setChatError] = useState<{ summary: string; raw: string } | null>(null);
   const [stageStatus, setStageStatus] = useState<StageGateStatus | null>(null);
   const [stageBusy, setStageBusy] = useState(false);
+  // P0-03/04/06: whether the bundled Python Agent is alive. null = unknown
+  // (optimistic), 'down'/'degraded' means we must not hang on a dead Agent.
+  const [agentReady, setAgentReady] = useState<{ status: string; version?: string; mode?: string; reason?: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -883,6 +991,23 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     if (window.kyrozen && projectId) {
       window.kyrozen.getProjectState(projectId)
         .then((state) => { window.kyrozen?.sendStageAction('refresh', state?.stage ?? ''); })
+        .catch(() => {});
+    }
+
+    // P0-14: 加载该项目已有的聊天历史。消息通过后端持久化，
+    // 重启后恢复对话。仅在消息为空时加载（避免覆盖实时对话）。
+    if (window.kyrozen && projectId) {
+      window.kyrozen.loadChatMessages(projectId)
+        .then((result) => {
+          if (!result.success || !result.messages?.length) return;
+          setMessages(
+            result.messages.map((m: { role: string; content: string; operations?: unknown[] }) => ({
+              role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role as Message['role'] : 'system',
+              content: m.content,
+              operations: (Array.isArray(m as any) ? undefined : (m as any).operations),
+            }))
+          );
+        })
         .catch(() => {});
     }
   }, [projectId]);
@@ -947,6 +1072,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     const unsubStage = window.kyrozen.onStageUpdated((status) => {
       setStageStatus(status);
     });
+    const unsubAgentReady = window.kyrozen.onAgentReady((info) => {
+      setAgentReady(info);
+    });
     return () => {
       unsubChat();
       unsubPlan();
@@ -955,6 +1083,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       unsubRouted();
       unsubDegraded();
       unsubStage();
+      unsubAgentReady();
     };
   }, [onProjectChanged]);
 
@@ -972,9 +1101,12 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     setPlan(null);
     setRoutedAgent(null);
     setDegraded(null);
+    setChatError(null);
     const result = await window.kyrozen.sendChat(message);
     if (!result.success) {
-      setMessages((prev) => [...prev, { role: 'system', content: `发送失败：${result.error || '未知错误'}` }]);
+      const friendly = friendlyChatError(result.error);
+      setChatError(friendly);
+      setMessages((prev) => [...prev, { role: 'system', content: friendly.summary }]);
       setIsRunning(false);
       setActivity('');
     } else if (result.content) {
@@ -1028,13 +1160,36 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   const handleDrop = async (event: React.DragEvent) => {
     event.preventDefault();
     setIsDragging(false);
-    if (!projectId) return;
+    if (!projectId || !window.kyrozen) return;
+    const kyrozenApi = window.kyrozen;
     const files = Array.from(event.dataTransfer.files);
-    const readFiles = await Promise.all(files.map(async (file) => {
-      try { return await readDroppedFile(file); }
-      catch (error: any) { return { name: file.name, content: `无法读取文件: ${error.message || String(error)}` }; }
-    }));
-    setPendingAttachments((prev) => [...prev, ...readFiles]);
+    // P0-05: dragged media (PNG/JPEG/WebP/MP4/MOV) MUST go through the same
+    // attachment service as the file picker -- thumbnail + visual analysis --
+    // not the plain-text path. Text/code files stay inline in the chat.
+    const mediaRe = /^(image\/png|image\/jpeg|image\/webp|video\/mp4|video\/quicktime)$/;
+    try {
+      const { workspaceRoot } = await kyrozenApi.getWorkspaceRoot(projectId);
+      for (const file of files) {
+        const filePath = (file as unknown as { path?: string }).path || file.name;
+        if (mediaRe.test(file.type)) {
+          kyrozenApi.sendInteraction({ action: 'attach', path: filePath, workspace_root: workspaceRoot });
+        } else {
+          try {
+            const text = await readDroppedFile(file);
+            setPendingAttachments((prev) => [...prev, text]);
+          } catch (error: any) {
+            setPendingAttachments((prev) => [...prev, { name: file.name, content: `无法读取文件: ${error.message || String(error)}` }]);
+          }
+        }
+      }
+    } catch {
+      // Fallback: inline whatever we can still read as text.
+      const readFiles = await Promise.all(files.map(async (file) => {
+        try { return await readDroppedFile(file); }
+        catch (error: any) { return { name: file.name, content: `无法读取文件: ${error.message || String(error)}` }; }
+      }));
+      setPendingAttachments((prev) => [...prev, ...readFiles]);
+    }
   };
 
   const questionByMessage = useMemo(() => messages.map((message) => splitQuestionBlock(message.content)), [messages]);
@@ -1077,8 +1232,13 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
 
       {projectId && (
         <>
-          <SoftwareFeaturePanel projectId={projectId} onOpenPreview={onOpenPreview} />
-          <InteractionPanel projectId={projectId} />
+          <SoftwareFeaturePanel
+            projectId={projectId}
+            onOpenPreview={onOpenPreview}
+            agentReady={agentReady}
+            stageStatus={stageStatus}
+          />
+          <InteractionPanel projectId={projectId} agentReady={agentReady} />
         </>
       )}
 
@@ -1200,6 +1360,18 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       </div>
 
       <div className="p-4 border-t border-line space-y-2 bg-paper">
+        {chatError && (
+          <div className="border border-line border-l-2 border-l-danger bg-danger-soft rounded-sm px-3 py-2 text-xs">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-danger">{chatError.summary}</span>
+              <button type="button" onClick={() => setChatError(null)} className="text-ink-faint hover:text-ink shrink-0">×</button>
+            </div>
+            <details className="mt-1">
+              <summary className="cursor-pointer text-ink-faint">技术详情</summary>
+              <pre className="mt-1 max-h-32 overflow-auto bg-paper-sink border border-line rounded-sm p-2 text-[11px] text-ink-soft font-mono whitespace-pre-wrap">{chatError.raw}</pre>
+            </details>
+          </div>
+        )}
         {pendingAttachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {pendingAttachments.map((attachment, index) => (

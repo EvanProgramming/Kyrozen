@@ -224,12 +224,13 @@ async function saveCredentials(
     accessToken: accessToken || null,
     serverUrl,
   });
-  // Ad-hoc macOS builds cannot reliably access Chromium's Keychain item: the
-  // OS may block first launch with a password dialog because the app identity
-  // changes between builds. Keep the credential file private and use the
-  // OS-backed store only when explicitly opted in.
-  const useSafeStorage = process.platform !== 'darwin' || process.env.KYROZEN_ALLOW_KEYCHAIN === '1';
-  const encrypted = useSafeStorage && safeStorage.isEncryptionAvailable()
+  // P0-17: 默认使用 macOS Keychain 加密凭据。仅在 Electron safeStorage
+  // 不可用时才回退明文（文件权限仍设为 0600）。
+  // KYROZEN_DISABLE_KEYCHAIN=1 可强制回退明文（调试/CI 场景）。
+  const encryptAvailable = safeStorage.isEncryptionAvailable();
+  const keychainDisabled = process.env.KYROZEN_DISABLE_KEYCHAIN === '1';
+  const useSafeStorage = encryptAvailable && !keychainDisabled;
+  const encrypted = useSafeStorage
     ? safeStorage.encryptString(payload)
     : Buffer.from(payload);
   await fs.mkdir(path.dirname(TOKEN_STORE_PATH), { recursive: true });
@@ -246,10 +247,21 @@ async function loadCredentials(): Promise<{
   try {
     logInfo(`Loading credentials from ${TOKEN_STORE_PATH}`);
     const raw = await fs.readFile(TOKEN_STORE_PATH);
-    const useSafeStorage = process.platform !== 'darwin' || process.env.KYROZEN_ALLOW_KEYCHAIN === '1';
-    const decrypted = useSafeStorage && safeStorage.isEncryptionAvailable()
-      ? safeStorage.decryptString(raw)
-      : raw.toString();
+    const encryptAvailable = safeStorage.isEncryptionAvailable();
+    const keychainDisabled = process.env.KYROZEN_DISABLE_KEYCHAIN === '1';
+    const useSafeStorage = encryptAvailable && !keychainDisabled;
+    // 兼容旧明文凭据：先尝试 Keychain 解密，失败则回退明文 JSON 解析。
+    // 迁移到 Keychain 后下次 saveCredentials 会自动加密存储。
+    let decrypted: string;
+    if (useSafeStorage) {
+      try {
+        decrypted = safeStorage.decryptString(raw);
+      } catch {
+        decrypted = raw.toString();
+      }
+    } else {
+      decrypted = raw.toString();
+    }
     const data = JSON.parse(decrypted);
     if (data.wsToken) {
       logInfo('Loaded existing credentials, resuming session');
@@ -703,6 +715,7 @@ app.whenReady().then(async () => {
       wsUrl = getWebSocketUrlFromHttp(serverUrl);
       accessToken = credentials.accessToken;
       let resumeWsToken = credentials.wsToken;
+      let sessionExpired = false;
       // WebSocket tokens are process-local on the API server. Exchange the
       // persisted JWT on every launch so server restarts recover automatically.
       if (credentials.accessToken && credentials.accessToken.split('.').length === 3) {
@@ -722,19 +735,40 @@ app.whenReady().then(async () => {
             );
           }
         } catch (err: any) {
-          logWarn(`Could not refresh desktop session; trying stored token: ${err.message || err}`);
+          if (err?.status === 401 || err?.status === 403) {
+            // The persisted JWT has been rejected by the server: the session is
+            // dead. Do NOT show the logged-in UI with stale tokens (P0-16).
+            sessionExpired = true;
+            logWarn('Stored session is no longer valid (401/403); requiring re-login');
+          } else {
+            logWarn(`Could not refresh desktop session; trying stored token: ${err.message || err}`);
+          }
         }
       }
-      currentWsToken = resumeWsToken;
-      connectWebSocket(resumeWsToken);
-      void fetchGitHubToken();
-      const notifySessionResumed = () => {
-        mainWindow?.webContents.send('kyrozen:session-resumed', resumeWsToken, credentials.serverUrl);
-      };
-      if (mainWindow?.webContents.isLoading()) {
-        mainWindow.webContents.once('did-finish-load', notifySessionResumed);
+      if (sessionExpired) {
+        accessToken = null;
+        currentWsToken = null;
+        await clearCredentials();
+        const notifySessionExpired = () => {
+          mainWindow?.webContents.send('kyrozen:session-expired', '登录已过期，请重新登录。');
+        };
+        if (mainWindow?.webContents.isLoading()) {
+          mainWindow.webContents.once('did-finish-load', notifySessionExpired);
+        } else {
+          notifySessionExpired();
+        }
       } else {
-        notifySessionResumed();
+        currentWsToken = resumeWsToken;
+        connectWebSocket(resumeWsToken);
+        void fetchGitHubToken();
+        const notifySessionResumed = () => {
+          mainWindow?.webContents.send('kyrozen:session-resumed', resumeWsToken, credentials.serverUrl);
+        };
+        if (mainWindow?.webContents.isLoading()) {
+          mainWindow.webContents.once('did-finish-load', notifySessionResumed);
+        } else {
+          notifySessionResumed();
+        }
       }
     }
   } else {
@@ -794,7 +828,9 @@ async function apiGet(endpoint: string, auth = true) {
       accessToken = null;
     }
     const text = await response.text();
-    throw new Error(text || `HTTP ${response.status}`);
+    const error = new Error(text || `HTTP ${response.status}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -814,7 +850,9 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
       accessToken = null;
     }
     const text = await response.text();
-    throw new Error(text || `HTTP ${response.status}`);
+    const error = new Error(text || `HTTP ${response.status}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -2124,6 +2162,19 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
   }
 });
 
+// P0-14: 从后端加载聊天历史，重启后恢复对话。
+ipcMain.handle('kyrozen:load-chat-messages', async (_event, projectId: string) => {
+  if (!accessToken) return { success: false, messages: [], error: '未登录' };
+  try {
+    const data = await apiGet(`/api/projects/${encodeURIComponent(projectId)}/chat`);
+    const messages = Array.isArray(data) ? data : (Array.isArray(data?.messages) ? data.messages : []);
+    return { success: true, messages };
+  } catch (err: any) {
+    logWarn(`Failed to load chat messages for ${projectId}: ${err.message || err}`);
+    return { success: false, messages: [], error: err.message || String(err) };
+  }
+});
+
 ipcMain.on('kyrozen:cancel-task', () => {
   if (currentTaskId && currentTaskRunning) {
     sendToPythonAgent({
@@ -2609,6 +2660,13 @@ async function startPythonAgentInternal() {
   pythonAgent.on('exit', (code) => {
     logWarn(`Python Agent exited with code ${code ?? 'unknown'}`);
     sendTaskActivity({ description: '本地 Agent 已停止', status: code === 0 ? 'completed' : 'failed' });
+    // Tell the renderer the Agent is no longer available so it can stop any
+    // infinite loading state and show a degraded/offline notice (P0-03/04/06).
+    mainWindow?.webContents.send('kyzon:agent-ready', {
+      status: 'down',
+      code: code ?? null,
+      retrying: !pythonAgentStopping && code !== 0,
+    });
     pythonAgent = null;
     if (!pythonAgentStopping && code !== 0) {
       if (pythonAgentRestartCount < PYTHON_AGENT_MAX_RESTARTS) {
@@ -2703,6 +2761,17 @@ function handlePythonAgentLine(line: string) {
       logWarn(`Local agent degraded to read-only: ${String(message.params?.reason || '')}`);
       mainWindow?.webContents.send('kyrozen:agent-degraded', message.params);
       showNotification('Kyrozen', '本地 Agent 初始化失败，已降级为只读模式');
+    } else if (message.method === 'ready') {
+      // The bundled Python Agent finished booting (no import crash) and is
+      // ready to accept requests. Surface this so the UI stops showing an
+      // undefined loading state and can detect an Agent that later dies
+      // (P0-03 / P0-04 / P0-06).
+      logInfo(`Python Agent ready: ${String(message.params?.version || 'unknown')}`);
+      mainWindow?.webContents.send('kyzon:agent-ready', {
+        status: 'ready',
+        version: String(message.params?.version || ''),
+        mode: String(message.params?.mode || ''),
+      });
     } else if (message.method === 'stage_updated') {
       mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
     } else if (message.method === 'software_feature') {

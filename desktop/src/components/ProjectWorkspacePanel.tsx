@@ -98,6 +98,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [tab, setTab] = useState<(typeof TABS)[number][0]>('overview');
   const [loading, setLoading] = useState(true);
+  const [loadingSlow, setLoadingSlow] = useState(false);
   const [notice, setNotice] = useState('');
   const [decision, setDecision] = useState('');
   const [reason, setReason] = useState('');
@@ -105,10 +106,15 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadingSlow(false);
+    // P1-04: 超过 8 秒显示 "仍在加载" 提示，避免用户以为卡死。
+    const slowTimer = window.setTimeout(() => setLoadingSlow(true), 8000);
     const result = await kyrozen.getProjectWorkspace(projectId);
+    window.clearTimeout(slowTimer);
     if (result.success && result.data) { setData(result.data as WorkspaceData); setNotice(''); }
     else setNotice(result.error || '项目画布加载失败');
     setLoading(false);
+    setLoadingSlow(false);
   }, [kyrozen, projectId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -163,7 +169,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
       </div>
       {notice && <div role="status" className="px-4 py-2 text-xs bg-accent-soft text-accent border-b border-line">{notice}</div>}
       <main className="flex-1 overflow-y-auto p-5">
-        {loading || !data ? <div className="text-sm text-ink-faint">正在整理项目资料…</div> : (
+        {loading || !data ? <div className="text-sm text-ink-faint">{loadingSlow ? '项目资料较多，仍在整理中…' : '正在整理项目资料…'}</div> : (
           <div className="max-w-5xl mx-auto space-y-4">
             <div className="mb-2">
               <h3 className="font-hand text-2xl">{TABS.find(([key]) => key === tab)?.[1]}</h3>

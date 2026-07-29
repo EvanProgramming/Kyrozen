@@ -54,7 +54,10 @@ class KyrozenLogger:
 
         fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-        console = logging.StreamHandler(sys.stdout)
+        # IMPORTANT: logs go to stderr, never stdout. The desktop Python Agent
+        # talks to Electron over stdout as a JSON-RPC channel; writing log lines
+        # to stdout would corrupt that protocol and break the real client.
+        console = logging.StreamHandler(sys.stderr)
         console.setFormatter(fmt)
         self.logger.addHandler(console)
 

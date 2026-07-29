@@ -210,8 +210,9 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
         )}
       </div>
 
-      {/* 3.5 #4: create repo with owner / name / visibility confirm */}
-      {gh?.connected && !gh.expired && !status?.isRepo && (
+      {/* P0-12 修复：创建 GitHub 仓库的条件是"无远程 origin"，不是"非仓库"。
++           本地初始化后仍应能创建远程并推送。 */}
+      {gh?.connected && !gh.expired && !status?.remoteUrl && (
         <div className="mb-4 p-3 panel space-y-2">
           <div className="text-sm font-medium">创建 GitHub 仓库</div>
           <div className="text-xs text-ink-faint">所有者：<span className="text-ink-soft">{gh.login}</span></div>

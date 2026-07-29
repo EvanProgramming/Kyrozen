@@ -31,7 +31,7 @@ from kyrozen.core.stagegate import (
     compute_progress,
     get_status,
     refresh_gate,
-    stage_advance,
+    advance,
 )
 from kyrozen.core.task import Task
 from kyrozen.core import featuregen as featuregen_mod
@@ -143,6 +143,15 @@ class DesktopAgentRuntime:
             confirmation_callback=self._request_confirmation,
         )
         self._wrap_tool_execution(tools)
+        # Signal readiness so the desktop UI stops showing an undefined/loading
+        # state and can detect an Agent that fails later (P0-03/P0-04/P0-06).
+        from kyrozen import __version__ as kyrozen_version
+
+        self._notify("ready", {
+            "status": "ready",
+            "version": getattr(self.config, "version", "") or kyrozen_version,
+            "mode": getattr(self.config, "permission_mode", "strict"),
+        })
 
     def handle_request(self, request: dict[str, object]) -> None:
         """Process a JSON-RPC request from Electron."""
@@ -386,11 +395,11 @@ class DesktopAgentRuntime:
             # before any transition decision.
             gate = refresh_gate(store, str(root_path))
             if action == "advance_normal":
-                result = stage_advance(store, "normal")
+                result = advance(store, "normal")
             elif action == "advance_risk":
-                result = stage_advance(store, "risk")
+                result = advance(store, "risk")
             elif action == "return":
-                result = stage_advance(store, "return")
+                result = advance(store, "return")
             else:
                 result = {"ok": True, **get_status(store, gate)}
             self._send_response(req_id, result=result)

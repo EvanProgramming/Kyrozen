@@ -162,6 +162,7 @@ export interface PendingConfirmationInfo {
 export interface KyrozenAPI {
   login: (email: string, password: string, serverUrl: string) => Promise<LoginResult>;
   verifyOpenToken: (token: string) => Promise<VerifyResult | null>;
+  loadChatMessages: (projectId: string) => Promise<{ success: boolean; messages: Array<{ id: string; role: string; content: string; metadata?: Record<string, unknown>; created_at?: string }>; error?: string }>;
   setCurrentProject: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
   pickWorkspace: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
   getWorkspaceRoot: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
@@ -206,6 +207,7 @@ export interface KyrozenAPI {
   onProtocolUrl: (callback: (url: string) => void) => () => void;
   onSessionResumed: (callback: (token: string, serverUrl: string) => void) => () => void;
   onSessionEnded: (callback: () => void) => () => void;
+  onSessionExpired: (callback: (message: string) => void) => () => void;
   onOpenSettings: (callback: () => void) => () => void;
   sendChat: (message: string) => Promise<{
     success: boolean;
@@ -224,6 +226,7 @@ export interface KyrozenAPI {
   onAgentRouted: (callback: (decision: { task_id: string; mode: string; mode_label: string; agent_name: string; agent_display_name: string; reason: string; available_tools: string[]; restricted_tools: string[]; degraded: boolean }) => void) => () => void;
   onAgentDegraded: (callback: (info: { task_id: string; agent_display_name: string; reason: string; repair_steps: string[] }) => void) => () => void;
   onStageUpdated: (callback: (status: StageGateStatus) => void) => () => void;
+  onAgentReady: (callback: (info: { status: 'ready' | 'down'; version?: string; mode?: string; code?: number | null; retrying?: boolean }) => void) => () => void;
   onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => () => void;
   sendSoftwareFeature: (params: Record<string, unknown>) => void;
   sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string) => Promise<{ ok: boolean }>;

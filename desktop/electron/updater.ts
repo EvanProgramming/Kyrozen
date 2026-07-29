@@ -208,7 +208,14 @@ export function initAutoUpdater(mainWindow: Electron.BrowserWindow): void {
   });
 
   autoUpdater.on('error', (err) => {
-    sendUpdateStatus('error', `检查更新失败: ${err.message}`, { message: err.message });
+    // P1-02: "No published versions on GitHub" 是正常状态（尚无发布），
+    // 不应以英文错误显示。本地化为中文当前版本提示。
+    const msg = err.message || '';
+    if (/no published versions|no releases|No published/i.test(msg)) {
+      sendUpdateStatus('not-available', '当前已是最新版本');
+    } else {
+      sendUpdateStatus('error', `检查更新失败: ${msg}`, { message: msg });
+    }
   });
 
   // Check once at startup and then periodically.

@@ -230,6 +230,10 @@ class StageGateStore:
         self.events = data.get("events", [])
 
     def save(self) -> None:
+        # Ensure the .kyrozen directory exists (e.g. on first open of a project
+        # before any deliverable has been written) so the gate can persist and
+        # surface in the real client instead of raising FileNotFoundError.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "project_id": self.project_id,
             "current_stage": self.current_stage,

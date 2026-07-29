@@ -10,8 +10,9 @@ export default defineConfig({
     ['./e2e/release-reporter.ts'],
   ],
   use: {
-    // 始终记录录像（发布门槛要求可回放），失败用例额外截图。
-    video: 'on',
+    // _electron.launch() 不支持 Playwright 内置 video 录制。
+    // 关键里程碑通过 page.screenshot() 手动截图，由 release-reporter 收集。
+    // trace 和失败截图仍通过 Playwright 内置机制产生。
     trace: 'on',
     screenshot: 'only-on-failure',
   },

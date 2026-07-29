@@ -29,7 +29,9 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
       if (!cancelled && next) setState(next);
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 2000);
+    // P1-03: 轮询仅用于兜底重同步，WebSocket 事件推送是主要更新路径。
+    // 2 秒过长对服务器压力过大；改为 30 秒。
+    const timer = window.setInterval(() => void refresh(), 30_000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [projectId]);
 

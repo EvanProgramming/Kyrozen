@@ -62,6 +62,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string; login?: string; avatarUrl?: string; expired?: boolean }>({ connected: false, scope: '' });
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
@@ -196,6 +197,7 @@ function App() {
     });
 
     const unsubSessionResumed = window.kyrozen.onSessionResumed(async (token: string) => {
+      setSessionNotice(null);
       setToken(token);
       await loadProjects();
       await loadQuota();
@@ -213,6 +215,18 @@ function App() {
       setFullTrust(false);
       setGithubStatus({ connected: false, scope: '' });
       setUserProfile(null);
+    });
+
+    const unsubSessionExpired = window.kyrozen.onSessionExpired((message: string) => {
+      // P0-16: 会话失效时立即回到登录页，不再显示带旧数据的主界面。
+      setToken(null);
+      setProjects([]);
+      setCurrentProjectId(null);
+      setQuota(null);
+      setFullTrust(false);
+      setGithubStatus({ connected: false, scope: '' });
+      setUserProfile(null);
+      setSessionNotice(message || '登录已过期，请重新登录。');
     });
 
     const unsubOpenSettings = window.kyrozen.onOpenSettings(() => {
@@ -262,6 +276,7 @@ function App() {
       unsubProtocolUrl();
       unsubSessionResumed();
       unsubSessionEnded();
+      unsubSessionExpired();
       unsubOpenSettings();
       unsubOpenPreviewUrl();
       unsubFullTrustChange();
@@ -376,7 +391,7 @@ function App() {
   if (!token) {
     return (
       <div className="h-screen w-screen flex flex-col bg-paper">
-        <LoginPage />
+        <LoginPage notice={sessionNotice} />
       </div>
     );
   }

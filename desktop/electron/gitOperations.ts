@@ -128,13 +128,16 @@ export async function initGitRepo(workspaceRoot: string, remoteUrl?: string): Pr
     if (!name.value) await git.addConfig('user.name', 'Kyrozen', false, 'local');
     if (!email.value) await git.addConfig('user.email', 'kyrozen@users.noreply.github.com', false, 'local');
 
-    // 3.5 #3: when the workspace already holds real project content and there is
-    // no commit yet, create the first commit.
+    // P0-13 修复：首个提交不能只包含 .gitignore。
+    // 当 workspace 已有真实项目文件且尚无提交时，创建首个提交；
+    // 若仅有 .gitignore，跳过——让 Agent 自动提交产生第一个有意义提交。
     const hasCommits = await git.revparse(['--verify', 'HEAD']).then(() => true).catch(() => false);
     if (!hasCommits) {
       await git.add('-A');
       const status = await git.status();
-      if (status.staged.length > 0 || status.files.length > 0) {
+      const realFiles = [...(status.staged || []), ...(status.files || [])]
+        .filter((f) => f !== '.gitignore' && f !== '.kyrozen_gitignore');
+      if (realFiles.length > 0) {
         await git.commit('chore: initial Kyrozen project commit');
       }
     }

@@ -15,6 +15,10 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   operations?: Operation[];
+  /** Do not render this message (e.g. option answers shown as highlighted chips instead). */
+  hidden?: boolean;
+  /** For assistant question cards: the option.value the user picked. */
+  selectedOption?: string;
 }
 
 interface PlanStep {
@@ -78,6 +82,29 @@ function splitQuestionBlock(content: string): { markdown: string; question: Ques
   } catch {
     return { markdown: content, question: null };
   }
+}
+
+/**
+ * When restoring history, a user message that is simply the answer to the
+ * preceding question card (matching an option label or value) should not
+ * appear as a chat bubble — instead the picked option is highlighted on the
+ * question card itself. Mutates and returns the given array.
+ */
+function reconcileQuestionAnswers(messages: Message[]): Message[] {
+  for (let i = 1; i < messages.length; i++) {
+    const current = messages[i];
+    const previous = messages[i - 1];
+    if (current.role !== 'user' || previous.role !== 'assistant') continue;
+    const question = splitQuestionBlock(previous.content).question;
+    if (!question) continue;
+    const answer = current.content.trim();
+    const match = question.options.find((option) => option.label === answer || option.value === answer);
+    if (match) {
+      previous.selectedOption = match.value;
+      current.hidden = true;
+    }
+  }
+  return messages;
 }
 
 // P0-15: never surface raw backend JSON (task IDs, exception text) to a normal
@@ -309,7 +336,7 @@ function StageGatePanel({
         className="w-full px-4 py-2 flex items-center justify-between text-left"
       >
         <span className="flex items-center gap-2">
-          <span className="font-hand text-lg text-ink">阶段门禁 · {gate.stage_label}</span>
+          <span className="font-display text-lg text-ink">阶段门禁 · {gate.stage_label}</span>
           <span className="text-xs text-ink-faint">{gate.index + 1}/{gate.total}</span>
         </span>
         <span className="flex items-center gap-3">
@@ -614,7 +641,7 @@ function SoftwareFeaturePanel({
         className="w-full px-4 py-2 flex items-center justify-between text-left"
       >
         <span className="flex items-center gap-2">
-          <span className="font-hand text-lg text-ink">软件生成</span>
+          <span className="font-display text-lg text-ink">软件生成</span>
           <span className="text-xs text-ink-faint">真实生成 · 运行 · 修复</span>
         </span>
         <span className="text-xs text-ink-faint">{open ? '收起' : '展开'}</span>
@@ -922,7 +949,7 @@ function InteractionPanel({
     <div className="bg-surface border-b border-line">
       <div className="flex items-center justify-between px-4 py-2">
         <button type="button" onClick={() => { setAttOpen((v) => !v); setOpOpen((v) => !v); }} className="flex items-center gap-2">
-          <span className="font-hand text-lg text-ink">附件 · 状态 · 操作</span>
+          <span className="font-display text-lg text-ink">附件 · 状态 · 操作</span>
         </button>
         <span className={`inline-flex items-center gap-1.5 rounded-sm border border-line-strong px-2 py-0.5 text-xs ${status?.state ? 'text-accent' : 'text-ink-faint'}`}>
           <span className={`w-2 h-2 rounded-full ${status?.state ? 'bg-accent' : 'bg-ink-faint'}`} />
@@ -1058,11 +1085,13 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         .then((result) => {
           if (!result.success || !result.messages?.length) return;
           setMessages(
-            result.messages.map((m: { role: string; content: string; operations?: unknown[] }) => ({
-              role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role as Message['role'] : 'system',
-              content: m.content,
-              operations: (Array.isArray(m as any) ? undefined : (m as any).operations),
-            }))
+            reconcileQuestionAnswers(
+              result.messages.map((m: { role: string; content: string; operations?: unknown[] }) => ({
+                role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role as Message['role'] : 'system',
+                content: m.content,
+                operations: (Array.isArray(m as any) ? undefined : (m as any).operations),
+              }))
+            )
           );
         })
         .catch(() => {});
@@ -1172,9 +1201,11 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, activity, confirmation]);
 
-  const sendMessage = async (message: string) => {
+  const sendMessage = async (message: string, options?: { echoUser?: boolean }) => {
     if (!window.kyrozen || !projectId || !message.trim()) return;
-    setMessages((prev) => [...prev, { role: 'user', content: message }]);
+    if (options?.echoUser !== false) {
+      setMessages((prev) => [...prev, { role: 'user', content: message }]);
+    }
     setInput('');
     setPendingAttachments([]);
     setIsRunning(true);
@@ -1291,7 +1322,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       {plan && (
         <div className="bg-surface border-b border-line">
           <button type="button" onClick={() => setPlanExpanded((value) => !value)} className="w-full px-4 py-2 flex items-center justify-between text-left">
-            <span className="font-hand text-lg text-ink">任务计划</span>
+            <span className="font-display text-lg text-ink">任务计划</span>
             <span className="text-xs text-ink-faint">{planExpanded ? '收起' : '展开'}</span>
           </button>
           {planExpanded && (
@@ -1356,7 +1387,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           <div className="panel p-4 border-l-2 border-l-danger bg-danger-soft" role="alert" aria-label="只读降级提示">
             <div className="flex items-center gap-2">
               <AgentModeIcon mode="development" className="w-4 h-4 flex-shrink-0 text-danger" />
-              <div className="font-hand text-lg text-danger">本地 Agent 已降级为只读模式</div>
+              <div className="font-display text-lg text-danger">本地 Agent 已降级为只读模式</div>
             </div>
             <div className="text-sm text-ink mt-1">{degraded.agent_display_name} 初始化失败，当前无法修改文件或执行命令。</div>
             <div className="text-xs text-ink-faint mt-2">原因：{degraded.reason}</div>
@@ -1369,8 +1400,10 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           </div>
         )}
         {messages.map((message, index) => {
+          if (message.hidden) return null;
           const parsed = questionByMessage[index];
           const expanded = expandedOperations.has(index);
+          const answered = message.selectedOption !== undefined;
           return (
             <div key={index} data-testid={`chat-message-${message.role}`} className={`max-w-[84%] rounded-sm px-4 py-3 text-sm ${
               message.role === 'user' ? 'bg-accent text-white ml-auto' : message.role === 'system' ? 'bg-warning-soft border border-line text-warning' : 'bg-surface border border-line text-ink'
@@ -1380,11 +1413,31 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
                 <div className="mt-3 border-t border-line pt-3">
                   <div className="font-medium text-ink mb-2">{parsed.question.question}</div>
                   <div className="flex flex-wrap gap-2">
-                    {parsed.question.options.map((option) => (
-                      <button key={option.value} type="button" onClick={() => void sendMessage(option.label)} disabled={isRunning} className="btn-secondary text-xs">
-                        {option.label}
-                      </button>
-                    ))}
+                    {parsed.question.options.map((option) => {
+                      const isSelected = message.selectedOption === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            if (answered || isRunning) return;
+                            setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, selectedOption: option.value } : m)));
+                            void sendMessage(option.label, { echoUser: false });
+                          }}
+                          disabled={isRunning || answered}
+                          aria-pressed={isSelected}
+                          className={`text-xs rounded-sm px-3 py-1.5 border transition-colors ${
+                            isSelected
+                              ? 'bg-accent text-white border-accent font-medium'
+                              : answered
+                                ? 'bg-surface text-ink-faint border-line opacity-60'
+                                : 'btn-secondary'
+                          }`}
+                        >
+                          {isSelected ? '✓ ' : ''}{option.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1426,7 +1479,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
 
         {confirmation && (
           <div className="max-w-[84%] panel p-4 border-l-2 border-l-warning" role="dialog" aria-label="操作确认">
-            <div className="font-hand text-lg">需要你的确认</div>
+            <div className="font-display text-lg">需要你的确认</div>
             <div className="text-sm text-ink mt-1">{confirmation.tool}.{confirmation.action}</div>
             <div className="text-xs text-ink-faint mt-2">{confirmation.reason || '此操作会修改项目或运行命令。'}</div>
             <pre className="mt-3 max-h-40 overflow-auto bg-paper-sink border border-line rounded-sm p-3 text-xs text-ink-soft font-mono whitespace-pre-wrap">{JSON.stringify(confirmation.parameters, null, 2)}</pre>

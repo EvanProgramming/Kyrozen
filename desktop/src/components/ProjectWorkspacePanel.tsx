@@ -49,6 +49,12 @@ function empty(value: unknown) {
     || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0);
 }
 
+// P0-13: block raw runtime fields from canvas rendering
+const BLOCKED_KEYS = new Set([
+  'command', 'stdout', 'stderr', 'exit_code', 'duration_ms', 'cwd',
+  'previous_error', 'stderr_snippet', 'error_type',
+]);
+
 function readableKey(key: string) {
   return LABELS[key] || key.replace(/_/g, ' ');
 }
@@ -77,7 +83,10 @@ function Value({ value }: { value: unknown }) {
   }
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      {Object.entries(value as Row).filter(([key, item]) => !key.endsWith('_id') && !['id', 'user_id', 'created_at', 'updated_at'].includes(key) && !empty(item)).map(([key, item]) => (
+      {Object.entries(value as Row).filter(([key, item]) =>
+        !key.endsWith('_id') && !['id', 'user_id', 'created_at', 'updated_at'].includes(key)
+        && !BLOCKED_KEYS.has(key) && !empty(item)
+      ).map(([key, item]) => (
         <div key={key} className="min-w-0">
           <div className="text-xs font-medium text-ink-faint mb-1">{readableKey(key)}</div>
           <div className="text-sm text-ink-soft"><Value value={item} /></div>

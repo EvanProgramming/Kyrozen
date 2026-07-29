@@ -66,7 +66,7 @@ class OperationRecord:
             ended_at=d.get("ended_at"),
             input_summary=d.get("input_summary", ""),
             output_summary=d.get("output_summary", ""),
-            status=d.get("status", "success"),
+            status=d.get("status", "running"),
             error_reason=d.get("error_reason", ""),
             is_diagnostic=d.get("is_diagnostic", False),
         )
@@ -102,8 +102,15 @@ class OperationLog:
     ) -> None:
         rec = self._pending.pop(record_id, None)
         if rec is None:
-            # Operation finished without a tracked start (e.g. restored) -- synthesize.
-            rec = OperationRecord(id=record_id, action="", started_at=time.time())
+            # P0-12: try recovering the started record from disk in case the
+            # in-memory _pending dict was lost across process restarts.
+            existing = self.list()
+            for entry in existing:
+                if entry.get("id") == record_id:
+                    rec = OperationRecord.from_dict(entry)
+                    break
+            if rec is None:
+                rec = OperationRecord(id=record_id, action="", started_at=time.time())
         rec.ended_at = time.time()
         rec.output_summary = output_summary
         rec.status = status

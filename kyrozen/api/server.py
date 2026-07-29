@@ -2342,6 +2342,28 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "updated_at": now,
         }
         _db.save_feedback(feedback)
+        # P0-19: also save as a project artifact so the canvas testing tab
+        # can display user feedback after refresh.
+        if request.project_id:
+            try:
+                pm = _get_project_manager()
+                pm.save_artifact(
+                    project_id=request.project_id,
+                    artifact_id=f"feedback_{feedback_id}",
+                    type="user_feedback",
+                    title=f"用户反馈 - {request.type}",
+                    content=json.dumps({
+                        "source_type": "manual",
+                        "content": request.description,
+                        "priority": request.priority,
+                        "sentiment": "",
+                        "problems": [],
+                        "participant_id": current_user.user_id,
+                        "timestamp": now,
+                    }, ensure_ascii=False),
+                )
+            except Exception as exc:
+                _logger.warning("Failed to save feedback artifact: %s", exc)
         return feedback
 
     @app.get("/api/feedback")

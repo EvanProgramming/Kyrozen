@@ -1274,7 +1274,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           );
         })}
 
-        {isRunning && activity && (
+        {activity && (
           <div className="inline-flex items-center gap-2 bg-surface border border-line rounded-sm px-3 py-2 text-sm text-ink-soft" role="status">
             <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span>{activity}</span>

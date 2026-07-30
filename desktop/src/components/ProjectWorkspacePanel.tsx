@@ -2,16 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-// Minimal surface of the desktop bridge used by this panel. Declared locally so
-// the component does not depend on the (fragile) global `Window.kyzon` ambient
-// augmentation, which intermittently fails to resolve during `tsc` builds.
-interface CanvasBridge {
-  getProjectWorkspace: (projectId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
-  createDecision: (projectId: string, decision: string, reason: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
-  createFeedback: (projectId: string, description: string, type: string, priority: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
-  exportProject: (projectId: string) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>;
-}
-
 interface Props { projectId: string; onClose: () => void }
 type Row = Record<string, unknown>;
 type WorkspaceData = {
@@ -158,7 +148,7 @@ function Section({ title, description, value }: { title: string; description?: s
 }
 
 export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
-  const kyzon = (window as unknown as { kyzon: CanvasBridge }).kyzon;
+  const kyzon = window.kyrozen!;
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [tab, setTab] = useState<(typeof TABS)[number][0]>('overview');
   const [loading, setLoading] = useState(true);

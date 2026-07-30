@@ -287,7 +287,13 @@ class DesktopAgentRuntime:
         self.send_message = send_message
         inner_model = CloudProxyModelProvider(send_message=send_message)
         self.model = PlanDetectingModelProvider(inner_model, self._emit_execution_plan)
-        tools = get_default_registry(config=self.config)
+        tools = get_default_registry(
+            config=self.config,
+            tavily_api_key=self.config.tavily_api_key,
+            serper_api_key=self.config.serper_api_key,
+            github_token=self.config.github_token,
+            semantic_scholar_api_key=self.config.semantic_scholar_api_key,
+        )
         self.agent = BaseAgent(
             config=self.config,
             model=self.model,
@@ -512,7 +518,13 @@ class DesktopAgentRuntime:
 
         handoff_store = HandoffStore(state_dir / "handoff.json", project_id=project_id)
         handoff_tool = HandoffTool(handoff_store)
-        registry = get_default_registry(config=self.config)
+        registry = get_default_registry(
+            config=self.config,
+            tavily_api_key=self.config.tavily_api_key,
+            serper_api_key=self.config.serper_api_key,
+            github_token=self.config.github_token,
+            semantic_scholar_api_key=self.config.semantic_scholar_api_key,
+        )
         registry.register(handoff_tool)
 
         # Stage gate (feature 3.2): keep the local gate in sync with the

@@ -417,6 +417,10 @@ class AgentRouter:
             module = importlib.import_module(module_path)
             agent_class = getattr(module, class_name)
             agent: BaseAgent = agent_class(tools=effective_registry, **agent_kwargs)
+            # Let the agent know which routed mode it is serving (one agent class
+            # can serve multiple modes, e.g. ProductPlanningAgent handles both
+            # product_definition and solution_design with different mandates).
+            agent.route_mode = mode
         except Exception as exc:  # noqa: BLE001 - any init failure must degrade, not crash
             read_only = build_read_only_registry(
                 registry,

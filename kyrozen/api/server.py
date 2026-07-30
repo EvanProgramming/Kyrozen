@@ -3435,17 +3435,27 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                                 and isinstance(result, dict)
                                 and str(result.get("answer", "")).strip()
                             ):
-                                pm.save_chat_message(
-                                    {
-                                        "id": str(uuid.uuid4()),
-                                        "user_id": user_id,
-                                        "project_id": task.project_id,
-                                        "role": "assistant",
-                                        "content": str(result["answer"]),
-                                        "metadata": {"task_id": task_id},
-                                        "created_at": datetime.now(timezone.utc).isoformat(),
-                                    }
-                                )
+                                # CRITICAL: persist the assistant reply to chat history so
+                                # it survives app restarts. A failure here must NEVER kill
+                                # the websocket loop (a previous NameError silently dropped
+                                # every desktop assistant message).
+                                try:
+                                    _get_project_manager().save_chat_message(
+                                        {
+                                            "id": str(uuid.uuid4()),
+                                            "user_id": user_id,
+                                            "project_id": task.project_id,
+                                            "role": "assistant",
+                                            "content": str(result["answer"]),
+                                            "metadata": {"task_id": task_id},
+                                            "created_at": datetime.now(timezone.utc).isoformat(),
+                                        }
+                                    )
+                                except Exception:
+                                    logger.error(
+                                        f"Failed to persist assistant chat message for task {task_id}",
+                                        exc_info=True,
+                                    )
 
                 elif msg_type == "confirmation_response":
                     # TODO: wire into running agent confirmation queue

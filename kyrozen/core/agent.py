@@ -25,6 +25,17 @@ from .task import Task, TaskManager
 class BaseAgent:
     """Base agent that can receive tasks, call models, and execute tools."""
 
+    #: Tool names of which at least ONE must execute successfully before a
+    #: plain-text response is accepted as the final answer (only enforced when
+    #: :meth:`_action_required` returns True for the user input). Subclasses
+    #: (e.g. SoftwareDevelopmentAgent) override this so the model can no longer
+    #: "narrate a plan" and have the loop treat it as task completion.
+    required_actions: tuple[str, ...] = ()
+
+    #: How many corrective re-prompts to send when the model answers with prose
+    #: even though a required action has not happened yet.
+    max_action_nudges: int = 2
+
     def __init__(
         self,
         config: KyrozenConfig,
@@ -364,6 +375,9 @@ class BaseAgent:
         max_rounds = getattr(self, "max_rounds", 8)
         final_answer = ""
         last_response_had_tools = False
+        executed_tools: set[str] = set()
+        nudges_used = 0
+        action_needed = bool(self.required_actions) and self._action_required(user_input)
 
         try:
             for round_num in range(max_rounds):
@@ -383,6 +397,29 @@ class BaseAgent:
                 calls = self._extract_tool_calls(text)
                 last_response_had_tools = bool(calls)
                 if not calls:
+                    # The model answered in prose. If this stage REQUIRES a real
+                    # deliverable action that has not happened yet, do NOT accept
+                    # the prose as completion -- force the model to act.
+                    if (
+                        action_needed
+                        and not (executed_tools & set(self.required_actions))
+                        and nudges_used < self.max_action_nudges
+                    ):
+                        nudges_used += 1
+                        self.logger.agent(
+                            f"Model replied with prose but required action missing; nudging ({nudges_used}/{self.max_action_nudges})",
+                            task_id=task.id,
+                        )
+                        messages.append({"role": "assistant", "content": text})
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "你刚才只输出了文字描述，但没有调用任何工具。禁止只描述计划或宣布“即将保存/即将写入”。"
+                                f"你必须现在立即调用以下工具之一真实产出交付物：{', '.join(self.required_actions)}。"
+                                "只输出工具调用 JSON（格式 {\"tool\": ..., \"action\": ..., \"parameters\": {...}}），不要输出任何其他文字。"
+                            ),
+                        })
+                        continue
                     final_answer = text
                     break
 
@@ -392,6 +429,9 @@ class BaseAgent:
                     final_answer = clean_text
 
                 results = self._execute_tool_calls(task, calls, confirmed=confirmed)
+                for item in results:
+                    if item.get("success"):
+                        executed_tools.add(str(item.get("tool", "")))
                 self._check_cancelled(task)
                 if task.status == "waiting_confirmation":
                     self.task_manager.update(task)
@@ -435,6 +475,30 @@ class BaseAgent:
                 if synthesized:
                     final_answer = synthesized
 
+            # If the stage REQUIRED a real deliverable action and the model still
+            # never performed one, try the deterministic fallback (e.g. the
+            # development agent scaffolds the project itself). If no fallback is
+            # available, FAIL the task explicitly instead of pretending success --
+            # the UI then shows a clear error with a retry button.
+            if action_needed and not (executed_tools & set(self.required_actions)):
+                fallback_answer = self._deterministic_fallback(task, user_input, final_answer)
+                if fallback_answer is not None:
+                    final_answer = fallback_answer
+                else:
+                    error_msg = (
+                        f"本阶段需要真实产出交付物（必需工具：{', '.join(self.required_actions)}），"
+                        "但 AI 多次尝试后仍未执行任何工具调用，任务未完成。请点击重试，或换一种更明确的表述再试一次。"
+                    )
+                    task.fail(error_msg)
+                    task.result = {"answer": error_msg}
+                    self.logger.error(
+                        "Required deliverable action never executed; task failed",
+                        task_id=task.id,
+                        project_id=project_id,
+                    )
+                    self.task_manager.update(task)
+                    return
+
             if not final_answer:
                 if task.steps:
                     final_answer = "我已经完成了相关操作，但没有生成最终总结。请告诉我是否需要我补充说明。"
@@ -458,6 +522,23 @@ class BaseAgent:
         elapsed = time.time() - start_time
         self.logger.perf(f"Task finished in {elapsed:.2f}s", task_id=task.id, elapsed_seconds=elapsed, project_id=project_id)
         self.task_manager.update(task)
+
+    def _action_required(self, user_input: str) -> bool:
+        """Whether the current user input demands a real deliverable action.
+
+        Subclasses override this with intent heuristics so plain Q&A messages
+        (e.g. "当前进度如何？") are NOT forced into tool calls.
+        """
+        return False
+
+    def _deterministic_fallback(self, task: Task, user_input: str, model_answer: str) -> str | None:
+        """Last-resort deterministic deliverable generation.
+
+        Called when the model failed to execute any of :attr:`required_actions`.
+        Return the final answer text on success, or ``None`` to signal that no
+        fallback exists (the task will then be failed explicitly).
+        """
+        return None
 
     def cancel(self) -> None:
         """Request cancellation of the currently running agent loop."""

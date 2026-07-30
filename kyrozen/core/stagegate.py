@@ -527,6 +527,7 @@ def record_report_deliverable(
     deliverable_id: str,
     confirmation_id: str,
     detail: str = "报告已生成，已自动确认",
+    auto_confirm: bool = True,
 ) -> None:
     """After a report deliverable file is materialized on disk, re-scan the gate
     and auto-record the stage's paired confirmation item.
@@ -556,8 +557,31 @@ def record_report_deliverable(
                 break
         if found:
             store.record_deliverable(deliverable_id, True)
-            store.record_confirmation(confirmation_id, True, detail=detail)
+            if auto_confirm:
+                store.record_confirmation(confirmation_id, True, detail=detail)
             store.save()
+    except Exception:
+        pass
+
+
+def record_verification_result(
+    workspace_root: str | Path,
+    item_id: str,
+    passed: bool,
+    detail: str = "",
+) -> None:
+    """Record a real build/test verification outcome into the stage gate.
+
+    Called by the deterministic software engine after ``BuildRunner.run_all``
+    so ``build_passes`` / ``tests_pass`` reflect what actually happened instead
+    of staying forever unsatisfied. Silent no-op on any storage error.
+    """
+    try:
+        root = Path(workspace_root)
+        store = StageGateStore(root / ".kyrozen" / "stagegate.json")
+        store.record_verification(item_id, passed, detail=detail)
+        refresh_gate(store, str(root))
+        store.save()
     except Exception:
         pass
 

@@ -127,6 +127,45 @@ class SavePRDTool(Tool):
         block("范围外 Out of Scope", d.get("out_of_scope", []))
         return chr(10).join(lines)
 
+    _PLACEHOLDERS = {"", "无", "(无)", "暂无", "n/a", "na", "none", "null", "tbd", "待定", "-"}
+
+    @classmethod
+    def _is_placeholder(cls, value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip().lower() in cls._PLACEHOLDERS
+        if isinstance(value, (list, dict)):
+            if not value:
+                return True
+            if isinstance(value, list):
+                return all(cls._is_placeholder(v) for v in value)
+            return all(cls._is_placeholder(v) for v in value.values())
+        return False
+
+    @classmethod
+    def _validate_quality(cls, prd) -> list[str]:
+        """Return human-readable reasons why the PRD is too hollow to save."""
+        d = prd.to_dict() if hasattr(prd, "to_dict") else dict(prd)
+        errors: list[str] = []
+        required = {
+            "overview": "概览 Overview 不能为空",
+            "user_stories": "用户故事 User Stories 至少需要 1 条真实内容",
+            "functional_requirements": "功能需求 Functional Requirements 至少需要 1 条真实内容",
+        }
+        for key, message in required.items():
+            if cls._is_placeholder(d.get(key)):
+                errors.append(message)
+        # An overview of only a couple of characters is a stub in disguise.
+        overview = d.get("overview")
+        if (
+            isinstance(overview, str)
+            and not cls._is_placeholder(overview)
+            and len(overview.strip()) <= 3
+        ):
+            errors.append("概览 Overview 过于简略（不足 3 字）")
+        return errors
+
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         project_id = parameters.get("project_id")
         prd_data = parameters.get("prd", {})
@@ -136,6 +175,21 @@ class SavePRDTool(Tool):
             prd = PRD.from_dict(prd_data)
         except ValueError as e:
             return ToolResult(success=False, data=None, error=str(e))
+        # GATE HONESTY: a hollow PRD (empty/placeholder required sections) must
+        # NOT be written to disk, because PRD.md existence is the hard gate into
+        # development. Reject with actionable reasons so the model regenerates a
+        # complete PRD instead of shipping "无".
+        quality_errors = self._validate_quality(prd)
+        if quality_errors:
+            return ToolResult(
+                success=False,
+                data=None,
+                error=(
+                    "PRD 内容不完整，已拒绝保存（PRD 是进入开发阶段的硬门禁，不允许空洞内容）："
+                    + "；".join(quality_errors)
+                    + "。请补全后重新调用 save_prd，内容必须覆盖用户明确提出的全部需求。"
+                ),
+            )
         result: dict[str, Any] = {}
         # Best-effort artifact persistence (not required on the desktop).
         if self.project_manager is not None:

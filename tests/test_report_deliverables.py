@@ -107,6 +107,10 @@ def test_save_market_research_writes_market_md_and_autoconfirms():
         "opportunities": ["垂直场景"],
         "risks": ["巨头竞争"],
         "conclusion": "值得进入",
+        "sources": [
+            {"title": "Cursor 官网", "url": "https://www.cursor.com/"},
+            {"title": "GitHub Trending", "url": "https://github.com/trending"},
+        ],
     }
     res = tool._execute("save", {"project_id": "p1", "report": report})
     assert res.success, res.error
@@ -140,6 +144,55 @@ def test_save_changelog_writes_changelog_md_and_autoconfirms():
     store = _make_store(tmp)
     assert store.records.get("changelog", {}).get("detected") is True
     assert store.records.get("changelog_confirmed", {}).get("confirmed") is True
+
+
+def test_save_market_research_without_evidence_not_confirmed():
+    """Round-2 fix #94: a report carrying no external evidence (no http/https
+    sources) must still be materialized (detected) but must NOT auto-confirm the
+    market_confirmed gate, and must warn the caller."""
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    tool = SaveMarketResearchReportTool(project_manager=None, config=_FakeConfig(tmp))
+    report = {
+        "project_id": "p1",
+        "topic": "AI 编程助手市场",
+        "summary": "搜索失败，无可用结果",
+        "competitors": [],
+        "opportunities": [],
+        "risks": [],
+        "conclusion": "无法确定",
+    }
+    res = tool._execute("save", {"project_id": "p1", "report": report})
+    assert res.success, res.error
+    target = Path(tmp) / "docs" / "MARKET.md"
+    assert target.exists(), "docs/MARKET.md was not written"
+    store = _make_store(tmp)
+    assert store.records.get("market_report", {}).get("detected") is True
+    # No evidence -> the confirmation gate stays open.
+    assert store.records.get("market_confirmed", {}).get("confirmed") is not True
+    assert "warning" in res.data
+
+
+def test_save_prd_rejects_hollow_prd():
+    """Round-2 fix #94: a PRD whose required sections are placeholders (e.g. "无")
+    must be rejected outright -- no PRD.md on disk, so the hard development gate
+    stays unsatisfied."""
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    tool = SavePRDTool(project_manager=None, config=_FakeConfig(tmp))
+    hollow = {
+        "overview": "无",
+        "user_stories": ["无"],
+        "functional_requirements": ["无"],
+        "non_functional_requirements": ["无"],
+        "mvp_scope": {"features": ["无"]},
+        "out_of_scope": ["无"],
+    }
+    res = tool._execute("save", {"project_id": "p1", "prd": hollow})
+    assert not res.success, "hollow PRD should be rejected"
+    assert not (Path(tmp) / "PRD.md").exists(), "hollow PRD must not be written"
 
 
 def test_save_changelog_accepts_raw_content():

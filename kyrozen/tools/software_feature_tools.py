@@ -95,10 +95,28 @@ class SoftwareFeatureTool(Tool):
         },
     )
 
-    def __init__(self, project_manager: Any = None, executor: fg.CommandExecutor | None = None) -> None:
+    def __init__(
+        self,
+        project_manager: Any = None,
+        executor: fg.CommandExecutor | None = None,
+        config: Any = None,
+    ) -> None:
         super().__init__()
         self.project_manager = project_manager
         self.executor = executor or fg.CommandExecutor()
+        self.config = config
+
+    def _resolve_workspace(self, params: dict[str, Any]) -> str:
+        """workspace_root parameter, falling back to the desktop config workspace."""
+        ws = str(params.get("workspace_root") or "")
+        if ws:
+            return ws
+        cfg_ws = getattr(self.config, "workspace_root", None)
+        if cfg_ws:
+            from pathlib import Path
+            if Path(cfg_ws).is_absolute():
+                return str(cfg_ws)
+        return ""
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
         if action == "generate":
@@ -112,7 +130,7 @@ class SoftwareFeatureTool(Tool):
         return ToolResult(success=False, data=None, error=f"Unsupported action '{action}'")
 
     def _generate(self, params: dict[str, Any]) -> ToolResult:
-        ws = str(params.get("workspace_root"))
+        ws = self._resolve_workspace(params)
         if not ws:
             return ToolResult(success=False, data=None, error="workspace_root is required")
         prd = _parse_prd(params.get("prd"))
@@ -123,6 +141,16 @@ class SoftwareFeatureTool(Tool):
             description=str(params.get("description") or ""),
         )
         result = fg.scaffold_project(spec, ws)
+        # Re-scan the stage gate so source_code / readme deliverables flip to
+        # detected immediately (progress panel updates without a restart).
+        try:
+            from kyrozen.core.stagegate import StageGateStore, refresh_gate
+            from pathlib import Path
+            store = StageGateStore(Path(ws) / ".kyrozen" / "stagegate.json")
+            refresh_gate(store, ws)
+            store.save()
+        except Exception:
+            pass
         return ToolResult(
             success=True,
             data={
@@ -134,7 +162,7 @@ class SoftwareFeatureTool(Tool):
         )
 
     def _run(self, params: dict[str, Any]) -> ToolResult:
-        ws = str(params.get("workspace_root"))
+        ws = self._resolve_workspace(params)
         if not ws:
             return ToolResult(success=False, data=None, error="workspace_root is required")
         port = int(params.get("port") or fg.DEFAULT_PORT)
@@ -147,6 +175,18 @@ class SoftwareFeatureTool(Tool):
         saved = fg.save_software_feature(ws, spec, run, feature_records=records)
         # P0-10: update kyrozen_feature.json manifest to reflect run result
         _persist_feature_status(ws, run.overall_success)
+        # Record the REAL verification outcome into the stage gate so
+        # build_passes reflects what actually happened.
+        try:
+            from kyrozen.core.stagegate import record_verification_result
+            record_verification_result(
+                ws,
+                "build_passes",
+                run.overall_success,
+                detail="构建/测试/核心流程验证" + ("通过" if run.overall_success else "失败"),
+            )
+        except Exception:
+            pass
         return ToolResult(
             success=run.overall_success,
             data={
@@ -161,7 +201,7 @@ class SoftwareFeatureTool(Tool):
         )
 
     def _repair(self, params: dict[str, Any]) -> ToolResult:
-        ws = str(params.get("workspace_root"))
+        ws = self._resolve_workspace(params)
         if not ws:
             return ToolResult(success=False, data=None, error="workspace_root is required")
         manifest = fg.load_manifest(ws)
@@ -185,7 +225,7 @@ class SoftwareFeatureTool(Tool):
         )
 
     def _noncoding(self, params: dict[str, Any]) -> ToolResult:
-        ws = str(params.get("workspace_root"))
+        ws = self._resolve_workspace(params)
         dtype = str(params.get("deliverable_type") or "")
         title = str(params.get("title") or "未命名交付物")
         fields = _parse_fields(params.get("fields"))

@@ -174,7 +174,7 @@ def get_default_registry(
     registry.register(UpdateSuggestionStatusTool(project_manager, learning_repository))
     registry.register(ExtractLearningFromEventTool(project_manager, learning_repository))
     registry.register(RunProjectAnalysisTool(project_manager, learning_repository))
-    registry.register(SoftwareFeatureTool(project_manager))
+    registry.register(SoftwareFeatureTool(project_manager, config=config))
     registry.register(InteractionTool(project_manager))
     registry.register(GitGithubTool(github_token=github_token))
     return registry

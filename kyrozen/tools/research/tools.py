@@ -246,14 +246,43 @@ class SaveMarketResearchReportTool(Tool):
                 logger.debug("write MARKET.md failed: %s", exc)
         if not result:
             return ToolResult(success=False, data=None, error="无法保存调研报告：未找到可写的项目工作区。")
-        # Auto-confirm the paired confirmation item now that the report exists.
+        # GATE HONESTY: only auto-confirm the research when the report carries
+        # real external evidence (clickable http(s) sources). A report that says
+        # "搜索失败 / 无结果" must NOT silently satisfy the gate -- the user has to
+        # confirm it manually (or configure the search service and retry).
+        has_evidence = self._has_external_evidence(report)
+        result["external_evidence"] = has_evidence
         if workspace and result.get("file"):
             try:
                 from kyrozen.core.stagegate import record_report_deliverable
-                record_report_deliverable(workspace, "market_report", "market_confirmed")
+
+                if has_evidence:
+                    record_report_deliverable(workspace, "market_report", "market_confirmed")
+                else:
+                    # File was written, so the deliverable IS detected; only the
+                    # user-confirmation gate is held back until real evidence exists.
+                    record_report_deliverable(
+                        workspace,
+                        "market_report",
+                        "market_confirmed",
+                        auto_confirm=False,
+                    )
             except Exception:
                 pass
+            if not has_evidence:
+                result["warning"] = (
+                    "报告中没有任何外部证据链接（http/https 来源），未自动确认市场调研门禁。"
+                    "请配置搜索服务后重新调研，或由用户在进度面板手动确认。"
+                )
         return ToolResult(success=True, data=result)
+
+    @staticmethod
+    def _has_external_evidence(report) -> bool:
+        """True when the report contains at least one real http(s) source URL."""
+        import re
+        data = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+        blob = json.dumps(data, ensure_ascii=False)
+        return bool(re.search(r"https?://[^\s\"']{8,}", blob))
 
 class RecordOpportunityDecisionTool(Tool):
     """Record the final opportunity decision from market research."""

@@ -45,6 +45,53 @@ from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory
 from kyrozen.tools import get_default_registry
 
+# Round-3 (2026-07-30): natural-language stage progression. A normal user moves
+# through the journey by plain language; the stage gate must follow that intent
+# or the agent stays pinned to problem_discovery forever (so the development
+# agent never runs and no source is ever written). Ordered low->high; we pick
+# the FURTHEST intended stage so "直接帮我做出来" lands in development even if
+# the user also mentioned an earlier phase.
+_STAGE_INTENT_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("market_research", re.compile(
+        r"调研|有没有人需要|市场|竞品|用户需求分析|市场分析|看看有没有|用户调研|需求调研|竞品分析",
+        re.IGNORECASE,
+    )),
+    ("product_definition", re.compile(
+        r"产品功能|产品定义|功能定下来|定功能|PRD|需求定|把需求|产品方案|功能清单|定义产品|产品规划|功能规划",
+        re.IGNORECASE,
+    )),
+    ("solution_design", re.compile(
+        r"技术方案|设计实现|架构设计|技术选型|实现方式|技术设计|方案设计|技术架构|技术实现|做技术方案",
+        re.IGNORECASE,
+    )),
+    ("development", re.compile(
+        r"做出来|生成(应用|产品|项目|软件)|实现(应用|产品|这个)|写(代码|程序|源码)|构建(应用|项目)|"
+        r"开发(应用|软件|这个)|出(代码|源码)|可运行|动手(做|开发)|开始(做|开发|写代码)|"
+        r"帮我(做出来|开发|生成)|做出一个|开发这个|写一个",
+        re.IGNORECASE,
+    )),
+    ("testing", re.compile(
+        r"跑?测试|运行测试|执行测试|测试用例|验收测试|回归测试|单元测|验证一下|测一测",
+        re.IGNORECASE,
+    )),
+)
+
+
+def _detect_intended_stage(message: str) -> str | None:
+    """Return the furthest lifecycle stage the user's message clearly intends to
+    move into, or ``None`` if the message is plain Q&A (no progression intent)."""
+    if not message:
+        return None
+    target: str | None = None
+    target_idx = -1
+    for stage, pattern in _STAGE_INTENT_PATTERNS:
+        if pattern.search(message):
+            idx = STAGES.index(stage) if stage in STAGES else -1
+            if idx > target_idx:
+                target = stage
+                target_idx = idx
+    return target
+
 
 class PendingConfirmation:
     """Thread-safe container for an outstanding user confirmation."""
@@ -357,6 +404,29 @@ class DesktopAgentRuntime:
         block = json.dumps(parsed, ensure_ascii=False)
         return f"{cleaned}\n\n```kyrozen-question\n{block}\n```".strip()
 
+    # Belt-and-suspenders on top of BaseAgent._strip_tool_calls_from_text: the
+    # agent loop removes parseable tool JSON, but a model may emit malformed or
+    # inlined tool JSON (sometimes with internal editor comments like
+    # "← 使用空数组替代 none") that survives. None of that may reach the user.
+    _RAW_TOOL_JSON_RE = re.compile(
+        r"```(?:json)?\s*\{[\s\S]*?\"(?:tool|action)\"[\s\S]*?\}\s*```"
+        r"|```(?:json)?\s*\[[\s\S]*?\"tool\"[\s\S]*?\]\s*```"
+        r"|\{[^{}]*\"(?:tool|action)\"[^{}]*\}"
+        r"|\{[^{}]*\"(?:tool|action)\"[^{}]*\{[^{}]*\}[^{}]*\}",
+        re.IGNORECASE,
+    )
+    _INTERNAL_ANNOTATION_RE = re.compile(r"←[^\n]*", re.MULTILINE)
+
+    @classmethod
+    def _sanitize_user_answer(cls, answer: str) -> str:
+        """Strip raw tool-call JSON and internal annotations from the answer."""
+        if not answer:
+            return answer
+        cleaned = cls._RAW_TOOL_JSON_RE.sub("", answer)
+        cleaned = cls._INTERNAL_ANNOTATION_RE.sub("", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        return cleaned
+
     def _run_task(self, params: dict[str, object], req_id: object) -> None:
         self.current_task_id = str(params.get("task_id", ""))
         if isinstance(self.model, PlanDetectingModelProvider):
@@ -415,6 +485,31 @@ class DesktopAgentRuntime:
                     requested_mode = ""  # let the stage decide the mode
         except Exception:
             self.logger.debug("local stage probe failed", exc_info=True)
+
+        # Round-3 (2026-07-30): a normal user advances through the journey by
+        # plain language ("帮我看看有没有人需要" -> market, "把产品功能定下来" ->
+        # product, "设计实现方式" -> tech, "直接帮我做出来" -> development). The
+        # stage gate MUST follow this intent, otherwise the agent is pinned to
+        # problem_discovery forever and the development agent never runs (so no
+        # source is ever written). Fast-forward the LOCAL gate to the furthest
+        # intended stage (never regress) and route by it.
+        try:
+            intended = _detect_intended_stage(message)
+            if intended and intended in STAGES:
+                probe = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
+                cur = probe.current_stage
+                if cur in STAGES and STAGES.index(intended) > STAGES.index(cur):
+                    probe.current_stage = intended
+                    probe.progress = compute_progress(probe)
+                    probe.save()
+                    self.logger.info(
+                        "Natural-language stage progression: %s -> %s", cur, intended
+                    )
+                    stage = intended
+                    requested_mode = ""
+        except Exception:
+            self.logger.debug("intent-based stage fast-forward failed", exc_info=True)
+
         handoff_store = HandoffStore(state_dir / "handoff.json", project_id=project_id)
         handoff_tool = HandoffTool(handoff_store)
         registry = get_default_registry(config=self.config)
@@ -518,6 +613,7 @@ class DesktopAgentRuntime:
                         errors = list(getattr(task, "errors", []) or [])
                         result["answer"] = errors[-1] if errors else "AI 服务暂时不可用，请稍后重试。"
                     if isinstance(result.get("answer"), str):
+                        result["answer"] = self._sanitize_user_answer(result["answer"])
                         result["answer"] = self._normalize_question_blocks(result["answer"])
                     # Re-scan the stage gate AFTER the agent's tool calls so any
                     # deliverable it just wrote (e.g. docs/PROBLEM.md) is detected

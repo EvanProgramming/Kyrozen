@@ -247,7 +247,13 @@ class BaseAgent:
                             i = j
                             continue
                     except json.JSONDecodeError:
-                        pass
+                        # The model emitted a tool-call-shaped JSON that is not
+                        # strictly valid (e.g. contains Chinese comments such as
+                        # "← 使用空数组替代 none"). If it clearly looks like a
+                        # tool call, drop it so raw JSON never reaches the user.
+                        if '"tool"' in raw or '"action"' in raw:
+                            i = j
+                            continue
             result.append(clean[i])
             i += 1
         return "".join(result).strip()

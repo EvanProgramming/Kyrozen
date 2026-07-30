@@ -1676,12 +1676,20 @@ ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePa
 
 async function localProjectName(root: string, projectId: string): Promise<string> {
   try {
-    for (const rel of ['docs/PROBLEM.md', 'README.md', 'PROBLEM.md']) {
+    for (const rel of ['README.md', 'docs/PROBLEM.md', 'PROBLEM.md']) {
       const p = path.join(root, rel);
       try {
         const text = await fs.readFile(p, 'utf-8');
         const m = text.match(/^#\s+(.+)$/m);
-        if (m) return m[1].trim().slice(0, 60);
+        if (m) {
+          // Strip a leading stage-label prefix (e.g. "问题定义：", "产品定义：")
+          // so the project name is the real title, not a gate-item label.
+          const name = String(m[1].trim()).replace(
+            /^(问题定义|问题陈述|产品定义|产品方案|技术方案|解决方案|市场调研|需求定义)[：:]\s*/,
+            '',
+          ).trim();
+          if (name) return name.slice(0, 60);
+        }
       } catch { /* not present */ }
     }
   } catch { /* ignore */ }

@@ -521,6 +521,46 @@ def refresh_gate(store: StageGateStore, workspace_root: str | Path) -> GateStatu
     return compute_gate(store)
 
 
+def record_report_deliverable(
+    workspace_root: str | Path,
+    deliverable_id: str,
+    confirmation_id: str,
+    detail: str = "报告已生成，已自动确认",
+) -> None:
+    """After a report deliverable file is materialized on disk, re-scan the gate
+    and auto-record the stage's paired confirmation item.
+
+    This keeps the progress panel honest: once the agent has actually produced
+    the report file (e.g. ``PRD.md``), the "用户确认…" item that pairs with it
+    is checked automatically so the user does not have to click it manually.
+    The user can still re-confirm by advancing the stage (which overwrites the
+    record with an explicit confirmation).
+
+    The deliverable is detected explicitly (scanning every stage) so the
+    auto-confirm works even when the persisted ``current_stage`` has not yet
+    been advanced to the stage that owns this deliverable. Silent no-op if the
+    store cannot be opened, or the deliverable was not actually detected on disk
+    (so we never confirm a report that was never written).
+    """
+    try:
+        root = Path(workspace_root)
+        store = StageGateStore(root / ".kyrozen" / "stagegate.json")
+        refresh_gate(store, str(root))
+        # Explicitly detect the specific deliverable regardless of current stage.
+        found = False
+        for stage in STAGE_DEFINITIONS:
+            items = STAGE_DEFINITIONS[stage].items
+            if any(item.id == deliverable_id for item in items):
+                found = detect_deliverables(root, stage).get(deliverable_id, False)
+                break
+        if found:
+            store.record_deliverable(deliverable_id, True)
+            store.record_confirmation(confirmation_id, True, detail=detail)
+            store.save()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Stage transitions (the three required actions)
 # ---------------------------------------------------------------------------

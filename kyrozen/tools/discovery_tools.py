@@ -149,12 +149,12 @@ class SaveProblemBriefTool(Tool):
             return ToolResult(success=False, data=None, error=str(e))
 
     def _refresh_problem_stage(self, root: Path, project_id: str) -> None:
-        """Re-scan the stage gate so the freshly written PROBLEM.md is detected."""
+        """Re-scan the stage gate so the freshly written PROBLEM.md is detected,
+        then auto-confirm the paired confirmation item."""
         try:
-            from kyrozen.core.stagegate import StageGateStore, refresh_gate
+            from kyrozen.core.stagegate import record_report_deliverable
 
-            store = StageGateStore(root / ".kyrozen" / "stagegate.json", project_id=project_id)
-            refresh_gate(store, str(root))
+            record_report_deliverable(str(root), "problem_statement", "problem_confirmed")
         except Exception:
             pass
 

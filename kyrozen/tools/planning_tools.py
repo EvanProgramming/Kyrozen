@@ -7,6 +7,7 @@ and record product decisions without directly touching the database.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kyrozen.planning.models import PRODUCT_DECISIONS, PRD, ProductBrief, SolutionComparison
@@ -58,12 +59,21 @@ class SaveProductBriefTool(Tool):
 
 
 class SavePRDTool(Tool):
-    """Save or update the PRD artifact for a project."""
+    """Save or update the PRD artifact for a project.
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    In addition to persisting the PRD to the project artifact store (when a
+    project manager is available), this tool ALWAYS writes a real ``PRD.md`` /
+    ``docs/PRD.md`` file into the workspace. The product_definition stage gate
+    detects the PRD by scanning for that file; without it the hard gate into
+    development can never be satisfied, so the file write is mandatory regardless
+    of whether the cloud artifact store is reachable.
+    """
+
+    def __init__(self, project_manager: "ProjectManager | None" = None, config: Any = None) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "save_prd"
-        self.description = "Save or update the Product Requirements Document (PRD) artifact."
+        self.description = "Save or update the Product Requirements Document (PRD) and write it to PRD.md."
         self.schema = ToolSchema(
             name=self.name,
             description=self.description,
@@ -75,26 +85,98 @@ class SavePRDTool(Tool):
             },
         )
 
+    @staticmethod
+    def _resolve_workspace(project_id, project_manager, config):
+        # Server: a ProjectManager is present, so the workspace is the
+        # project-scoped directory. On the desktop the ProjectManager is None and
+        # config.workspace_root points directly at the user-selected workspace.
+        if project_manager is not None and project_id and hasattr(config, "project_dir"):
+            try:
+                return str(config.project_dir(project_id))
+            except Exception:
+                pass
+        ws = getattr(config, "workspace_root", None)
+        if ws and Path(ws).is_absolute():
+            return str(ws)
+        return None
+
+    @staticmethod
+    def _render_markdown(prd) -> str:
+        d = prd.to_dict() if hasattr(prd, "to_dict") else dict(prd)
+        lines = ["# Product Requirements Document (PRD)", ""]
+
+        def block(title, value):
+            lines.append("## " + title)
+            lines.append("")
+            if isinstance(value, (list, dict)):
+                if value:
+                    lines.append("```json")
+                    lines.append(json.dumps(value, ensure_ascii=False, indent=2))
+                    lines.append("```")
+                else:
+                    lines.append("(无)")
+            else:
+                lines.append(str(value) if value not in (None, "") else "(无)")
+            lines.append("")
+
+        block("概览 Overview", d.get("overview", ""))
+        block("用户故事 User Stories", d.get("user_stories", []))
+        block("功能需求 Functional Requirements", d.get("functional_requirements", []))
+        block("非功能需求 Non-Functional Requirements", d.get("non_functional_requirements", []))
+        block("MVP 范围 MVP Scope", d.get("mvp_scope", {}))
+        block("范围外 Out of Scope", d.get("out_of_scope", []))
+        return chr(10).join(lines)
+
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
         project_id = parameters.get("project_id")
         prd_data = parameters.get("prd", {})
         if not project_id:
             return ToolResult(success=False, data=None, error="Missing project_id")
         try:
             prd = PRD.from_dict(prd_data)
-            content = json.dumps(prd.to_dict(), ensure_ascii=False, indent=2)
-            artifact = self.project_manager.save_artifact(
-                project_id=project_id,
-                type="prd",
-                title="Product Requirements Document",
-                content=content,
-                change_reason="PRD update",
-            )
-            return ToolResult(success=True, data={"artifact_id": artifact.id, "version": artifact.version})
         except ValueError as e:
             return ToolResult(success=False, data=None, error=str(e))
+        result: dict[str, Any] = {}
+        # Best-effort artifact persistence (not required on the desktop).
+        if self.project_manager is not None:
+            try:
+                content = json.dumps(prd.to_dict(), ensure_ascii=False, indent=2)
+                artifact = self.project_manager.save_artifact(
+                    project_id=project_id,
+                    type="prd",
+                    title="Product Requirements Document",
+                    content=content,
+                    change_reason="PRD update",
+                )
+                result["artifact_id"] = artifact.id
+                result["version"] = artifact.version
+            except Exception:
+                pass
+        # MANDATORY: write the real PRD.md deliverable so the stage gate detects it.
+        workspace = self._resolve_workspace(project_id, self.project_manager, self.config)
+        if workspace:
+            try:
+                out = Path(workspace) / "PRD.md"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(self._render_markdown(prd), encoding="utf-8")
+                result["file"] = str(out)
+            except Exception:
+                pass
+        if not result:
+            return ToolResult(
+                success=False,
+                data=None,
+                error="无法保存 PRD：未找到可写的项目工作区，且项目管理器不可用。",
+            )
+        # Auto-confirm the paired confirmation item now that the file exists.
+        if workspace and result.get("file"):
+            try:
+                from kyrozen.core.stagegate import record_report_deliverable
+
+                record_report_deliverable(workspace, "prd", "prd_confirmed")
+            except Exception:
+                pass
+        return ToolResult(success=True, data=result)
 
 
 class SaveSolutionComparisonTool(Tool):

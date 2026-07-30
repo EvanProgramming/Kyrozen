@@ -246,6 +246,13 @@ class SaveMarketResearchReportTool(Tool):
                 logger.debug("write MARKET.md failed: %s", exc)
         if not result:
             return ToolResult(success=False, data=None, error="无法保存调研报告：未找到可写的项目工作区。")
+        # Auto-confirm the paired confirmation item now that the report exists.
+        if workspace and result.get("file"):
+            try:
+                from kyrozen.core.stagegate import record_report_deliverable
+                record_report_deliverable(workspace, "market_report", "market_confirmed")
+            except Exception:
+                pass
         return ToolResult(success=True, data=result)
 
 class RecordOpportunityDecisionTool(Tool):

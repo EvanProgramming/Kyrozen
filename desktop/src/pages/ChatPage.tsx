@@ -85,8 +85,14 @@ function splitQuestionBlock(content: string): { markdown: string; question: Ques
   if (!match) return { markdown: content, question: null };
   try {
     const parsed = JSON.parse(match[1].trim()) as QuestionCard;
-    if (!parsed.question || !Array.isArray(parsed.options)) throw new Error('invalid question');
-    return { markdown: content.replace(match[0], '').trim(), question: parsed };
+    // Only the question text is mandatory. A missing/empty option list is a
+    // legitimate open-ended question and renders as a free-text input.
+    if (!parsed.question) throw new Error('invalid question');
+    const question: QuestionCard = {
+      ...parsed,
+      options: Array.isArray(parsed.options) ? parsed.options : [],
+    };
+    return { markdown: content.replace(match[0], '').trim(), question };
   } catch {
     // Malformed block: strip the raw protocol text instead of leaking it.
     // Salvage the human-readable question text when possible.
@@ -789,6 +795,10 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   const [isDragging, setIsDragging] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<Array<{ name: string; content: string }>>([]);
   const [expandedOperations, setExpandedOperations] = useState<Set<number>>(new Set());
+  // Question cards always offer a custom answer: `otherOpen` tracks which cards
+  // have the free-text field revealed, `otherDrafts` holds what is typed there.
+  const [otherOpen, setOtherOpen] = useState<Set<number>>(new Set());
+  const [otherDrafts, setOtherDrafts] = useState<Record<number, string>>({});
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [routedAgent, setRoutedAgent] = useState<RoutedAgent | null>(null);
   const [degraded, setDegraded] = useState<DegradedInfo | null>(null);
@@ -1043,6 +1053,22 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
 
   const questionByMessage = useMemo(() => messages.map((message) => splitQuestionBlock(message.content)), [messages]);
 
+  // A typed answer to a question card behaves exactly like clicking an option:
+  // the card locks and the text is sent as the reply. This is what makes the
+  // "其他（自己输入）" field and option-less questions work.
+  const submitCustomAnswer = (index: number) => {
+    const text = (otherDrafts[index] || '').trim();
+    if (!text || isRunning) return;
+    setMessages((previous) => previous.map((m, i) => (i === index ? { ...m, selectedOption: text } : m)));
+    setOtherOpen((previous) => {
+      const next = new Set(previous);
+      next.delete(index);
+      return next;
+    });
+    setOtherDrafts((previous) => ({ ...previous, [index]: '' }));
+    void sendMessage(text, { echoUser: false });
+  };
+
   return (
     <div
       className={`flex-1 flex flex-col overflow-hidden relative ${isDragging ? 'bg-accent-soft' : ''}`}
@@ -1145,7 +1171,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
                 <div className="mt-3 border-t border-line pt-3">
                   <div className="font-medium text-ink mb-2">{parsed.question.question}</div>
                   <div className="flex flex-wrap gap-2">
-                    {parsed.question.options.map((option) => {
+                    {(parsed.question.options || []).map((option) => {
                       const isSelected = message.selectedOption === option.value;
                       return (
                         <button
@@ -1170,7 +1196,53 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
                         </button>
                       );
                     })}
+                    {(parsed.question.options || []).length > 0
+                      && parsed.question.allow_other !== false
+                      && !answered
+                      && !otherOpen.has(index) && (
+                        <button
+                          type="button"
+                          onClick={() => setOtherOpen((previous) => new Set(previous).add(index))}
+                          disabled={isRunning}
+                          data-testid="question-other-toggle"
+                          className="text-xs rounded-sm px-3 py-1.5 border btn-secondary"
+                        >
+                          其他（自己输入）
+                        </button>
+                      )}
                   </div>
+                  {!answered && ((parsed.question.options || []).length === 0 || otherOpen.has(index)) && (
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        type="text"
+                        value={otherDrafts[index] || ''}
+                        onChange={(event) => setOtherDrafts((previous) => ({ ...previous, [index]: event.target.value }))}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            submitCustomAnswer(index);
+                          }
+                        }}
+                        placeholder="输入你的回答…"
+                        disabled={isRunning}
+                        data-testid="question-other-input"
+                        className="input text-xs flex-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => submitCustomAnswer(index)}
+                        disabled={isRunning || !(otherDrafts[index] || '').trim()}
+                        className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50"
+                      >
+                        发送
+                      </button>
+                    </div>
+                  )}
+                  {answered
+                    && message.selectedOption !== undefined
+                    && !(parsed.question.options || []).some((option) => option.value === message.selectedOption) && (
+                      <div className="mt-2 text-xs text-ink-faint">已回答：{message.selectedOption}</div>
+                    )}
                 </div>
               )}
               {message.operations && message.operations.length > 0 && (

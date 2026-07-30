@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -62,11 +63,46 @@ def test_fenced_without_newline_normalized():
 
 
 def test_invalid_json_never_leaks_protocol():
+    """A malformed block is salvaged into a valid free-text question card.
+
+    The raw protocol text must never appear, and since every question has to go
+    through the question UI, the salvaged question becomes a card with an empty
+    option list (which the renderer shows as a text input) rather than prose.
+    """
     answer = '<kyrozen-question>{"question": "坏块", "options": [</kyrozen-question>结尾文本'
     out = _normalize(answer)
     assert "<kyrozen-question>" not in out
-    assert "options" not in out or "```" not in out  # no broken protocol block
     assert "坏块" in out  # human-readable question salvaged
+    assert out.count("```kyrozen-question") == 1
+    payload = json.loads(out.split("```kyrozen-question")[1].split("```")[0].strip())
+    assert payload["question"] == "坏块"
+    assert payload["options"] == []
+    assert payload["allow_other"] is True
+
+
+def test_option_less_question_stays_a_card():
+    """Open-ended questions must remain cards (free-text input), not prose."""
+    answer = '```kyrozen-question\n{"question": "你希望它解决什么问题？", "options": []}\n```'
+    out = _normalize(answer)
+    assert out.count("```kyrozen-question") == 1
+    payload = json.loads(out.split("```kyrozen-question")[1].split("```")[0].strip())
+    assert payload["question"] == "你希望它解决什么问题？"
+    assert payload["options"] == []
+    assert payload["allow_other"] is True
+
+
+def test_allow_other_defaults_to_true_and_options_normalized():
+    answer = (
+        '```kyrozen-question\n'
+        '{"question": "选哪个？", "options": [{"label": "A"}, "B"]}\n```'
+    )
+    out = _normalize(answer)
+    payload = json.loads(out.split("```kyrozen-question")[1].split("```")[0].strip())
+    assert payload["allow_other"] is True
+    assert payload["options"] == [
+        {"label": "A", "value": "A"},
+        {"label": "B", "value": "B"},
+    ]
 
 
 def test_multiple_blocks_collapse_to_one():

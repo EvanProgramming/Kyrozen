@@ -36,6 +36,32 @@ class BaseAgent:
     #: even though a required action has not happened yet.
     max_action_nudges: int = 2
 
+    #: Appended to EVERY agent's system prompt (including subclasses that fully
+    #: override :meth:`_build_system_prompt`) so there is exactly one way to ask
+    #: the user anything: the structured question card. Plain-prose questions --
+    #: even a throwaway "需要我帮你做吗" -- are forbidden, because the user then
+    #: has to guess the expected answer format instead of just clicking.
+    QUESTION_PROTOCOL_PROMPT: str = (
+        "MANDATORY QUESTION PROTOCOL (this overrides every other instruction about asking):\n"
+        "- You MUST NEVER ask the user anything in plain prose. EVERY question you ask, without\n"
+        "  exception, has to be emitted as exactly ONE fenced ```kyrozen-question block placed at\n"
+        "  the very END of your reply.\n"
+        "- This explicitly includes small confirmations and yes/no checks such as \"需要我帮你做吗\",\n"
+        "  \"要继续推进吗\", \"这样可以吗\", \"Shall I proceed?\", \"Is that OK?\". No question is too\n"
+        "  small for the block.\n"
+        "- The block body MUST be one valid JSON object with exactly these keys:\n"
+        '  {"question": "<the question, in the user\'s language>", "options": [{"label": "<short\n'
+        '  choice>", "value": "<short choice>"}], "allow_other": true}\n'
+        "- When the question has natural choices, give 2-4 short options and keep allow_other true.\n"
+        "  The UI automatically appends an \"其他（自己输入）\" free-text field, so NEVER add your own\n"
+        "  \"other\" / \"其他\" / \"以上都不是\" option.\n"
+        "- For a yes/no confirmation use exactly two options (for example 好的 / 先不用).\n"
+        "- When the question is genuinely open-ended and any option list would bias the answer, use\n"
+        "  \"options\": [] together with allow_other true. The UI then shows a plain text input.\n"
+        "- Ask at most ONE question per reply, and never repeat the question text outside the block.\n"
+        "- If you are not asking anything, do not emit the block at all.\n"
+    )
+
     def __init__(
         self,
         config: KyrozenConfig,
@@ -373,8 +399,14 @@ class BaseAgent:
         """Execute the agent loop for an already-created task."""
         start_time = time.time()
         project_id = task.project_id
+        # The question protocol is appended here rather than inside
+        # _build_system_prompt() so that subclasses which fully override that
+        # method (every specialised agent does) still cannot opt out of it.
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": self._build_system_prompt()},
+            {
+                "role": "system",
+                "content": f"{self._build_system_prompt()}\n\n{self.QUESTION_PROTOCOL_PROMPT}",
+            },
             {"role": "user", "content": user_input},
         ]
 
@@ -511,6 +543,10 @@ class BaseAgent:
                 else:
                     final_answer = "I processed your request but did not produce a final answer."
 
+            # Last line of defence: a question must always reach the user as a
+            # clickable card, never as prose the user has to answer by typing.
+            final_answer = self._enforce_question_protocol(final_answer)
+
             task.complete(result={"answer": final_answer})
             self.memory.save("user", user_input, task_id=task.id, project_id=project_id)
             self.memory.save("agent", final_answer, task_id=task.id, project_id=project_id)
@@ -528,6 +564,92 @@ class BaseAgent:
         elapsed = time.time() - start_time
         self.logger.perf(f"Task finished in {elapsed:.2f}s", task_id=task.id, elapsed_seconds=elapsed, project_id=project_id)
         self.task_manager.update(task)
+
+    # ------------------------------------------------------------------
+    # Mandatory question protocol enforcement
+    # ------------------------------------------------------------------
+    #: Detects an already-correct question card (fenced or XML-tag form).
+    _QUESTION_BLOCK_PRESENT_RE = re.compile(
+        r"```\s*kyrozen[-_]?question\b|<kyrozen[-_]?question>", re.IGNORECASE
+    )
+    #: A trailing question that reads as a yes/no confirmation. Any Chinese
+    #: sentence ending in "吗？" is one, plus the common 是否/要不要 forms and the
+    #: English confirmations models fall back to.
+    _YES_NO_QUESTION_RE = re.compile(
+        r"(吗[?？]?$|呢[?？]?$|要不要|是否|好不好|行不行|可以吗|对吗|"
+        r"^\s*(shall|should|do you|would you|can i|may i|is that|does that|sound)\b)",
+        re.IGNORECASE,
+    )
+    #: Sentence boundary used to isolate the trailing question. An ASCII period
+    #: only counts when followed by whitespace, so "app.py" / "v1.0" stay intact.
+    _SENTENCE_BOUNDARY_RE = re.compile(r"[。！!？?；;\n]|\.\s")
+    #: Trailing markdown decoration to look past, e.g. "**要继续吗？**".
+    _TRAILING_DECORATION = "*_`>)】」 　"
+
+    @classmethod
+    def _split_trailing_question(cls, answer: str) -> tuple[str, str | None]:
+        """Split ``answer`` into (body, trailing question) if it ends in a question.
+
+        Returns ``(answer, None)`` when the text does not end with a question, or
+        when extracting one would be unsafe (inside a code fence, too long, ...).
+        """
+        stripped = (answer or "").rstrip()
+        if not stripped:
+            return answer, None
+
+        # Look past trailing markdown emphasis before testing for "?".
+        probe = stripped.rstrip(cls._TRAILING_DECORATION)
+        if not probe or probe[-1] not in "?？":
+            return answer, None
+
+        # Never reach into an unterminated code fence.
+        if stripped.count("```") % 2 != 0:
+            return answer, None
+
+        boundaries = [m.end() for m in cls._SENTENCE_BOUNDARY_RE.finditer(probe[:-1])]
+        cut = boundaries[-1] if boundaries else 0
+        question = probe[cut:].strip()
+        body = probe[:cut].rstrip()
+
+        # Drop markdown decoration so the card shows a clean sentence.
+        question = re.sub(r"^[\s>#*\-•\d.、)）]+", "", question)
+        question = question.replace("**", "").replace("__", "").strip()
+
+        if not question or len(question) > 160:
+            return answer, None
+        return body, question
+
+    @classmethod
+    def _enforce_question_protocol(cls, answer: str) -> str:
+        """Guarantee that a question reaching the user is always a question card.
+
+        The system prompt already demands this, but models drift -- especially on
+        casual confirmations like "需要我帮你做吗？". Rather than letting that
+        become a plain sentence the user has to answer by typing, deterministically
+        rewrite it into the canonical block so the UI always renders clickable
+        options plus a free-text "其他" field.
+        """
+        if not answer or cls._QUESTION_BLOCK_PRESENT_RE.search(answer):
+            return answer
+
+        body, question = cls._split_trailing_question(answer)
+        if not question:
+            return answer
+
+        if cls._YES_NO_QUESTION_RE.search(question):
+            options = [
+                {"label": "好的，继续", "value": "好的，继续"},
+                {"label": "先不用", "value": "先不用"},
+            ]
+        else:
+            # Open-ended: no invented options, the UI shows a text input.
+            options = []
+
+        block = json.dumps(
+            {"question": question, "options": options, "allow_other": True},
+            ensure_ascii=False,
+        )
+        return f"{body}\n\n```kyrozen-question\n{block}\n```".strip()
 
     def _action_required(self, user_input: str) -> bool:
         """Whether the current user input demands a real deliverable action.

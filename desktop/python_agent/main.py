@@ -379,10 +379,14 @@ class DesktopAgentRuntime:
             if not isinstance(data, dict):
                 return None
             question = str(data.get("question", "")).strip()
+            if not question:
+                return None
+            # An empty/missing option list is legitimate: it renders a free-text
+            # question card. Only a missing question makes the block unusable.
             options = data.get("options")
-            if question and isinstance(options, list) and options:
-                return data
-            return None
+            if not isinstance(options, list):
+                data["options"] = []
+            return data
 
         def _consume(match: "re.Match[str]") -> str:
             nonlocal parsed
@@ -400,13 +404,26 @@ class DesktopAgentRuntime:
         cleaned = cls._QUESTION_TAG_RE.sub(_consume, cleaned).strip()
         if parsed is None:
             return cleaned
+        # Every question must reach the user as a card. Without options the card
+        # degrades to a free-text input rather than to plain prose, so the user
+        # never has to guess how an answer is supposed to be delivered.
         options = parsed.get("options")
-        if not isinstance(options, list) or not options:
-            # No valid options: degrade to plain text instead of a broken card.
-            question_text = str(parsed.get("question", "")).strip()
-            if question_text and question_text not in cleaned:
-                cleaned = f"{cleaned}\n\n{question_text}".strip()
-            return cleaned
+        if not isinstance(options, list):
+            options = []
+        normalized_options: list[dict[str, str]] = []
+        for option in options:
+            if isinstance(option, dict):
+                label = str(option.get("label") or option.get("value") or "").strip()
+                value = str(option.get("value") or option.get("label") or "").strip()
+            else:
+                label = value = str(option).strip()
+            if label:
+                normalized_options.append({"label": label, "value": value or label})
+        parsed["options"] = normalized_options
+        # The renderer appends its own "其他（自己输入）" field; allow it unless the
+        # model explicitly opted out.
+        if not isinstance(parsed.get("allow_other"), bool):
+            parsed["allow_other"] = True
         block = json.dumps(parsed, ensure_ascii=False)
         return f"{cleaned}\n\n```kyrozen-question\n{block}\n```".strip()
 
@@ -626,6 +643,10 @@ class DesktopAgentRuntime:
                         result["answer"] = errors[-1] if errors else "AI 服务暂时不可用，请稍后重试。"
                     if isinstance(result.get("answer"), str):
                         result["answer"] = self._sanitize_user_answer(result["answer"])
+                        # Answers that bypass the BaseAgent loop (deterministic
+                        # fallbacks, failure summaries) must obey the question
+                        # protocol too: a prose question becomes a card here.
+                        result["answer"] = BaseAgent._enforce_question_protocol(result["answer"])
                         result["answer"] = self._normalize_question_blocks(result["answer"])
                     # Re-scan the stage gate AFTER the agent's tool calls so any
                     # deliverable it just wrote (e.g. docs/PROBLEM.md) is detected

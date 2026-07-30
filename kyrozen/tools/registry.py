@@ -81,8 +81,10 @@ def get_default_registry(
     from .planning_tools import (
         RecordProductDecisionTool,
         SavePRDTool,
+        SavePlanTool,
         SaveProductBriefTool,
         SaveSolutionComparisonTool,
+        UpdatePlanStepTool,
     )
     from .project_tools import RecordDecisionTool, UpdateProjectTool
     from .research.tools import (
@@ -142,6 +144,10 @@ def get_default_registry(
     registry.register(SavePRDTool(project_manager, config=config))
     registry.register(SaveSolutionComparisonTool(project_manager))
     registry.register(RecordProductDecisionTool(project_manager))
+    # P0-R6: explicit execution planning tools -- agents call save_plan before
+    # starting work and update_plan_step as they progress.
+    registry.register(SavePlanTool(project_manager, config=config))
+    registry.register(UpdatePlanStepTool(project_manager, config=config))
     registry.register(SaveTechnicalPlanTool(project_manager, config=config))
     registry.register(SaveChangelogTool(project_manager, config=config))
     registry.register(SaveFeatureImplementationTool(project_manager))

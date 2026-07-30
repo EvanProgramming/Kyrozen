@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kyrozen.planning.models import PRODUCT_DECISIONS, PRD, ProductBrief, SolutionComparison
+from kyrozen.planning.plan import ExecutionPlan, PlanStep
 
 from .base import Tool, ToolParameter, ToolResult, ToolSchema
 
@@ -320,3 +321,205 @@ class RecordProductDecisionTool(Tool):
             return ToolResult(success=True, data={"decision_id": dec.id, "decision": decision})
         except ValueError as e:
             return ToolResult(success=False, data=None, error=str(e))
+
+
+# P0-R6: real execution planning. Each Kyrozen agent must call save_plan
+# BEFORE starting the actual work of a stage, then mark steps as it goes.
+# The plan lives in ``.kyrozen/PLAN.json`` inside the workspace, which is
+# both the source of truth and what the desktop UI renders in the task panel.
+
+
+class SavePlanTool(Tool):
+    """Persist the agent's structured plan for the current stage.
+
+    The plan is written to ``.kyrozen/PLAN.json`` inside the project workspace.
+    On the desktop (no ProjectManager), the file is the only place the plan is
+    stored -- the UI reads it directly via the planning IPC channel.
+    """
+
+    def __init__(
+        self,
+        project_manager: "ProjectManager | None" = None,
+        config: Any = None,
+    ) -> None:
+        self.project_manager = project_manager
+        self.config = config
+        self.name = "save_plan"
+        self.description = (
+            "Persist a structured execution plan for the current stage BEFORE "
+            "starting the work. Pass a stage, a title, a goal, and a list of "
+            "concrete steps. The plan is written to .kyrozen/PLAN.json and "
+            "rendered in the desktop UI. Call this once per stage at the start."
+        )
+        self.schema = ToolSchema(
+            name=self.name,
+            description=self.description,
+            actions={
+                "save": [
+                    ToolParameter(name="project_id", param_type="string", description="Project ID"),
+                    ToolParameter(name="stage", param_type="string", description="Stage key (e.g. market_research)"),
+                    ToolParameter(name="title", param_type="string", description="Short plan title"),
+                    ToolParameter(name="goal", param_type="string", description="What this plan aims to achieve"),
+                    ToolParameter(name="steps", param_type="array", description="List of plan steps: {id, title, detail}"),
+                    ToolParameter(name="task_id", param_type="string", description="Current task id (optional)", required=False),
+                ]
+            },
+        )
+
+    @staticmethod
+    def _resolve_workspace(project_id, project_manager, config):
+        if project_manager is not None and project_id and hasattr(config, "project_dir"):
+            try:
+                return str(config.project_dir(project_id))
+            except Exception:
+                pass
+        ws = getattr(config, "workspace_root", None)
+        if ws and Path(ws).is_absolute():
+            return str(ws)
+        return None
+
+    def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
+        project_id = parameters.get("project_id")
+        stage = str(parameters.get("stage") or "").strip()
+        title = str(parameters.get("title") or "").strip()
+        goal = str(parameters.get("goal") or "").strip()
+        steps_raw = parameters.get("steps") or []
+        task_id = str(parameters.get("task_id") or "").strip()
+
+        if not stage:
+            return ToolResult(success=False, data=None, error="Missing stage")
+        if not title:
+            return ToolResult(success=False, data=None, error="Missing plan title")
+        if not isinstance(steps_raw, list) or not steps_raw:
+            return ToolResult(success=False, data=None, error="Plan must include at least one step")
+
+        steps: list[PlanStep] = []
+        for raw in steps_raw:
+            try:
+                steps.append(PlanStep.from_dict(raw if isinstance(raw, dict) else {"title": str(raw)}))
+            except ValueError as exc:
+                return ToolResult(success=False, data=None, error=str(exc))
+
+        plan = ExecutionPlan(stage=stage, title=title, goal=goal, steps=steps, task_id=task_id)
+        try:
+            payload = plan.to_dict()
+            content = json.dumps(payload, ensure_ascii=False, indent=2)
+        except ValueError as exc:
+            return ToolResult(success=False, data=None, error=str(exc))
+
+        result: dict[str, Any] = {"plan": payload}
+        workspace = self._resolve_workspace(project_id, self.project_manager, self.config)
+        if workspace:
+            try:
+                out = Path(workspace) / ".kyrozen" / "PLAN.json"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(content, encoding="utf-8")
+                result["file"] = str(out)
+            except Exception as exc:
+                return ToolResult(success=False, data=None, error=f"无法写入 PLAN.json：{exc}")
+        else:
+            return ToolResult(
+                success=False,
+                data=None,
+                error="无法保存计划：未找到可写的项目工作区。",
+            )
+        # Best-effort artifact persistence (cloud side only).
+        if self.project_manager is not None and project_id:
+            try:
+                artifact = self.project_manager.save_artifact(
+                    project_id=project_id,
+                    type="execution_plan",
+                    title=f"Plan: {title}",
+                    content=content,
+                    change_reason="Execution plan update",
+                )
+                result["artifact_id"] = artifact.id
+                result["version"] = artifact.version
+            except Exception:
+                pass
+        return ToolResult(success=True, data=result)
+
+
+class UpdatePlanStepTool(Tool):
+    """Mark a plan step as in_progress / completed / failed.
+
+    The agent should call this tool whenever it starts or finishes one of the
+    steps it previously declared via ``save_plan``.  The desktop UI reads the
+    file and reflects the new status live.
+    """
+
+    def __init__(
+        self,
+        project_manager: "ProjectManager | None" = None,
+        config: Any = None,
+    ) -> None:
+        self.project_manager = project_manager
+        self.config = config
+        self.name = "update_plan_step"
+        self.description = (
+            "Update the status of a single plan step. Pass the step id and one "
+            "of {pending, in_progress, completed, failed}. Use this as you "
+            "work through the plan so the desktop UI shows progress live."
+        )
+        self.schema = ToolSchema(
+            name=self.name,
+            description=self.description,
+            actions={
+                "update": [
+                    ToolParameter(name="project_id", param_type="string", description="Project ID"),
+                    ToolParameter(name="step_id", param_type="string", description="Plan step id to update"),
+                    ToolParameter(name="status", param_type="string", description="New status: pending | in_progress | completed | failed"),
+                ]
+            },
+        )
+
+    @staticmethod
+    def _resolve_workspace(project_id, project_manager, config):
+        if project_manager is not None and project_id and hasattr(config, "project_dir"):
+            try:
+                return str(config.project_dir(project_id))
+            except Exception:
+                pass
+        ws = getattr(config, "workspace_root", None)
+        if ws and Path(ws).is_absolute():
+            return str(ws)
+        return None
+
+    def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
+        project_id = parameters.get("project_id")
+        step_id = str(parameters.get("step_id") or "").strip()
+        status = str(parameters.get("status") or "").strip()
+        if not step_id:
+            return ToolResult(success=False, data=None, error="Missing step_id")
+        if status not in ("pending", "in_progress", "completed", "failed"):
+            return ToolResult(success=False, data=None, error=f"Invalid status '{status}'")
+
+        workspace = self._resolve_workspace(project_id, self.project_manager, self.config)
+        if not workspace:
+            return ToolResult(success=False, data=None, error="找不到项目工作区。")
+        plan_path = Path(workspace) / ".kyrozen" / "PLAN.json"
+        if not plan_path.exists():
+            return ToolResult(
+                success=False,
+                data=None,
+                error="尚未保存计划（PLAN.json 不存在）。请先调用 save_plan。",
+            )
+        try:
+            plan_data = json.loads(plan_path.read_text(encoding="utf-8") or "{}")
+        except Exception as exc:
+            return ToolResult(success=False, data=None, error=f"PLAN.json 无法解析：{exc}")
+        plan = ExecutionPlan.from_dict(plan_data)
+        if not plan.mark_step(step_id, status):
+            return ToolResult(
+                success=False,
+                data=None,
+                error=f"步骤 id '{step_id}' 不在当前计划里",
+            )
+        try:
+            plan_path.write_text(
+                json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            return ToolResult(success=False, data=None, error=f"无法写入 PLAN.json：{exc}")
+        return ToolResult(success=True, data={"plan": plan.to_dict(), "file": str(plan_path)})

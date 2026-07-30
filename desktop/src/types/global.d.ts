@@ -62,6 +62,22 @@ export interface FeatureRecord {
   notes: string;
 }
 
+// P0-R6: real execution planning, persisted to .kyrozen/PLAN.json.
+export interface PlanStepPayload {
+  id: string;
+  title?: string;
+  detail?: string;
+  status?: 'pending' | 'in_progress' | 'completed' | 'failed' | string;
+}
+
+export interface PlanPayload {
+  task_id?: string;
+  stage?: string;
+  title?: string;
+  goal?: string;
+  steps?: PlanStepPayload[];
+}
+
 export interface SoftwareRunResult {
   command: string;
   exit_code: number;
@@ -222,6 +238,8 @@ export interface KyrozenAPI {
   pollPairing: (serverUrl: string, code: string) => Promise<{ success: boolean; ready?: boolean; wsToken?: string; error?: string }>;
   onChatMessage: (callback: (message: { role: string; content: string; raw?: string; error?: string; operations?: Array<{ description: string; status: string; timestamp: string }> }) => void) => () => void;
   onExecutionPlan: (callback: (plan: { task_id: string; steps: string[] }) => void) => () => void;
+  onPlanUpdated: (callback: (payload: { task_id: string; plan: PlanPayload; source: string }) => void) => () => void;
+  readWorkspacePlan: (workspaceRoot: string) => Promise<{ success: boolean; plan: PlanPayload | null; error?: string }>;
   onTaskActivity: (callback: (activity: { task_id: string; description: string; status: string }) => void) => () => void;
   onAgentRouted: (callback: (decision: { task_id: string; mode: string; mode_label: string; agent_name: string; agent_display_name: string; reason: string; available_tools: string[]; restricted_tools: string[]; degraded: boolean }) => void) => () => void;
   onAgentDegraded: (callback: (info: { task_id: string; agent_display_name: string; reason: string; repair_steps: string[] }) => void) => () => void;

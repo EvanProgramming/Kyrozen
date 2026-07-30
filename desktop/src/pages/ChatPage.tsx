@@ -22,12 +22,18 @@ interface Message {
 }
 
 interface PlanStep {
-  label: string;
-  status: OperationStatus;
+  id?: string;
+  label?: string;
+  title?: string;
+  detail?: string;
+  status: OperationStatus | string;
 }
 
 interface ExecutionPlan {
-  task_id: string;
+  task_id?: string;
+  stage?: string;
+  title?: string;
+  goal?: string;
   steps: PlanStep[];
 }
 
@@ -854,6 +860,30 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         })
         .catch(() => {});
     }
+
+    // P0-R6: hydrate the task panel from .kyrozen/PLAN.json on open so the
+    // user sees the real plan the agent saved, not empty state.
+    if (window.kyrozen && projectId) {
+      window.kyrozen.getWorkspaceRoot(projectId)
+        .then(({ workspaceRoot }) => workspaceRoot ? window.kyrozen?.readWorkspacePlan(workspaceRoot) : null)
+        .then((result) => {
+          if (!result?.success || !result.plan?.steps) return;
+          const steps = result.plan.steps.map((step) => ({
+            id: String(step.id || ''),
+            title: String(step.title || step.id || ''),
+            detail: typeof step.detail === 'string' ? step.detail : '',
+            status: step.status || 'pending',
+          }));
+          setPlan({
+            task_id: result.plan.task_id,
+            stage: result.plan.stage,
+            title: result.plan.title,
+            goal: result.plan.goal,
+            steps,
+          });
+        })
+        .catch(() => {});
+    }
   }, [projectId]);
 
   useEffect(() => {
@@ -872,8 +902,13 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         operations: msg.operations,
       }]);
       if (msg.role === 'assistant') {
-        setIsRunning(false);
-        setActivity('');
+        // P0-R6: do NOT clear isRunning / activity on every assistant message.
+        // The agent often says "让我先看看..." (intent statement) and the
+        // task is still ongoing. Clearing the indicator here leaves the user
+        // staring at a blank screen until the next activity event arrives
+        // (which can take several seconds, looking like a freeze). Terminal
+        // clearing happens only on task-activity {status=failed/completed}
+        // or chat-error messages. We only auto-mark plan steps complete.
         setPlan((current) => current ? {
           ...current,
           steps: current.steps.map((step) => ({ ...step, status: 'completed' })),
@@ -890,7 +925,32 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       }
     });
     const unsubPlan = window.kyrozen.onExecutionPlan((incoming) => {
-      setPlan({ task_id: incoming.task_id, steps: incoming.steps.map((label) => ({ label, status: 'pending' })) });
+      // Legacy path: model-output plan detection. Use it as a lightweight
+      // fallback; the file-based plan (onPlanUpdated) overrides when
+      // available.
+      setPlan((current) => current ? current : {
+        task_id: incoming.task_id,
+        steps: incoming.steps.map((label) => ({ label, status: 'pending' })),
+      });
+      setPlanExpanded(true);
+    });
+    const unsubPlanFile = window.kyrozen.onPlanUpdated((incoming) => {
+      // P0-R6: real planning. The plan comes from .kyrozen/PLAN.json, not from
+      // guessing model output bullets. Includes stage/title/goal/steps with
+      // live status (pending/in_progress/completed/failed).
+      const steps = Array.isArray(incoming.plan?.steps) ? incoming.plan.steps.map((step) => ({
+        id: String(step.id || ''),
+        title: String(step.title || step.id || ''),
+        detail: typeof step.detail === 'string' ? step.detail : '',
+        status: step.status || 'pending',
+      })) : [];
+      setPlan({
+        task_id: incoming.task_id,
+        stage: incoming.plan?.stage,
+        title: incoming.plan?.title,
+        goal: incoming.plan?.goal,
+        steps,
+      });
       setPlanExpanded(true);
     });
     const unsubActivity = window.kyrozen.onTaskActivity((incoming) => {
@@ -950,6 +1010,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     return () => {
       unsubChat();
       unsubPlan();
+      unsubPlanFile();
       unsubActivity();
       unsubConfirmation();
       unsubRouted();
@@ -1107,17 +1168,34 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       {plan && (
         <div className="bg-surface border-b border-line">
           <button type="button" onClick={() => setPlanExpanded((value) => !value)} className="w-full px-4 py-2 flex items-center justify-between text-left">
-            <span className="font-display text-lg text-ink">任务计划</span>
+            <div className="flex flex-col">
+              <span className="font-display text-lg text-ink">
+                {plan.title || '任务计划'}
+                {plan.stage ? <span className="ml-2 text-xs text-ink-faint">({plan.stage})</span> : null}
+              </span>
+              {plan.goal && (
+                <span className="text-xs text-ink-faint mt-0.5">{plan.goal}</span>
+              )}
+            </div>
             <span className="text-xs text-ink-faint">{planExpanded ? '收起' : '展开'}</span>
           </button>
           {planExpanded && (
             <div className="px-4 pb-3 space-y-2">
-              {plan.steps.map((step, index) => (
-                <div key={`${step.label}-${index}`} className="flex items-start gap-2 text-sm text-ink-soft">
-                  <span className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${dotClass[step.status]}`} />
-                  <div className="flex-1"><Markdown content={step.label} onOpenPreview={onOpenPreview} /></div>
-                </div>
-              ))}
+              {plan.steps.map((step, index) => {
+                const stepText = step.title || step.label || step.id || `Step ${index + 1}`;
+                const stepKey = step.id || `${stepText}-${index}`;
+                return (
+                  <div key={stepKey} className="flex items-start gap-2 text-sm text-ink-soft">
+                    <span className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${dotClass[step.status as OperationStatus] || dotClass.pending}`} />
+                    <div className="flex-1">
+                      <div><Markdown content={stepText} onOpenPreview={onOpenPreview} /></div>
+                      {step.detail && (
+                        <div className="text-xs text-ink-faint mt-0.5">{step.detail}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

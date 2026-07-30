@@ -11,6 +11,10 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 type SoftwareFeatureResult = Record<string, unknown>;
 
+type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
+type PlanStep = { id: string; title: string; detail?: string; status: PlanStepStatus };
+type PlanPayload = { stage?: string; title?: string; goal?: string; task_id?: string; steps?: PlanStep[] };
+
 contextBridge.exposeInMainWorld('kyrozen', {
   login: (email: string, password: string, serverUrl: string) =>
     ipcRenderer.invoke('kyrozen:login', email, password, serverUrl),
@@ -105,6 +109,16 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.on('kyrozen:execution-plan', handler);
     return () => ipcRenderer.removeListener('kyrozen:execution-plan', handler);
   },
+
+  onPlanUpdated: (callback: (payload: { task_id: string; plan: PlanPayload; source: string }) => void) => {
+    const handler = (_event: unknown, payload: { task_id: string; plan: PlanPayload; source: string }) =>
+      callback(payload);
+    ipcRenderer.on('kyrozen:plan-updated', handler);
+    return () => ipcRenderer.removeListener('kyrozen:plan-updated', handler);
+  },
+
+  readWorkspacePlan: (workspaceRoot: string) =>
+    ipcRenderer.invoke('kyrozen:read-workspace-plan', workspaceRoot),
 
   onTaskActivity: (callback: (activity: { task_id: string; description: string; status: string }) => void) => {
     const handler = (_event: unknown, activity: { task_id: string; description: string; status: string }) => callback(activity);

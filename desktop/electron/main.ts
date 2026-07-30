@@ -1458,6 +1458,28 @@ ipcMain.handle('kyrozen:get-workspace-root', async (_event, projectId: string) =
   return { workspaceRoot: await getWorkspaceRoot(projectId) };
 });
 
+// P0-R6: read the real .kyrozen/PLAN.json for a workspace so the renderer
+// can hydrate the task panel on project open or after a reload.
+ipcMain.handle('kyrozen:read-workspace-plan', async (_event, workspaceRoot: string) => {
+  if (!workspaceRoot || typeof workspaceRoot !== 'string') {
+    return { success: false, plan: null, error: 'Invalid workspace root' };
+  }
+  try {
+    const planPath = path.join(workspaceRoot, '.kyrozen', 'PLAN.json');
+    try {
+      await fs.access(planPath);
+    } catch (_err) {
+      return { success: true, plan: null };
+    }
+    const raw = await fs.readFile(planPath, 'utf-8');
+    const plan = JSON.parse(raw);
+    return { success: true, plan };
+  } catch (err: any) {
+    logWarn(`Failed to read PLAN.json for ${workspaceRoot}: ${err?.message || err}`);
+    return { success: false, plan: null, error: err?.message || String(err) };
+  }
+});
+
 async function isPathInside(parent: string, target: string): Promise<boolean> {
   async function resolveWithExistingAncestor(input: string): Promise<string> {
     let cursor = path.resolve(input);
@@ -3155,6 +3177,15 @@ function handlePythonAgentLine(line: string) {
       sendExecutionPlan({
         task_id: String(message.params.task_id || currentTaskId || ''),
         steps: Array.isArray(message.params.steps) ? message.params.steps : [],
+      });
+    } else if (message.method === 'plan_updated') {
+      // P0-R6: the agent saved/updated .kyrozen/PLAN.json. Forward the full
+      // plan so the desktop renders it as the task panel (instead of guessing
+      // bullet points out of model output).
+      mainWindow?.webContents.send('kyrozen:plan-updated', {
+        task_id: String(message.params.task_id || currentTaskId || ''),
+        plan: message.params.plan || {},
+        source: message.params.source || 'unknown',
       });
     } else if (message.method === 'task_result') {
       currentTaskRunning = false;

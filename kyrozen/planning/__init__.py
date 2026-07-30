@@ -17,6 +17,7 @@ from .models import (
     TargetUser,
     UserJourney,
 )
+from .plan import PLAN_STEP_STATUSES, ExecutionPlan, PlanStep
 from .state import PLANNING_STAGES, PlanningSession
 
 __all__ = [
@@ -26,6 +27,9 @@ __all__ = [
     "MVP",
     "Feature",
     "PRD",
+    "PLAN_STEP_STATUSES",
+    "PlanStep",
+    "ExecutionPlan",
     "ProductBrief",
     "ProductGoal",
     "ProductPlanningAgent",

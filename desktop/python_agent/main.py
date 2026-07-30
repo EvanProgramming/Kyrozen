@@ -1088,6 +1088,28 @@ class DesktopAgentRuntime:
             return None
         return p
 
+    def _read_plan_file(self) -> dict[str, object] | None:
+        """Read .kyrozen/PLAN.json from the workspace, if present.
+
+        P0-R6: the file is the single source of truth for what the agent is
+        actually planning; the renderer reads from here rather than guessing
+        from the model's prose.
+        """
+        ws = self._workspace_path()
+        if ws is None:
+            return None
+        plan_path = ws / ".kyrozen" / "PLAN.json"
+        if not plan_path.exists():
+            return None
+        try:
+            import json as _json
+            data = _json.loads(plan_path.read_text(encoding="utf-8") or "{}")
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
     @staticmethod
     def _status_for_tool(tool_name: str, action: str) -> "status_mod.StatusState":
         if tool_name in {"read_file", "file_read", "list_dir", "find_files"}:
@@ -1172,6 +1194,21 @@ class DesktopAgentRuntime:
                 "description": description,
                 "status": "completed" if succeeded else "failed",
             })
+            # P0-R6: when the agent persists a real execution plan (or updates a
+            # step), push the full plan to the desktop so the task panel reflects
+            # the file, not model-output bullet extraction.
+            if tool_name in ("save_plan", "update_plan_step") and succeeded:
+                plan_payload = None
+                if hasattr(result, "data") and isinstance(result.data, dict):
+                    plan_payload = result.data.get("plan")
+                if plan_payload is None:
+                    plan_payload = self._read_plan_file()
+                if plan_payload is not None:
+                    self._notify("plan_updated", {
+                        "task_id": self.current_task_id,
+                        "plan": plan_payload,
+                        "source": tool_name,
+                    })
             if ws is not None:
                 try:
                     status_mod.StatusManager(ws).clear()

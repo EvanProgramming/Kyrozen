@@ -7,7 +7,11 @@ to the Market Research Agent through the standard Tool interface.
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from kyrozen.research.models import (
     OPPORTUNITY_DECISIONS,
@@ -152,12 +156,14 @@ class SaveResearchSourceTool(Tool):
 
 
 class SaveMarketResearchReportTool(Tool):
-    """Save the final Market Research Report artifact."""
+    """Save the final Market Research Report and materialize it as the stage-gate
+    deliverable file docs/MARKET.md so the local progress gate detects it."""
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    def __init__(self, project_manager: "ProjectManager | None" = None, config: Any = None) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "save_market_research_report"
-        self.description = "Save or update the Market Research Report artifact for the current project."
+        self.description = "Save or update the Market Research Report and write it to docs/MARKET.md."
         self.schema = ToolSchema(
             name=self.name,
             description=self.description,
@@ -169,27 +175,78 @@ class SaveMarketResearchReportTool(Tool):
             },
         )
 
-    def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
+    @staticmethod
+    def _resolve_workspace(project_id, project_manager, config):
+        # Server: a ProjectManager is present, so the workspace is the
+        # project-scoped directory (config.project_dir). On the desktop the
+        # ProjectManager is None and config.workspace_root points directly at
+        # the user-selected workspace (set per-task in desktop main.py).
+        if project_manager is not None and project_id and hasattr(config, "project_dir"):
+            try:
+                return str(config.project_dir(project_id))
+            except Exception:
+                pass
+        ws = getattr(config, "workspace_root", None)
+        if ws and Path(ws).is_absolute():
+            return str(ws)
+        return None
+
+    @staticmethod
+    def _render_markdown(report):
+        data = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+        lines = ["# Market Research Report", ""]
+        for key, value in data.items():
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            title = key.replace("_", " ").title()
+            lines.append("## " + title)
+            if isinstance(value, (list, dict)):
+                lines.append("")
+                lines.append("```json")
+                lines.append(json.dumps(value, ensure_ascii=False, indent=2))
+                lines.append("```")
+            else:
+                lines.append("")
+                lines.append(str(value))
+            lines.append("")
+        return chr(10).join(lines)
+
+    def _execute(self, action, parameters):
         project_id = parameters.get("project_id")
         report_data = parameters.get("report", {})
-        if not project_id:
-            return ToolResult(success=False, data=None, error="Missing project_id")
+        if not report_data:
+            return ToolResult(success=False, data=None, error="Missing report")
         try:
             report = MarketResearchReport.from_dict(report_data)
-            content = json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
-            artifact = self.project_manager.save_artifact(
-                project_id=project_id,
-                type="market_research_report",
-                title="Market Research Report",
-                content=content,
-                change_reason="Market research update",
-            )
-            return ToolResult(success=True, data={"artifact_id": artifact.id, "version": artifact.version})
         except ValueError as e:
             return ToolResult(success=False, data=None, error=str(e))
-
+        content = json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
+        result = {}
+        if self.project_manager is not None and project_id:
+            try:
+                artifact = self.project_manager.save_artifact(
+                    project_id=project_id,
+                    type="market_research_report",
+                    title="Market Research Report",
+                    content=content,
+                    change_reason="Market research update",
+                )
+                result["artifact_id"] = artifact.id
+                result["version"] = artifact.version
+            except Exception as exc:
+                logger.debug("save_artifact failed: %s", exc)
+        workspace = self._resolve_workspace(project_id or "", self.project_manager, self.config)
+        if workspace:
+            try:
+                out = Path(workspace) / "docs" / "MARKET.md"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(self._render_markdown(report), encoding="utf-8")
+                result["file"] = str(out)
+            except Exception as exc:
+                logger.debug("write MARKET.md failed: %s", exc)
+        if not result:
+            return ToolResult(success=False, data=None, error="无法保存调研报告：未找到可写的项目工作区。")
+        return ToolResult(success=True, data=result)
 
 class RecordOpportunityDecisionTool(Tool):
     """Record the final opportunity decision from market research."""

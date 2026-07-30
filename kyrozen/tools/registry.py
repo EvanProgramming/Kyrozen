@@ -135,7 +135,7 @@ def get_default_registry(
     registry.register(GitHubSearchTool(token=github_token))
     registry.register(PaperSearchTool(api_key=semantic_scholar_api_key))
     registry.register(SaveResearchSourceTool(project_manager))
-    registry.register(SaveMarketResearchReportTool(project_manager))
+    registry.register(SaveMarketResearchReportTool(project_manager, config=config))
     registry.register(RecordOpportunityDecisionTool(project_manager))
     registry.register(SaveProductBriefTool(project_manager))
     registry.register(SavePRDTool(project_manager))

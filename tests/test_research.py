@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -227,6 +228,33 @@ def test_save_market_research_report_tool(project_manager, report_data: dict[str
     result2 = tool.execute("save", {"project_id": project.id, "report": report_data})
     assert result2.success
     assert result2.data["version"] == 2
+
+
+def test_save_market_research_report_writes_market_md_server(
+    project_manager, test_config: KyrozenConfig, report_data: dict[str, Any]
+):
+    # Server scenario: project_manager + config → docs/MARKET.md is written
+    # into the project directory so the stage gate can detect it.
+    project = project_manager.create(name="Test", goal="G")
+    tool = SaveMarketResearchReportTool(project_manager, config=test_config)
+    result = tool.execute("save", {"project_id": project.id, "report": report_data})
+    assert result.success, result.error
+    market_md = Path(test_config.project_dir(project.id)) / "docs" / "MARKET.md"
+    assert market_md.exists()
+    assert "Market Research Report" in market_md.read_text(encoding="utf-8")
+
+
+def test_save_market_research_report_desktop_mode(tmp_path, report_data: dict[str, Any]):
+    # Desktop scenario: no project_manager; config.workspace_root points at
+    # the user-selected workspace. The report must still land in docs/MARKET.md.
+    class _Cfg:
+        workspace_root = str(tmp_path)
+
+    tool = SaveMarketResearchReportTool(None, config=_Cfg())
+    result = tool.execute("save", {"project_id": "any", "report": report_data})
+    assert result.success, result.error
+    assert (tmp_path / "docs" / "MARKET.md").exists()
+    assert result.data.get("file", "").endswith("MARKET.md")
 
 
 def test_record_opportunity_decision_tool(project_manager):

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -10,18 +10,13 @@ type WorkspaceData = {
   decisions?: Row[];
   artifacts?: Row[];
   tasks?: Row[];
-  sections?: Record<string, Row>;
   local?: Row;
 };
 
 const TABS = [
-  ['overview', '项目主页', '目标、阶段与下一步'],
-  ['problem', '问题与证据', '用户问题、证据和市场结论'],
-  ['product', '产品方案', '产品简报、PRD 与技术方案'],
-  ['build', '开发交付', '实现任务、代码和硬件交付'],
-  ['validation', '测试验证', '测试结果与用户反馈'],
-  ['learning', '学习改进', '复盘、经验和改进建议'],
-  ['decisions', '项目决策', '关键决定与原因'],
+  ['overview', '项目主页', '项目目标、阶段与本地成果概览'],
+  ['decisions', '项目决策', '记录关键决定与原因'],
+  ['feedback', '用户反馈', '记录真实使用反馈'],
 ] as const;
 
 const LABELS: Record<string, string> = {
@@ -49,15 +44,6 @@ function empty(value: unknown) {
     || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0);
 }
 
-// P0-13/P0-R6: block raw runtime + internal engine fields from canvas rendering.
-// The canvas must show user-readable summaries, never internal JSON such as
-// stagegate records, software_feature.json internals, question-dimension blobs,
-// or task blobs.
-const BLOCKED_KEYS = new Set([
-  'command', 'stdout', 'stderr', 'exit_code', 'duration_ms', 'cwd',
-  'previous_error', 'stderr_snippet', 'error_type',
-]);
-
 // Internal-only keys that should never reach the user-facing canvas.
 const SANITIZE_KEYS = new Set([
   'stagegate', 'software', 'deliverables', 'files', 'records', 'skips',
@@ -65,6 +51,11 @@ const SANITIZE_KEYS = new Set([
   'verifications', 'gate_state', 'question_dimension', 'dimension', 'blocked_entry_reason',
   'missing_dimensions', 'question', 'log', 'metrics', 'trace', 'debug_info',
   'raw_response', 'tool_calls', 'intermediate', 'notes_internal',
+]);
+
+const BLOCKED_KEYS = new Set([
+  'command', 'stdout', 'stderr', 'exit_code', 'duration_ms', 'cwd',
+  'previous_error', 'stderr_snippet', 'error_type',
 ]);
 
 function readableKey(key: string) {
@@ -157,7 +148,7 @@ function Section({ title, description, value }: { title: string; description?: s
 }
 
 export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
-  const kyrozen = window.kyrozen!;
+  const kyzon = window.kyzon!;
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [tab, setTab] = useState<(typeof TABS)[number][0]>('overview');
   const [loading, setLoading] = useState(true);
@@ -170,43 +161,43 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     setLoadingSlow(false);
-    // P1-04: 超过 8 秒显示 "仍在加载" 提示，避免用户以为卡死。
     const slowTimer = window.setTimeout(() => setLoadingSlow(true), 8000);
-    const result = await kyrozen.getProjectWorkspace(projectId);
+    const result = await kyzon.getProjectWorkspace(projectId);
     window.clearTimeout(slowTimer);
     if (result.success && result.data) { setData(result.data as WorkspaceData); setNotice(''); }
     else setNotice(result.error || '项目画布加载失败');
     setLoading(false);
     setLoadingSlow(false);
-  }, [kyrozen, projectId]);
+  }, [kyzon, projectId]);
 
   useEffect(() => { void load(); }, [load]);
 
-  const artifactsByType = useMemo(() => {
-    const grouped: Record<string, Row[]> = {};
-    for (const artifact of data?.artifacts || []) {
-      const type = String(artifact.type || 'other');
-      (grouped[type] ||= []).push(artifact);
-    }
-    return grouped;
+  const artifactCount = useCallback(() => {
+    const docs = Array.isArray(data?.local?.files)
+      ? (data!.local!.files as unknown[]).filter((f) => {
+          const s = String(f);
+          return s.startsWith('docs/') || /PROBLEM\.md|PRD\.md|MARKET\.md|TECH_DESIGN\.md|README\.md/i.test(s);
+        }).length
+      : 0;
+    return (data?.artifacts?.length || 0) + docs + (data?.local?.software ? 1 : 0);
   }, [data]);
 
   const saveDecision = async () => {
     if (!decision.trim()) return;
-    const result = await kyrozen.createDecision(projectId, decision.trim(), reason.trim());
+    const result = await kyzon.createDecision(projectId, decision.trim(), reason.trim());
     setNotice(result.success ? '决策已保存' : result.error || '保存失败');
     if (result.success) { setDecision(''); setReason(''); await load(); }
   };
 
   const saveFeedback = async () => {
     if (!feedback.trim()) return;
-    const result = await kyrozen.createFeedback(projectId, feedback.trim(), 'experience', 'medium');
+    const result = await kyzon.createFeedback(projectId, feedback.trim(), 'experience', 'medium');
     setNotice(result.success ? '用户反馈已记录' : result.error || '记录失败');
     if (result.success) { setFeedback(''); await load(); }
   };
 
   const exportProject = async () => {
-    const result = await kyrozen.exportProject(projectId);
+    const result = await kyzon.exportProject(projectId);
     if (!result.cancelled) setNotice(result.success ? `已导出到 ${result.filePath}` : result.error || '导出失败');
   };
 
@@ -215,7 +206,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
       <header className="flex items-center justify-between px-5 py-3 border-b border-line bg-surface">
         <div>
           <h2 className="font-display text-2xl leading-none">项目画布</h2>
-          <p className="text-xs text-ink-faint mt-1">把项目从问题、方案到交付结果整理成可读的工作台</p>
+          <p className="text-xs text-ink-faint mt-1">查看项目概览、记录决策与反馈、导出项目</p>
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={() => void exportProject()} className="btn-secondary text-xs">导出</button>
@@ -241,59 +232,16 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
 
             {tab === 'overview' && (
               <>
-                <Section title={String(data.project?.name || '项目概览')} value={{ description: data.project?.description, goal: data.project?.goal, current_stage: data.project?.current_stage }} />
+                <Section
+                  title={String(data.project?.name || '项目概览')}
+                  value={{ description: data.project?.description, goal: data.project?.goal, current_stage: data.project?.current_stage }}
+                />
                 <div className="grid gap-4 md:grid-cols-3">
-                  <Section title="当前状态" value={sanitize(data.state)} />
-                  <Section title="已形成资料" value={`${(
-                    (data.artifacts?.length || 0) +
-                    (Array.isArray(data.local?.files)
-                      ? (data.local!.files as unknown[]).filter((f) => {
-                          const s = String(f);
-                          return s.startsWith('docs/') || /PROBLEM\.md|PRD\.md|MARKET\.md|TECH_DESIGN\.md|README\.md/i.test(s);
-                        }).length
-                      : 0) +
-                    (data.local?.software ? 1 : 0)
-                  )} 份`} />
+                  <Section title="当前阶段" value={localSummary(data.local)['当前阶段'] || String(data.project?.current_stage || '未知')} />
+                  <Section title="已形成资料" value={`${artifactCount()} 份`} />
                   <Section title="执行任务" value={`${data.tasks?.length || 0} 个`} />
                 </div>
                 <Section title="本地成果" description="工作区中真实存在的软件、交付物与阶段记录" value={localSummary(data.local)} />
-                <Section title="最近任务" description="只展示用户需要关注的任务结果" value={(data.tasks || []).slice(0, 5).map((item) => ({ title: String(item.title || '').startsWith('[') ? 'AI 项目任务' : item.title, status: item.status, result: (item.result as Row)?.answer }))} />
-              </>
-            )}
-            {tab === 'problem' && (
-              <>
-                <Section title="问题定义" value={sanitize(data.sections?.discovery)} />
-                <Section title="市场与竞品" value={data.sections?.research} />
-                <Section title="研究资料" value={[...(artifactsByType.problem_brief || []), ...(artifactsByType.market_research_report || [])]} />
-              </>
-            )}
-            {tab === 'product' && (
-              <>
-                <Section title="产品规划" value={data.sections?.planning} />
-                <Section title="产品资料" value={(data.artifacts || []).filter((item) => /product|prd|architecture|solution/i.test(String(item.type || '') + String(item.title || '')))} />
-              </>
-            )}
-            {tab === 'build' && (
-              <div className="grid gap-4 md:grid-cols-2">
-                <Section title="软件开发" value={data.sections?.development} />
-                <Section title="本地软件交付" value={data.local?.software} />
-                <Section title="硬件与采购" value={data.sections?.hardware} />
-              </div>
-            )}
-            {tab === 'validation' && (
-              <>
-                <div className="panel p-4 space-y-3">
-                  <h3 className="font-display text-xl">记录真实用户反馈</h3>
-                  <textarea className="input" value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="用户完成了什么、遇到什么问题、是否愿意继续使用？" rows={3} />
-                  <button type="button" onClick={() => void saveFeedback()} disabled={!feedback.trim()} className="btn-primary text-sm">保存反馈</button>
-                </div>
-                <Section title="测试结果" value={data.sections?.testing} />
-              </>
-            )}
-            {tab === 'learning' && (
-              <>
-                <Section title="项目学习" value={data.sections?.learning} />
-                <Section title="改进建议" value={data.sections?.improvement} />
               </>
             )}
             {tab === 'decisions' && (
@@ -306,6 +254,13 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                 </div>
                 <Section title="决策记录" value={data.decisions} />
               </>
+            )}
+            {tab === 'feedback' && (
+              <div className="panel p-4 space-y-3">
+                <h3 className="font-display text-xl">记录真实用户反馈</h3>
+                <textarea className="input" value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="用户完成了什么、遇到什么问题、是否愿意继续使用？" rows={3} />
+                <button type="button" onClick={() => void saveFeedback()} disabled={!feedback.trim()} className="btn-primary text-sm">保存反馈</button>
+              </div>
             )}
           </div>
         )}

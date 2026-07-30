@@ -90,16 +90,14 @@ def test_scaffold_writes_real_files(tmp_path: Path):
     # app.py is valid Python
     assert tmp_path.joinpath("app.py").read_text().count("def main()") == 1
     source = tmp_path.joinpath("app.py").read_text()
-    assert "创建活动" in source
-    assert "/api/events" in source
-    assert "不能重复提交" in source
-    assert "document.getElementById(id).value" in source
-    assert "title:title.value" not in source
-    assert "const phone=prompt(" not in source
-    assert "document.querySelector(`#phone-${id}`).value" in source
-    assert 'form id="createForm"' in source
-    assert 'class="signup-form row"' in source
-    assert "addEventListener('submit'" in source
+    # P0-R5: the default template is now a generic landing page, not a
+    # community event registration system. Verify the new structure.
+    assert "应用已就绪" in source
+    assert "/api/health" in source
+    assert "/api/" in source
+    assert "Kyrozen 已为你生成项目骨架" in source
+    assert 'id="features"' in source
+    assert "暂无服务端点" in source
     assert "onclick=" not in source
 
 

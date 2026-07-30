@@ -310,32 +310,20 @@ def generate_app_source(spec: SoftwareProjectSpec) -> str:
 import json
 import os
 import threading
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 FEATURES = __FEATURES_JSON__
 PREVIEW_ID = os.environ.get("KYROZEN_PREVIEW_ID", "")
-EVENTS = [{"id": "welcome", "title": "周末邻里活动", "time": "周六 14:00", "location": "社区活动室", "capacity": 6, "registrations": []}]
-LOCK = threading.Lock()
 
 INDEX_HTML = r"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>__APP_NAME_TEXT__</title><style>
-:root{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f4ee;color:#292824}*{box-sizing:border-box}body{margin:0}header{padding:24px 18px;background:#233b6e;color:white}header h1{margin:0 0 6px;font-size:25px}header p{margin:0;opacity:.82}.wrap{max-width:760px;margin:auto;padding:18px}.card{background:white;border:1px solid #dedbd2;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 3px 12px #0000000a}.row{display:flex;gap:10px;flex-wrap:wrap}.grow{flex:1;min-width:150px}input,button{font:inherit;border-radius:9px;padding:10px 12px}input{border:1px solid #c9c5bb;width:100%;margin-top:7px}button{border:0;background:#315fb5;color:white;font-weight:650;cursor:pointer}button.secondary{background:#ece9e1;color:#36342f}.meta{color:#68645b;font-size:14px}.spots{font-weight:700;color:#315fb5}.error{color:#a72f2f}.success{color:#257348}h2,h3{margin-top:0}@media(max-width:520px){header{padding-top:30px}.wrap{padding:12px}.card{border-radius:12px}.row button{width:100%}}
+:root{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f4ee;color:#292824}*{box-sizing:border-box}body{margin:0}header{padding:24px 18px;background:#233b6e;color:white}header h1{margin:0 0 6px;font-size:25px}header p{margin:0;opacity:.82}.wrap{max-width:760px;margin:auto;padding:18px}.card{background:white;border:1px solid #dedbd2;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 3px 12px #0000000a}
 </style></head><body><header><h1>__APP_NAME_TEXT__</h1><p>__APP_DESCRIPTION_TEXT__</p></header><main class="wrap">
-<section class="card"><h2>创建活动</h2><form id="createForm"><div class="row"><label class="grow">活动名称<input id="title" required placeholder="例如：周末旧物交换"></label><label class="grow">时间<input id="time" required placeholder="周六 14:00"></label></div><div class="row"><label class="grow">地点<input id="location" required placeholder="社区活动室"></label><label class="grow">人数上限<input id="capacity" type="number" min="1" required value="10"></label></div><p><button type="submit">发布活动</button></p></form><div id="createMsg" role="status"></div></section>
-<section><h2>可报名活动</h2><div id="events">正在加载…</div></section></main><script>
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(url,opts={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});const d=await r.json();if(!r.ok)throw new Error(d.error||'操作失败');return d}
-async function load(){const events=await api('/api/events');document.querySelector('#events').innerHTML=events.map(e=>{const left=e.capacity-e.registrations.length;return `<article class="card"><h3>${esc(e.title)}</h3><p class="meta">${esc(e.time)} · ${esc(e.location)}</p><p class="spots">${left>0?`剩余 ${left} 个名额`:'名额已满，可联系组织者候补'}</p><form class="signup-form row" data-event-id="${e.id}"><input class="grow" id="name-${e.id}" required placeholder="你的姓名"><input class="grow" id="phone-${e.id}" required inputmode="tel" placeholder="手机号"><button type="submit" ${left<1?'disabled':''}>报名</button><button type="button" class="secondary cancel-signup" data-event-id="${e.id}">取消报名</button></form><div id="msg-${e.id}" role="status"></div></article>`}).join('')||'<div class="card">还没有活动</div>'}
-async function createEvent(){const msg=document.querySelector('#createMsg');const value=id=>document.getElementById(id).value;try{await api('/api/events',{method:'POST',body:JSON.stringify({title:value('title'),time:value('time'),location:value('location'),capacity:Number(value('capacity'))})});msg.className='success';msg.textContent='活动已发布';await load()}catch(e){msg.className='error';msg.textContent=e.message}}
-async function signup(id){const msg=document.querySelector(`#msg-${id}`);try{await api(`/api/events/${id}/registrations`,{method:'POST',body:JSON.stringify({name:document.querySelector(`#name-${id}`).value,phone:document.querySelector(`#phone-${id}`).value})});await load();const refreshed=document.querySelector(`#msg-${id}`);refreshed.className='success';refreshed.textContent='报名成功，活动信息已为你保留'}catch(e){msg.className='error';msg.textContent=e.message}}
-async function cancelSignup(id){const phone=document.querySelector(`#phone-${id}`).value;const msg=document.querySelector(`#msg-${id}`);if(!phone){msg.className='error';msg.textContent='请输入报名时使用的手机号';return}try{await api(`/api/events/${id}/registrations/${encodeURIComponent(phone)}`,{method:'DELETE'});await load();const refreshed=document.querySelector(`#msg-${id}`);refreshed.className='success';refreshed.textContent='已取消报名'}catch(e){msg.className='error';msg.textContent=e.message}}
-document.querySelector('#createForm').addEventListener('submit',event=>{event.preventDefault();createEvent()});
-document.querySelector('#events').addEventListener('submit',event=>{const form=event.target.closest('.signup-form');if(!form)return;event.preventDefault();signup(form.dataset.eventId)});
-document.querySelector('#events').addEventListener('click',event=>{const button=event.target.closest('.cancel-signup');if(button)cancelSignup(button.dataset.eventId)});
-load().catch(e=>document.querySelector('#events').innerHTML=`<div class="card error">${esc(e.message)}</div>`)
+<div class="card"><h2>应用已就绪</h2><p>Kyrozen 已为你生成项目骨架。当前特性通过 /api/<slug> 端点提供，你可以在下面的 swatch 中查看可用接口。</p><div id="features"></div></div></main><script>
+async function load(){const r=await fetch('/api/health');const d=await r.json();const list=document.querySelector('#features');list.innerHTML=Object.keys(d).filter(k=>k!=='status'&&!k.startsWith('_')).map(k=>`<div class="card"><strong>/${k}</strong><pre class="meta" style="white-space:pre-wrap">${JSON.stringify(d[k],null,2)}</pre></div>`).join('')||'<p class="meta">暂无服务端点（可能是默认占位生成）</p>'}
+load().catch(e=>document.querySelector('#features').innerHTML=`<div class="card error">${e.message}</div>`)
 </script></body></html>"""
 
 
@@ -358,9 +346,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
-    def _event(self, event_id):
-        return next((event for event in EVENTS if event["id"] == event_id), None)
-
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/":
@@ -371,47 +356,13 @@ class Handler(BaseHTTPRequestHandler):
             if PREVIEW_ID: payload["_preview_id"] = PREVIEW_ID
             self._send(payload)
             return
-        if path == "/api/events":
-            with LOCK:
-                self._send(EVENTS)
-            return
 __FEATURE_ROUTES__
         self._send({"error": "not found"}, 404)
 
     def do_POST(self):
         parts = urlparse(self.path).path.strip("/").split("/")
         data = self._json_body()
-        if parts == ["api", "events"]:
-            title = str(data.get("title") or "").strip()
-            try: capacity = int(data.get("capacity") or 0)
-            except (TypeError, ValueError): capacity = 0
-            if not title or capacity < 1:
-                self._send({"error": "请填写活动名称和有效人数上限"}, 400); return
-            event = {"id": uuid.uuid4().hex[:10], "title": title, "time": str(data.get("time") or "待定"), "location": str(data.get("location") or "待定"), "capacity": capacity, "registrations": []}
-            with LOCK: EVENTS.append(event)
-            self._send(event, 201); return
-        if len(parts) == 4 and parts[:2] == ["api", "events"] and parts[3] == "registrations":
-            event = self._event(parts[2]); name = str(data.get("name") or "").strip(); phone = str(data.get("phone") or "").strip()
-            if not event: self._send({"error": "活动不存在"}, 404); return
-            if not name or not phone: self._send({"error": "请填写姓名和手机号"}, 400); return
-            with LOCK:
-                # P0-08: phone uniqueness is per-event, not global
-                if any(r["phone"] == phone for r in event["registrations"]): self._send({"error": "该手机号已经报名此活动，不能重复提交"}, 409); return
-                if len(event["registrations"]) >= event["capacity"]: self._send({"error": "名额已满，请联系组织者候补"}, 409); return
-                event["registrations"].append({"name": name, "phone": phone})
-            self._send({"ok": True, "event": event}, 201); return
-        self._send({"error": "not found"}, 404)
-
-    def do_DELETE(self):
-        parts = urlparse(self.path).path.strip("/").split("/")
-        if len(parts) == 5 and parts[:2] == ["api", "events"] and parts[3] == "registrations":
-            event = self._event(parts[2]); phone = parts[4]
-            if not event: self._send({"error": "活动不存在"}, 404); return
-            with LOCK:
-                before = len(event["registrations"])
-                event["registrations"] = [r for r in event["registrations"] if r["phone"] != phone]
-            if len(event["registrations"]) == before: self._send({"error": "没有找到该手机号的报名"}, 404); return
-            self._send({"ok": True}); return
+        __FEATURE_POST_ROUTES__
         self._send({"error": "not found"}, 404)
 
     def log_message(self, *args):
@@ -431,6 +382,7 @@ if __name__ == "__main__":
     return (template
             .replace("__FEATURES_JSON__", json.dumps(spec.canonical_feature_values(), ensure_ascii=False, indent=4))
             .replace("__FEATURE_ROUTES__", routes)
+            .replace("__FEATURE_POST_ROUTES__", "")
             .replace("__APP_NAME_TEXT__", _sanitize_display_text(spec.app_name, "Kyrozen App").replace("<", "&lt;").replace(">", "&gt;"))
             .replace("__APP_DESCRIPTION_TEXT__", _sanitize_display_text(spec.description, "Kyrozen generated app").replace("<", "&lt;").replace(">", "&gt;"))
             .replace("__PORT__", str(spec.port)))
@@ -489,21 +441,9 @@ class AppTest(unittest.TestCase):
 
     def test_homepage_is_real_interactive_html(self):
         html = self.get("/")
-        self.assertIn("创建活动", html)
-        self.assertIn("报名", html)
-
-    def test_event_signup_duplicate_capacity_and_cancel(self):
-        event = self.request("/api/events", "POST", {{"title": "测试活动", "time": "明天", "location": "活动室", "capacity": 1}})
-        event_id = event["id"]
-        self.request(f"/api/events/{{event_id}}/registrations", "POST", {{"name": "小林", "phone": "13800000001"}})
-        with self.assertRaises(urllib.error.HTTPError) as duplicate:
-            self.request(f"/api/events/{{event_id}}/registrations", "POST", {{"name": "小林", "phone": "13800000001"}})
-        self.assertEqual(duplicate.exception.code, 409)
-        with self.assertRaises(urllib.error.HTTPError) as full:
-            self.request(f"/api/events/{{event_id}}/registrations", "POST", {{"name": "小周", "phone": "13800000002"}})
-        self.assertEqual(full.exception.code, 409)
-        self.request(f"/api/events/{{event_id}}/registrations/13800000001", "DELETE")
-        self.request(f"/api/events/{{event_id}}/registrations", "POST", {{"name": "小周", "phone": "13800000002"}})
+        # P0-R5: the default template is now a generic landing page.
+        self.assertIn("应用已就绪", html)
+        self.assertIn("features", html)
 
 {feature_tests}
 

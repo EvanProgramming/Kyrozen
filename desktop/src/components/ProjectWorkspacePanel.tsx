@@ -234,7 +234,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
               <>
                 <Section
                   title={String(data.project?.name || '项目概览')}
-                  value={{ description: data.project?.description, goal: data.project?.goal, current_stage: data.project?.current_stage }}
+                  value={{ description: data.project?.description, goal: data.project?.goal }}
                 />
                 <div className="grid gap-4 md:grid-cols-3">
                   <Section title="当前阶段" value={localSummary(data.local)['当前阶段'] || String(data.project?.current_stage || '未知')} />

@@ -800,6 +800,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   const [otherOpen, setOtherOpen] = useState<Set<number>>(new Set());
   const [otherDrafts, setOtherDrafts] = useState<Record<number, string>>({});
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
+  const [confirmationExpanded, setConfirmationExpanded] = useState(false);
   const [routedAgent, setRoutedAgent] = useState<RoutedAgent | null>(null);
   const [degraded, setDegraded] = useState<DegradedInfo | null>(null);
   const [chatError, setChatError] = useState<{ summary: string; raw: string } | null>(null);
@@ -916,6 +917,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     });
     const unsubConfirmation = window.kyrozen.onConfirmationRequest((request) => {
       setConfirmation(request);
+      setConfirmationExpanded(false);
       setActivity('等待你确认下一步操作');
     });
     const unsubRouted = window.kyrozen.onAgentRouted((decision) => {
@@ -960,6 +962,26 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, activity, confirmation]);
+
+  function friendlyActionLabel(tool: string, action: string): string {
+    const key = `${tool}.${action}`;
+    const map: Record<string, string> = {
+      'terminal.execute': '运行终端命令',
+      'file_write.write': '写入文件',
+      'file_write.create': '创建文件',
+      'file_write.delete': '删除文件',
+      'file_write.rename': '重命名文件',
+      'git_ops.init': '初始化 Git 仓库',
+      'git_ops.commit': '提交 Git 变更',
+      'git_ops.push': '推送到远端',
+      'github.create_repo': '创建 GitHub 仓库',
+      'github.create_file': '创建 GitHub 文件',
+      'browser_action.open': '打开浏览器',
+      'browser_action.click': '执行点击操作',
+      'browser_action.type': '输入文字',
+    };
+    return map[key] || key;
+  }
 
   const sendMessage = async (message: string, options?: { echoUser?: boolean }) => {
     if (!window.kyrozen || !projectId || !message.trim()) return;
@@ -1284,9 +1306,24 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         {confirmation && (
           <div className="max-w-[84%] panel p-4 border-l-2 border-l-warning" role="dialog" aria-label="操作确认">
             <div className="font-display text-lg">需要你的确认</div>
-            <div className="text-sm text-ink mt-1">{confirmation.tool}.{confirmation.action}</div>
+            <div className="text-sm text-ink mt-1">{friendlyActionLabel(confirmation.tool, confirmation.action)}</div>
             <div className="text-xs text-ink-faint mt-2">{confirmation.reason || '此操作会修改项目或运行命令。'}</div>
-            <pre className="mt-3 max-h-40 overflow-auto bg-paper-sink border border-line rounded-sm p-3 text-xs text-ink-soft font-mono whitespace-pre-wrap">{JSON.stringify(confirmation.parameters, null, 2)}</pre>
+            {confirmation.parameters && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setConfirmationExpanded((prev) => !prev)}
+                  className="text-xs btn-ghost mt-2 px-2 py-0.5"
+                >
+                  {confirmationExpanded ? '收起操作详情' : '查看操作详情'}
+                </button>
+                {confirmationExpanded && (
+                  <pre className="mt-2 max-h-40 overflow-auto bg-paper-sink border border-line rounded-sm p-3 text-xs text-ink-soft font-mono whitespace-pre-wrap">
+                    {JSON.stringify(confirmation.parameters, null, 2)}
+                  </pre>
+                )}
+              </>
+            )}
             <div className="flex flex-wrap gap-2 mt-3">
               <button type="button" onClick={() => void respondConfirmation(true, false, confirmation?.store_id)} className="btn-primary text-xs">允许一次</button>
               <button type="button" onClick={() => void respondConfirmation(true, true, confirmation?.store_id)} className="btn-secondary text-xs">本项目信任此操作类型</button>

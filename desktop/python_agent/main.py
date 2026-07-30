@@ -27,11 +27,12 @@ from kyrozen.core.router import AgentRouter, LocalCapabilities
 from kyrozen.core.stagegate import (
     STAGES,
     StageGateStore,
+    advance,
     compute_gate,
     compute_progress,
+    entry_blocked,
     get_status,
     refresh_gate,
-    advance,
 )
 from kyrozen.core.task import Task
 from kyrozen.core import featuregen as featuregen_mod
@@ -560,14 +561,25 @@ class DesktopAgentRuntime:
                 probe = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
                 cur = probe.current_stage
                 if cur in STAGES and STAGES.index(intended) > STAGES.index(cur):
-                    probe.current_stage = intended
-                    probe.progress = compute_progress(probe)
-                    probe.save()
-                    self.logger.info(
-                        "Natural-language stage progression: %s -> %s", cur, intended
-                    )
-                    stage = intended
-                    requested_mode = ""
+                    # P0-R5: do NOT fast-forward into a stage whose hard entry
+                    # gate is not satisfied.  Otherwise plain-language intent
+                    # ("帮我做出来") can skip the PRD requirement, which makes
+                    # the gate, stage, and actual generation inconsistent.
+                    blocked = entry_blocked(probe, intended)
+                    if blocked:
+                        self.logger.info(
+                            "Intent-based stage fast-forward blocked at %s: %s",
+                            intended, blocked,
+                        )
+                    else:
+                        probe.current_stage = intended
+                        probe.progress = compute_progress(probe)
+                        probe.save()
+                        self.logger.info(
+                            "Natural-language stage progression: %s -> %s", cur, intended,
+                        )
+                        stage = intended
+                        requested_mode = ""
         except Exception:
             self.logger.debug("intent-based stage fast-forward failed", exc_info=True)
 

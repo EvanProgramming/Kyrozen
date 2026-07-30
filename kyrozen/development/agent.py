@@ -68,11 +68,22 @@ class SoftwareDevelopmentAgent(BaseAgent):
         if ws is None:
             return None
         try:
+            # P0-R5: the server prepends project context (Project ID, Current
+            # Stage, Problem Brief, …) to the user message. We must NOT leak
+            # internal metadata into the generated HTML preview (header, title,
+            # description). Extract only the user's actual request.
+            _desc = user_input
+            if "[User Message]" in _desc:
+                _desc = _desc.split("[User Message]", 1)[-1].strip()
+            if not _desc:
+                _desc = "Kyrozen generated web app"
             gen = self.tools.execute("software_feature", "generate", {
                 "workspace_root": str(ws),
                 "app_type": "web_app",
-                "app_name": ws.name,
-                "description": user_input[:2000],
+                # app_name: prefer the project name from config, fall back to
+                # a generic label — never leak the internal workspace uuid.
+                "app_name": getattr(self.config, "project_name", None) or "Kyrozen App",
+                "description": _desc[:200],
                 "prd": self._load_prd_json(ws),
             })
             if not gen.success:

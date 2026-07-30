@@ -276,6 +276,33 @@ def generate_project_spec(
 # --------------------------------------------------------------------------- #
 # Source generation (deterministic -> enables regeneration during repair)
 # --------------------------------------------------------------------------- #
+_INTERNAL_CONTEXT_RE = re.compile(
+    r"^.*(?:"
+    r"Project\s*ID|Current\s*Stage|Your\s+role|Problem\s*Brief|"
+    r"confidence\s*:\s*|decision\s*:\s*|need_more_information|"
+    r"\\[Current Problem Brief\\]|\\[Project Context\\]"
+    r").*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _sanitize_display_text(text: str, fallback: str = "Kyrozen App") -> str:
+    """Strip internal project metadata from display text (P0-R5).
+
+    The description field may carry server-injected context (Project ID,
+    Current Stage, Problem Brief, confidence markers, …).  This must never
+    leak into the public HTML header.  We drop all lines that match known
+    internal patterns, and return the first remaining non-empty paragraph —
+    or *fallback* if nothing is left."""
+    cleaned = _INTERNAL_CONTEXT_RE.sub("", text)
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    # Pick the first remaining non-empty line as a short tagline.
+    for line in lines:
+        if len(line) > 4 and not line.startswith("[") and not line.startswith("-"):
+            return line[:120]
+    return fallback
+
+
 def generate_app_source(spec: SoftwareProjectSpec) -> str:
     slugs = spec.feature_slugs()
     routes = "\n".join(f'        if path == "/api/{s}":\n            self._send(FEATURES.get("{s}", {{}})); return' for s in slugs)
@@ -404,8 +431,8 @@ if __name__ == "__main__":
     return (template
             .replace("__FEATURES_JSON__", json.dumps(spec.canonical_feature_values(), ensure_ascii=False, indent=4))
             .replace("__FEATURE_ROUTES__", routes)
-            .replace("__APP_NAME_TEXT__", spec.app_name.replace("<", "&lt;").replace(">", "&gt;"))
-            .replace("__APP_DESCRIPTION_TEXT__", spec.description.replace("<", "&lt;").replace(">", "&gt;"))
+            .replace("__APP_NAME_TEXT__", _sanitize_display_text(spec.app_name, "Kyrozen App").replace("<", "&lt;").replace(">", "&gt;"))
+            .replace("__APP_DESCRIPTION_TEXT__", _sanitize_display_text(spec.description, "Kyrozen generated app").replace("<", "&lt;").replace(">", "&gt;"))
             .replace("__PORT__", str(spec.port)))
 
 

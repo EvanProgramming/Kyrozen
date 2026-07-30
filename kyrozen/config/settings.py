@@ -58,6 +58,7 @@ PROVIDER_DEFAULT_MODELS: dict[str, tuple[str, str]] = {
     "omniroute": ("auto", "auto"),
     "ollama": ("llama3.2", "llama3.2"),
     "multi": ("auto", "auto"),
+    "mock": ("mock", "mock"),  # test-only; suppresses validation noise in E2E
 }
 
 PROVIDER_BASE_URLS: dict[str, str] = {

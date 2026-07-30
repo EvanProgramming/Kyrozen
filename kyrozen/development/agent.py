@@ -81,19 +81,24 @@ class SoftwareDevelopmentAgent(BaseAgent):
             run = self.tools.execute("software_feature", "run", {"workspace_root": str(ws)})
             files = (gen.data or {}).get("files", [])
             run_data = run.data or {}
+            # P0-R5: the final answer shown in the main chat must describe what
+            # the user got, not how the model failed. Move the "AI 未能自主写入
+            # 文件" self-diagnosis out of the user-visible reply; it belongs in
+            # the operations log only.
             lines = [
-                "AI 未能自主写入文件，已由确定性生成引擎兜底完成开发交付：",
+                f"已为你生成 {len(files)} 个项目文件（含源码、README、测试）。",
                 "",
-                f"- 已生成 {len(files)} 个项目文件（含源码、README、测试）",
             ]
             if run.success:
-                lines.append("- 构建/测试/核心流程验证：全部通过")
+                lines.append("- 构建、测试与核心流程验证：全部通过")
                 if run_data.get("preview_url"):
                     lines.append(f"- 本地预览：{run_data['preview_url']}")
             else:
-                lines.append(f"- 构建验证未全部通过：{run.error or '详见操作记录'}（可要求我修复）")
-            if model_answer.strip():
-                lines += ["", "此前 AI 的实现思路：", model_answer.strip()]
+                lines.append(f"- 构建验证未全部通过：{run.error or '请查看操作记录'}（可让我继续修复）")
+            lines += ["", "如果你想调整界面或功能，告诉我具体要改的地方即可。"]
+            # P0-R5: the failed model's reasoning is not a user-facing artifact.
+            # It belongs in the operations log (already attached via task.steps),
+            # not the main chat reply. Drop it here.
             return "\n".join(lines)
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.error(f"Deterministic fallback crashed: {type(exc).__name__}: {exc}", task_id=task.id)

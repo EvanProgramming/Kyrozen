@@ -242,20 +242,58 @@ class PlanDetectingModelProvider:
             self._on_plan(plan)
 
     def _extract_plan_steps(self, text: str) -> list[str] | None:
+        """Detect a real execution plan in model output.
+
+        A "real" plan must have an explicit plan-style heading (Chinese/English
+        keywords like 执行计划/计划/plan/steps/步骤) followed by steps, or a
+        numbered action sequence (1./2./3.). Random bullet lists — status
+        reports, requirement reviews, question lists — are NOT plans and must
+        not leak into the 任务计划 panel (P0-R5).
+        """
         lines = text.splitlines()
-        marker_re = re.compile(r"^\s*(?:[-*]|\d+[.\)])\s+(.+)$")
+        bullet_re = re.compile(r"^\s*(?:[-*]|\d+[.\)])\s+(.+)$")
+        # Lines that describe current state, not future actions, must be skipped
+        # even if they appear inside a heading section.
+        status_re = re.compile(
+            r"^\s*(?:"
+            r"项目阶段|阶段|当前阶段|problem\s*brief|market\s*research|"
+            r"prd|技术方案|设计|已完成|未完成|尚未|缺少|未设置|"
+            r"已进行|未进行|存在一些|需要更多|置信度|信心"
+            r")\b",
+            re.IGNORECASE,
+        )
+        plan_keywords = ("执行计划", "计划：", "执行步骤", "plan", "steps", "步骤")
         plan_heading = False
         steps: list[str] = []
+        numbered = 0
         for line in lines:
             stripped = line.strip()
             lower = stripped.lower()
-            if any(keyword in lower for keyword in ("执行计划", "计划", "plan", "steps", "步骤")):
-                plan_heading = True
-            match = marker_re.match(line)
+            if any(keyword in lower for keyword in plan_keywords):
+                # Avoid matching intent phrasing like "下一步计划" only — require
+                # the keyword to be at the start of a line that is heading-shaped
+                # (short, no terminal punctuation other than ：).
+                if len(stripped) <= 40 and (stripped.endswith("：") or stripped.endswith(":")
+                                            or lower.startswith("plan") or lower.startswith("step")):
+                    plan_heading = True
+            match = bullet_re.match(line)
             if match:
-                steps.append(match.group(1).strip())
-        # Emit if we see a plan heading with at least one step, or two+ steps without heading.
-        if steps and (plan_heading or len(steps) >= 2):
+                content = match.group(1).strip()
+                if status_re.match(content):
+                    # Skip state-description bullets — they're not actionable steps.
+                    continue
+                # Numbered bullets (1./2./3.) count as implicit plan enumeration.
+                if re.match(r"^\d+[.\)]\s+", line.strip()):
+                    numbered += 1
+                steps.append(content)
+        if not steps:
+            return None
+        # Real plan = explicit heading + ≥1 step, OR ≥2 numbered steps (which are
+        # unambiguous enumeration of actions). Random bullet lists without either
+        # signal are treated as status reports / question lists and dropped.
+        if plan_heading and len(steps) >= 1:
+            return steps[:10]
+        if numbered >= 2:
             return steps[:10]
         return None
 

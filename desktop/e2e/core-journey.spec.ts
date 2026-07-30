@@ -146,12 +146,12 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
       if (created) process.env.KYROZEN_E2E_PROJECT_ID = created.id;
       await screenshotMilestone(window, '03-project-created.png', testInfo);
 
-      // 项目画布（探索/研究/PRD/编码/测试 的真实标签页）
+      // 项目画布（2026-07-30 精简后信息架构：项目主页 / 项目决策 / 用户反馈）
       await window.getByRole('button', { name: '项目画布' }).click();
       await expect(window.getByTestId('project-workspace-panel')).toBeVisible();
 
-      // P0-09 修复：验证六个画布标签页都存在（与生产 Router 模式一致）
-      const expectedTabs = ['问题与证据', '产品方案', '开发交付', '测试验证', '学习改进', '项目决策'];
+      // 验证精简后的画布标签页都存在（与正式信息架构一致）
+      const expectedTabs = ['项目主页', '项目决策', '用户反馈'];
       for (const tab of expectedTabs) {
         await expect(
           window.getByRole('button', { name: tab }),
@@ -255,7 +255,7 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
         await window2.getByRole('button', { name: '项目画布' }).click();
         await expect(window2.getByTestId('project-workspace-panel')).toBeVisible();
 
-        // 确认六个画布标签页仍在（恢复完整性）
+        // 确认精简后的画布标签页仍在（恢复完整性）
         for (const tab of expectedTabs) {
           await expect(
             window2.getByRole('button', { name: tab }),

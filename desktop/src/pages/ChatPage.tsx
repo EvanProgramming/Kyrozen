@@ -70,21 +70,29 @@ interface ChatPageProps {
   onProjectChanged?: () => void;
 }
 
-const QUESTION_BLOCK_RE = /```kyrozen-question\s*\n([\s\S]*?)```/i;
+// Accept both the canonical fenced form and the XML-tag form the model
+// sometimes emits, with or without a newline after the language tag, so raw
+// protocol text never leaks into the chat area (acceptance 2026-07-30).
+const QUESTION_BLOCK_RE = /```\s*kyrozen[-_]?question\s*([\s\S]*?)```/i;
+const QUESTION_TAG_RE = /<kyrozen[-_]?question>\s*([\s\S]*?)\s*<\/kyrozen[-_]?question>/i;
 
 // UI cleanup: the software generation panel is only relevant from the
 // development stage onwards; earlier stages keep the chat clean.
 const DEV_AND_LATER = new Set(['development', 'testing', 'iteration']);
 
 function splitQuestionBlock(content: string): { markdown: string; question: QuestionCard | null } {
-  const match = content.match(QUESTION_BLOCK_RE);
+  const match = content.match(QUESTION_BLOCK_RE) || content.match(QUESTION_TAG_RE);
   if (!match) return { markdown: content, question: null };
   try {
-    const parsed = JSON.parse(match[1]) as QuestionCard;
+    const parsed = JSON.parse(match[1].trim()) as QuestionCard;
     if (!parsed.question || !Array.isArray(parsed.options)) throw new Error('invalid question');
     return { markdown: content.replace(match[0], '').trim(), question: parsed };
   } catch {
-    return { markdown: content, question: null };
+    // Malformed block: strip the raw protocol text instead of leaking it.
+    // Salvage the human-readable question text when possible.
+    const questionText = match[1].match(/"question"\s*:\s*"([^"]+)"/);
+    const markdown = content.replace(match[0], questionText ? questionText[1] : '').trim();
+    return { markdown, question: null };
   }
 }
 
@@ -790,6 +798,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   // (optimistic), 'down'/'degraded' means we must not hang on a dead Agent.
   const [agentReady, setAgentReady] = useState<{ status: string; version?: string; mode?: string; reason?: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Last user message that entered the send pipeline; used by the retry
+  // button on failure so the user never has to re-type after a timeout.
+  const lastSentRef = useRef<string>('');
   const media = useMediaAttachments(projectId, agentReady);
 
   useEffect(() => {
@@ -874,6 +885,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     const unsubActivity = window.kyrozen.onTaskActivity((incoming) => {
       setActivity(incoming.description);
       if (incoming.status === 'running' && incoming.task_id) setIsRunning(true);
+      // Terminal activity states must always re-enable the input box, even
+      // when no chat message follows (e.g. cancelled / dispatch failure).
+      if (incoming.status === 'failed' || incoming.status === 'completed') setIsRunning(false);
       setPlan((current) => {
         if (!current || (incoming.task_id && current.task_id && incoming.task_id !== current.task_id)) return current;
         const steps = current.steps.map((step) => ({ ...step }));
@@ -939,6 +953,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
 
   const sendMessage = async (message: string, options?: { echoUser?: boolean }) => {
     if (!window.kyrozen || !projectId || !message.trim()) return;
+    lastSentRef.current = message;
     if (options?.echoUser !== false) {
       setMessages((prev) => [...prev, { role: 'user', content: message }]);
     }
@@ -1215,7 +1230,18 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           <div className="border border-line border-l-2 border-l-danger bg-danger-soft rounded-sm px-3 py-2 text-xs">
             <div className="flex items-start justify-between gap-2">
               <span className="text-danger">{chatError.summary}</span>
-              <button type="button" onClick={() => setChatError(null)} className="text-ink-faint hover:text-ink shrink-0">×</button>
+              <div className="flex items-center gap-2 shrink-0">
+                {lastSentRef.current && (
+                  <button
+                    type="button"
+                    onClick={() => { setChatError(null); void sendMessage(lastSentRef.current, { echoUser: false }); }}
+                    className="btn-secondary text-[11px] px-2 py-0.5"
+                  >
+                    重试
+                  </button>
+                )}
+                <button type="button" onClick={() => setChatError(null)} className="text-ink-faint hover:text-ink">×</button>
+              </div>
             </div>
             <details className="mt-1">
               <summary className="cursor-pointer text-ink-faint">技术详情</summary>
@@ -1264,7 +1290,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
             className="input flex-1"
           />
           {isRunning ? (
-            <button type="button" onClick={() => { window.kyrozen?.cancelTask(); setIsRunning(false); setActivity(''); }} className="btn-danger px-5">停止</button>
+            <button type="button" onClick={() => { window.kyrozen?.cancelTask(); setIsRunning(false); setActivity('已停止本次任务'); }} className="btn-danger px-5">停止</button>
           ) : (
             <button type="button" onClick={() => void handleSend()} disabled={!projectId || (!input.trim() && pendingAttachments.length === 0)} className="btn-primary px-5">发送</button>
           )}

@@ -728,9 +728,32 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: Modes preferring local (desktop) execution. Phase 1 acceptance: when a
+#: desktop client is online, ALL project chat modes run locally so save_*
+#: tools write deliverables (docs/PROBLEM.md, docs/MARKET.md, PRD.md, ...)
+#: into the user's real workspace and the local stage gate can detect them.
+#: When no desktop client is online, the task still falls back to server-side
+#: execution (see the `routed` checks in /api/chat).
+_LOCAL_FIRST_MODES = {
+    "discovery",
+    "problem_discovery",
+    "market_research",
+    "research",
+    "planning",
+    "product_definition",
+    "solution_design",
+    "development",
+    "hardware",
+    "hardware_development",
+    "testing",
+    "iteration",
+    "learning",
+}
+
+
 def _requires_local_client(mode: str) -> bool:
-    """Return True for modes that need the local desktop client."""
-    return mode in {"development", "hardware"}
+    """Return True for modes that prefer the local desktop client."""
+    return mode in _LOCAL_FIRST_MODES
 
 
 async def _route_task_to_desktop(task: Any, user_id: str) -> bool:

@@ -233,6 +233,7 @@ class DesktopAgentRuntime:
         self._task_thread: threading.Thread | None = None
         self._task_timeout_timer: threading.Timer | None = None
         self._task_timed_out = threading.Event()
+        self._task_cancelled = threading.Event()
 
     def set_send_message(self, send_message: callable) -> None:
         """Bind the function used to send JSON-RPC messages to Electron."""
@@ -301,6 +302,61 @@ class DesktopAgentRuntime:
             "steps": steps,
         })
 
+    # Question blocks may arrive in several malformed shapes from the model:
+    # fenced without a newline, an XML-style <kyrozen-question> tag, multiple
+    # blocks, or invalid JSON. Normalize the answer so the renderer regex
+    # always matches a single canonical fenced block — or none at all — and
+    # raw protocol text never leaks into the chat area.
+    _QUESTION_FENCE_RE = re.compile(r"```\s*kyrozen[-_]?question\s*([\s\S]*?)```", re.IGNORECASE)
+    _QUESTION_TAG_RE = re.compile(
+        r"<kyrozen[-_]?question>\s*([\s\S]*?)\s*</kyrozen[-_]?question>", re.IGNORECASE
+    )
+
+    @classmethod
+    def _normalize_question_blocks(cls, answer: str) -> str:
+        if not answer or "kyrozen" not in answer.lower():
+            return answer
+        parsed: dict[str, object] | None = None
+
+        def _try_parse(raw: str) -> dict[str, object] | None:
+            try:
+                data = json.loads(raw.strip())
+            except (json.JSONDecodeError, TypeError):
+                return None
+            if not isinstance(data, dict):
+                return None
+            question = str(data.get("question", "")).strip()
+            options = data.get("options")
+            if question and isinstance(options, list) and options:
+                return data
+            return None
+
+        def _consume(match: "re.Match[str]") -> str:
+            nonlocal parsed
+            data = _try_parse(match.group(1))
+            if parsed is None and data is not None:
+                parsed = data
+            elif parsed is None and data is None:
+                # Unparseable block: salvage the human-readable question text.
+                text_match = re.search(r'"question"\s*:\s*"([^"]+)"', match.group(1))
+                if text_match:
+                    parsed = {"question": text_match.group(1), "options": []}
+            return ""
+
+        cleaned = cls._QUESTION_FENCE_RE.sub(_consume, answer)
+        cleaned = cls._QUESTION_TAG_RE.sub(_consume, cleaned).strip()
+        if parsed is None:
+            return cleaned
+        options = parsed.get("options")
+        if not isinstance(options, list) or not options:
+            # No valid options: degrade to plain text instead of a broken card.
+            question_text = str(parsed.get("question", "")).strip()
+            if question_text and question_text not in cleaned:
+                cleaned = f"{cleaned}\n\n{question_text}".strip()
+            return cleaned
+        block = json.dumps(parsed, ensure_ascii=False)
+        return f"{cleaned}\n\n```kyrozen-question\n{block}\n```".strip()
+
     def _run_task(self, params: dict[str, object], req_id: object) -> None:
         self.current_task_id = str(params.get("task_id", ""))
         if isinstance(self.model, PlanDetectingModelProvider):
@@ -338,6 +394,27 @@ class DesktopAgentRuntime:
         project_type = str(params.get("project_type", ""))
 
         state_dir = root_path / ".kyrozen"
+
+        # P0 (acceptance 2026-07-30): the local stage gate is the source of
+        # truth for routing. The cloud-reported stage/mode can lag behind (the
+        # stage advance PUT is best-effort), which used to pin the agent to
+        # "Problem Discovery" forever. If the local gate is ahead of the cloud
+        # stage, route by the local stage and ignore the stale dispatched mode.
+        try:
+            local_store = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
+            local_stage = local_store.current_stage
+            if local_stage in STAGES:
+                cloud_idx = STAGES.index(stage) if stage in STAGES else -1
+                local_idx = STAGES.index(local_stage)
+                if local_idx > cloud_idx:
+                    self.logger.info(
+                        "Local stage %s is ahead of cloud stage %s; routing by local stage",
+                        local_stage, stage or "<none>",
+                    )
+                    stage = local_stage
+                    requested_mode = ""  # let the stage decide the mode
+        except Exception:
+            self.logger.debug("local stage probe failed", exc_info=True)
         handoff_store = HandoffStore(state_dir / "handoff.json", project_id=project_id)
         handoff_tool = HandoffTool(handoff_store)
         registry = get_default_registry(config=self.config)
@@ -430,13 +507,18 @@ class DesktopAgentRuntime:
                 task = self.agent.run(agent_input, project_id=project_id)
                 self.current_task = task
                 self._cancel_task_timeout_timer()
-                if not self._task_timed_out.is_set():
+                # The user may have cancelled while the agent was still
+                # running; in that case a `cancelled` task_result was already
+                # sent. Never follow it with a second `completed` result.
+                if not self._task_timed_out.is_set() and not self._task_cancelled.is_set():
                     result = dict(task.result) if isinstance(task.result, dict) else {}
                     if task.result and not isinstance(task.result, dict):
                         result["answer"] = str(task.result)
                     if task.status == "failed" and not result.get("answer"):
                         errors = list(getattr(task, "errors", []) or [])
                         result["answer"] = errors[-1] if errors else "AI 服务暂时不可用，请稍后重试。"
+                    if isinstance(result.get("answer"), str):
+                        result["answer"] = self._normalize_question_blocks(result["answer"])
                     # Re-scan the stage gate AFTER the agent's tool calls so any
                     # deliverable it just wrote (e.g. docs/PROBLEM.md) is detected
                     # and the gate advances without requiring a manual refresh.
@@ -453,7 +535,7 @@ class DesktopAgentRuntime:
             except Exception as exc:
                 self._cancel_task_timeout_timer()
                 traceback_str = traceback.format_exc()
-                if not self._task_timed_out.is_set():
+                if not self._task_timed_out.is_set() and not self._task_cancelled.is_set():
                     self._notify("task_result", {
                         "task_id": self.current_task_id,
                         "status": "failed",
@@ -461,6 +543,7 @@ class DesktopAgentRuntime:
                     })
 
         self._task_timed_out.clear()
+        self._task_cancelled.clear()
         timeout_seconds = int(params.get("timeout_seconds", self.DEFAULT_TASK_TIMEOUT_SECONDS))
         self._task_timeout_timer = threading.Timer(timeout_seconds, self._handle_task_timeout)
         self._task_timeout_timer.daemon = True
@@ -476,7 +559,11 @@ class DesktopAgentRuntime:
             state_dir = root_path / ".kyrozen"
             store = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
             if stage and stage in STAGES:
-                store.current_stage = stage
+                # Never regress the local stage: the cloud value can lag behind
+                # a local advance (best-effort PUT). Only fast-forward.
+                local_idx = STAGES.index(store.current_stage) if store.current_stage in STAGES else -1
+                if STAGES.index(stage) > local_idx:
+                    store.current_stage = stage
                 store.progress = compute_progress(store)
                 store.save()
             gate = refresh_gate(store, str(root_path))
@@ -1125,16 +1212,19 @@ class DesktopAgentRuntime:
     def _handle_cancel_task(self, params: dict[str, object]) -> None:
         task_id = str(params.get("task_id", ""))
         self.logger.info("Received cancel request for task %s", task_id)
+        # Set the cancel flag FIRST so the executing thread never emits a
+        # late `completed` result after this acknowledgement (race fix).
+        self._task_cancelled.set()
         self._cancel_task_timeout_timer()
         if self.agent:
             self.agent.cancel()
         if self.current_task and self.current_task.status == "running":
             self.current_task.update_status("cancelled")
-            self._notify("task_result", {
-                "task_id": self.current_task_id,
-                "status": "cancelled",
-                "result": {"answer": "任务已被用户取消"},
-            })
+        self._notify("task_result", {
+            "task_id": task_id or self.current_task_id,
+            "status": "cancelled",
+            "result": {"answer": "任务已被用户取消"},
+        })
 
     def _notify(self, method: str, params: dict[str, object]) -> None:
         if self.send_message is None:

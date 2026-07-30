@@ -108,6 +108,41 @@ let heartbeatTimer: NodeJS.Timeout | null = null;
 let workspaceMap: WorkspaceMap = {};
 let currentTaskId: string | null = null;
 let currentTaskRunning = false;
+// Tasks the user cancelled: any late `completed` result for these ids must
+// never be appended to the chat (cancel race fix, acceptance 2026-07-30).
+const cancelledTaskIds = new Set<string>();
+// Dispatch watchdog: after /api/chat reports dispatched_to_desktop, the
+// matching assign_task must arrive over WS within this window; otherwise the
+// renderer would stay stuck on "正在理解你的需求" forever.
+let dispatchWatchdogTimer: NodeJS.Timeout | null = null;
+let dispatchWatchdogTaskId: string | null = null;
+const DISPATCH_WATCHDOG_MS = 30_000;
+
+function startDispatchWatchdog(taskId: string) {
+  clearDispatchWatchdog();
+  dispatchWatchdogTaskId = taskId;
+  dispatchWatchdogTimer = setTimeout(() => {
+    dispatchWatchdogTimer = null;
+    if (dispatchWatchdogTaskId !== taskId || currentTaskRunning) return;
+    logWarn(`Dispatched task ${taskId} never arrived over WebSocket`);
+    sendTaskActivity({ task_id: taskId, description: '任务派发失败', status: 'failed' });
+    sendChatMessage({
+      role: 'error',
+      content: '',
+      error: '任务派发超时：云端未能把任务送达本地 Agent，请检查网络后重新发送。',
+      operations: [],
+    });
+  }, DISPATCH_WATCHDOG_MS);
+}
+
+function clearDispatchWatchdog(taskId?: string) {
+  if (taskId && dispatchWatchdogTaskId && taskId !== dispatchWatchdogTaskId) return;
+  if (dispatchWatchdogTimer) {
+    clearTimeout(dispatchWatchdogTimer);
+    dispatchWatchdogTimer = null;
+  }
+  dispatchWatchdogTaskId = null;
+}
 let previewWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let pythonAgentRestartCount = 0;
@@ -2392,6 +2427,11 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
         operations,
       };
     }
+    if (task.dispatched_to_desktop && task.task_id) {
+      // The cloud accepted the task and will push assign_task over WS. If
+      // that push never arrives, fail fast instead of spinning forever.
+      startDispatchWatchdog(String(task.task_id));
+    }
     return { success: true, taskId: task.task_id, dispatched: !!task.dispatched_to_desktop };
   } catch (err: any) {
     logError(`Failed to submit desktop chat: ${err.message || err}`);
@@ -2414,6 +2454,10 @@ ipcMain.handle('kyrozen:load-chat-messages', async (_event, projectId: string) =
 
 ipcMain.on('kyrozen:cancel-task', () => {
   if (currentTaskId && currentTaskRunning) {
+    // Record the cancellation BEFORE the agent replies so a racing
+    // `completed` result for this task is never appended to the chat.
+    cancelledTaskIds.add(currentTaskId);
+    sendTaskActivity({ task_id: currentTaskId, description: '正在停止任务…' });
     sendToPythonAgent({
       jsonrpc: '2.0',
       method: 'cancel_task',
@@ -2655,6 +2699,7 @@ async function handleServerMessage(message: Record<string, unknown>) {
   }
 
   if (type === 'assign_task') {
+    clearDispatchWatchdog(String(message.task_id || ''));
     if (currentTaskRunning && String(message.task_id) === currentTaskId) {
       logInfo(`Ignoring duplicate assignment for active task ${currentTaskId}`);
       return;
@@ -3108,14 +3153,20 @@ function handlePythonAgentLine(line: string) {
       taskRetryCount = 0;
       clearTaskTimeout();
       void processNextQueuedTask();
+      const resultTaskId = String(message.params.task_id || currentTaskId || '');
+      // Cancel race fix: if the user pressed stop, a late `completed` result
+      // must be treated as cancelled and never appended to the chat.
+      const wasCancelled = cancelledTaskIds.delete(resultTaskId);
+      const status = wasCancelled && message.params.status === 'completed'
+        ? 'cancelled'
+        : message.params.status;
       sendToCloud({
         type: 'task_result',
         task_id: message.params.task_id,
-        status: message.params.status,
+        status,
         result: message.params.result,
         steps: message.params.steps,
       });
-      const status = message.params.status;
       const answer = message.params.result?.answer
         || message.params.result?.error
         || (status === 'failed' ? 'AI 服务暂时不可用，请稍后重试。' : '任务完成');

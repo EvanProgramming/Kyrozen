@@ -12,7 +12,7 @@ from pathlib import Path
 
 from kyrozen.tools.discovery_tools import SaveProblemBriefTool
 from kyrozen.tools.planning_tools import SavePRDTool
-from kyrozen.tools.development_tools import SaveTechnicalPlanTool
+from kyrozen.tools.development_tools import SaveTechnicalPlanTool, SaveChangelogTool
 from kyrozen.tools.research.tools import SaveMarketResearchReportTool
 
 
@@ -115,3 +115,43 @@ def test_save_market_research_writes_market_md_and_autoconfirms():
     store = _make_store(tmp)
     assert store.records.get("market_report", {}).get("detected") is True
     assert store.records.get("market_confirmed", {}).get("confirmed") is True
+
+
+def test_save_changelog_writes_changelog_md_and_autoconfirms():
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    tool = SaveChangelogTool(project_manager=None, config=_FakeConfig(tmp))
+    changelog = {
+        "version": "0.2.0",
+        "date": "2026-07-30",
+        "summary": "迭代改进：新增自动生成变更记录",
+        "entries": [
+            {"type": "Added", "text": "SaveChangelogTool 自动写 CHANGELOG.md"},
+            {"type": "Fixed", "text": "阶段门禁未检测到报告文件"},
+        ],
+    }
+    res = tool._execute("save", {"project_id": "p1", "changelog": changelog})
+    assert res.success, res.error
+    target = Path(tmp) / "CHANGELOG.md"
+    assert target.exists(), "CHANGELOG.md was not written"
+    content = target.read_text(encoding="utf-8")
+    assert "Changelog" in content and "v0.2.0" in content
+    store = _make_store(tmp)
+    assert store.records.get("changelog", {}).get("detected") is True
+    assert store.records.get("changelog_confirmed", {}).get("confirmed") is True
+
+
+def test_save_changelog_accepts_raw_content():
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    tool = SaveChangelogTool(project_manager=None, config=_FakeConfig(tmp))
+    res = tool._execute(
+        "save",
+        {"project_id": "p1", "content": "# Changelog\n\n- **Added**: raw markdown path"},
+    )
+    assert res.success, res.error
+    target = Path(tmp) / "CHANGELOG.md"
+    assert target.exists()
+    assert "raw markdown path" in target.read_text(encoding="utf-8")

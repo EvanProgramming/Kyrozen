@@ -94,6 +94,56 @@ class TechnicalPlan:
 
 
 @dataclass
+class Changelog:
+    """Release changelog (CHANGELOG.md) summarizing iteration work."""
+
+    version: str = ""
+    date: str = ""  # ISO date, e.g. 2026-07-30
+    summary: str = ""
+    entries: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "date": self.date,
+            "summary": self.summary,
+            "entries": list(self.entries),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Changelog":
+        return cls(
+            version=data.get("version", ""),
+            date=data.get("date", ""),
+            summary=data.get("summary", ""),
+            entries=list(data.get("entries") or []),
+        )
+
+    def to_markdown(self) -> str:
+        lines = ["# Changelog", ""]
+        header = ""
+        if self.version:
+            header += self.version if self.version.lower().startswith("v") else "v" + self.version
+        if self.date:
+            header += f" ({self.date})" if header else self.date
+        if header:
+            lines.append("## " + header)
+            lines.append("")
+        if self.summary:
+            lines.append(self.summary)
+            lines.append("")
+        if self.entries:
+            lines.append("### Changes")
+            lines.append("")
+            for entry in self.entries:
+                etype = entry.get("type") or entry.get("category") or "Changed"
+                text = entry.get("text") or entry.get("description") or ""
+                lines.append(f"- **{etype}**: {text}")
+            lines.append("")
+        return "\n".join(lines)
+
+
+@dataclass
 class FeatureImplementation:
     """Traceability record linking a PRD feature to code and tests."""
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kyrozen.development.models import (
+    Changelog,
     DEVELOPMENT_DECISIONS,
     DeploymentGuide,
     DevelopmentArtifactBundle,
@@ -142,6 +143,113 @@ class SaveTechnicalPlanTool(Tool):
                 from kyrozen.core.stagegate import record_report_deliverable
 
                 record_report_deliverable(workspace, "tech_design", "design_confirmed")
+            except Exception:
+                pass
+        return ToolResult(success=True, data=result)
+
+
+class SaveChangelogTool(Tool):
+    """Save or update the iteration Changelog and write it to CHANGELOG.md.
+
+    In addition to persisting the changelog to the project artifact store (when a
+    project manager is available), this tool ALWAYS writes a real ``CHANGELOG.md``
+    file into the workspace root. The iteration stage gate detects the changelog
+    by scanning for that file; without it the gate's changelog item can never be
+    satisfied, so the file write is mandatory regardless of whether the cloud
+    artifact store is reachable.
+    """
+
+    def __init__(self, project_manager: "ProjectManager | None" = None, config: Any = None) -> None:
+        self.project_manager = project_manager
+        self.config = config
+        self.name = "save_changelog"
+        self.description = "Save or update the iteration Changelog and write it to CHANGELOG.md."
+        self.schema = ToolSchema(
+            name=self.name,
+            description=self.description,
+            actions={
+                "save": [
+                    ToolParameter(name="project_id", param_type="string", description="Project ID"),
+                    ToolParameter(
+                        name="changelog",
+                        param_type="object",
+                        description="Changelog fields as a JSON object (version, date, summary, entries)",
+                    ),
+                    ToolParameter(
+                        name="content",
+                        param_type="string",
+                        description="Optional raw markdown; if provided it is written verbatim instead of rendering from `changelog`.",
+                        required=False,
+                    ),
+                ]
+            },
+        )
+
+    @staticmethod
+    def _resolve_workspace(project_id, project_manager, config):
+        if project_manager is not None and project_id and hasattr(config, "project_dir"):
+            try:
+                return str(config.project_dir(project_id))
+            except Exception:
+                pass
+        ws = getattr(config, "workspace_root", None)
+        if ws and Path(ws).is_absolute():
+            return str(ws)
+        return None
+
+    def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
+        project_id = parameters.get("project_id")
+        if not project_id:
+            return ToolResult(success=False, data=None, error="Missing project_id")
+        content = parameters.get("content")
+        changelog_obj = None
+        if content is None:
+            changelog_data = parameters.get("changelog", {})
+            try:
+                changelog_obj = Changelog.from_dict(changelog_data)
+            except ValueError as e:
+                return ToolResult(success=False, data=None, error=str(e))
+            content = changelog_obj.to_markdown()
+        if not content:
+            return ToolResult(success=False, data=None, error="Missing changelog content")
+        result: dict[str, Any] = {}
+        # Best-effort artifact persistence (not required on the desktop).
+        if self.project_manager is not None and changelog_obj is not None:
+            try:
+                artifact_content = json.dumps(changelog_obj.to_dict(), ensure_ascii=False, indent=2)
+                artifact = self.project_manager.save_artifact(
+                    project_id=project_id,
+                    type="changelog",
+                    title="Changelog",
+                    content=artifact_content,
+                    change_reason="Changelog update",
+                )
+                result["artifact_id"] = artifact.id
+                result["version"] = artifact.version
+            except Exception:
+                pass
+        # MANDATORY: write the real CHANGELOG.md deliverable so the gate detects it.
+        workspace = self._resolve_workspace(project_id, self.project_manager, self.config)
+        if workspace:
+            try:
+                out = Path(workspace) / "CHANGELOG.md"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(content, encoding="utf-8")
+                result["file"] = str(out)
+            except Exception:
+                pass
+        if not result:
+            return ToolResult(
+                success=False,
+                data=None,
+                error="无法保存变更记录：未找到可写的项目工作区，且项目管理器不可用。",
+            )
+        # Auto-confirm the paired confirmation item now that the file exists.
+        if workspace and result.get("file"):
+            try:
+                from kyrozen.core.stagegate import record_report_deliverable
+
+                record_report_deliverable(workspace, "changelog", "changelog_confirmed")
             except Exception:
                 pass
         return ToolResult(success=True, data=result)

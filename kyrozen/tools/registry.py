@@ -54,6 +54,7 @@ def get_default_registry(
     """Return a registry with Phase 1-9 tools pre-registered."""
     from .development_tools import (
         RecordDevelopmentDecisionTool,
+        SaveChangelogTool,
         SaveDeploymentGuideTool,
         SaveFeatureImplementationTool,
         SaveTechnicalPlanTool,
@@ -142,6 +143,7 @@ def get_default_registry(
     registry.register(SaveSolutionComparisonTool(project_manager))
     registry.register(RecordProductDecisionTool(project_manager))
     registry.register(SaveTechnicalPlanTool(project_manager, config=config))
+    registry.register(SaveChangelogTool(project_manager, config=config))
     registry.register(SaveFeatureImplementationTool(project_manager))
     registry.register(SaveTestReportTool(project_manager))
     registry.register(SaveDeploymentGuideTool(project_manager))

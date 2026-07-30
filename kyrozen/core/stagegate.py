@@ -147,6 +147,7 @@ STAGE_DEFINITIONS: dict[str, StageDefinition] = {
         note="在已有成果上持续打磨改进。",
         items=(
             _d("changelog", "变更记录 CHANGELOG.md", ("CHANGELOG.md",), skippable=True),
+            _c("changelog_confirmed", "用户确认变更记录", skippable=True),
             _v("regression_passes", "回归通过", skippable=True),
             _c("release_confirmed", "用户确认发布", skippable=True),
         ),

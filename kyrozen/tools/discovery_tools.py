@@ -63,6 +63,16 @@ class SaveProblemBriefTool(Tool):
             ws = getattr(self.config, "workspace_root", None)
             if ws and str(ws) not in (".", "", None):
                 candidates.append(Path(str(ws)).resolve())
+            else:
+                # Fallback: the desktop agent sets projects_dir to the workspace
+                # parent and passes project_id to the tool, so
+                # <projects_dir>/<project_id> reconstructs the exact workspace.
+                pd = getattr(self.config, "projects_dir", None)
+                pid = parameters.get("project_id")
+                if pd and pid:
+                    cand = Path(str(pd)) / str(pid)
+                    if cand.is_absolute():
+                        candidates.append(cand)
         try:
             candidates.append(_get_allowed_root(parameters).resolve())
         except Exception:

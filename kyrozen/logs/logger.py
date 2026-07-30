@@ -102,6 +102,36 @@ class KyrozenLogger:
     def perf(self, message: str, task_id: str = "", **metadata: Any) -> LogEntry:
         return self.log("perf", message, task_id, **metadata)
 
+    # --- Standard logging-method parity -----------------------------------
+    # Callers (including the desktop agent, research tools, server) sometimes
+    # use logger.debug(...)/logger.info(...)/logger.critical(...) etc. Treat
+    # KyrozenLogger as a drop-in for the stdlib logging.Logger so any such call
+    # works instead of raising AttributeError (which used to surface as the
+    # "task launch failed: 'KyrozenLogger' object has no attribute 'debug'"
+    # acceptance blocker).
+    def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
+        self.logger.debug(message, *args, **kwargs)
+
+    def info(self, message: str, *args: Any, **kwargs: Any) -> None:
+        self.logger.info(message, *args, **kwargs)
+
+    def critical(self, message: str, *args: Any, **kwargs: Any) -> None:
+        self.logger.critical(message, *args, **kwargs)
+
+    def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+        self.logger.exception(message, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate any other stdlib logging attribute (setLevel, addHandler,
+        # isEnabledFor, getEffectiveLevel, hasHandlers, ...) to the underlying
+        # logging.Logger. Only hit for attributes we did not define above.
+        try:
+            return getattr(object.__getattribute__(self, "logger"), name)
+        except AttributeError:
+            raise AttributeError(
+                f"{type(self).__name__!r} object has no attribute {name!r}"
+            )
+
 
 _LOGGER: KyrozenLogger | None = None
 

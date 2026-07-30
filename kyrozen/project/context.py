@@ -294,6 +294,14 @@ class ProjectContextBuilder:
             "Your role: Define what product to build, for whom, and why. "
             "Do not design technical architecture, choose technology, or write code.\n"
         )
+        lines.append(
+            "BUILD CAPABILITY (Phase 1): Kyrozen can only deliver web applications "
+            "(single-page HTML/JS served by a Python stdlib backend) and command-line "
+            "tools (Python script). It cannot build WeChat Mini Programs, mobile apps, "
+            "browser extensions, desktop apps with GUI frameworks, hardware prototypes, "
+            "or serverless/cloud-deployed services. Your product recommendation MUST "
+            "be expressed as a web app or CLI tool.\n"
+        )
 
         # Load Problem Brief
         latest_brief = self.project_manager.get_latest_artifact(

@@ -252,6 +252,9 @@ class SaveMarketResearchReportTool(Tool):
         # confirm it manually (or configure the search service and retry).
         has_evidence = self._has_external_evidence(report)
         result["external_evidence"] = has_evidence
+        quality_warning = self._source_quality_warning(report)
+        if quality_warning:
+            result["quality_warning"] = quality_warning
         if workspace and result.get("file"):
             try:
                 from kyrozen.core.stagegate import record_report_deliverable
@@ -283,6 +286,48 @@ class SaveMarketResearchReportTool(Tool):
         data = report.to_dict() if hasattr(report, "to_dict") else dict(report)
         blob = json.dumps(data, ensure_ascii=False)
         return bool(re.search(r"https?://[^\s\"']{8,}", blob))
+
+    @staticmethod
+    def _source_quality_warning(report) -> str | None:
+        """Return a warning string if the research sources look untrustworthy.
+
+        P0-R5 / P1-R5: competitors like Listonic, OurGroceries, and Bring! all
+        pointing to the same YouTube URL is a red flag (model hallucination).
+        We flag reports where all external URLs come from a single domain, or
+        where multiple competitors share the exact same source URL.
+        """
+        import re
+        from urllib.parse import urlparse
+
+        competitors = getattr(report, "competitors", []) or []
+        if not competitors:
+            return None
+        all_urls: list[str] = []
+        for c in competitors:
+            sources = getattr(c, "sources", []) or []
+            for src in sources:
+                if isinstance(src, str) and src.startswith("http"):
+                    all_urls.append(src)
+        if len(all_urls) < 2:
+            return None  # not enough data to judge
+        domains = set()
+        for url in all_urls:
+            try:
+                domains.add(urlparse(url).netloc)
+            except Exception:
+                domains.add(url)
+        if len(domains) == 1:
+            return f"所有竞品链接都指向同一域名 ({list(domains)[0]})，搜索结果可能不可信，建议用中文搜索词重新调研。"
+        # Also check if any two competitors share ALL their source URLs exactly.
+        seen_sets: dict[frozenset[str], list[str]] = {}
+        for c in competitors:
+            c_sources = frozenset(s for s in (getattr(c, "sources", []) or []) if isinstance(s, str) and s.startswith("http"))
+            if c_sources:
+                seen_sets.setdefault(c_sources, []).append(c.name)
+        for src_set, names in seen_sets.items():
+            if len(names) >= 2 and len(src_set) >= 1:
+                return f"以下竞品共享完全相同的来源链接：{'、'.join(names[:4])}（链接数={len(src_set)}），搜索结果质量存疑。"
+        return None
 
 class RecordOpportunityDecisionTool(Tool):
     """Record the final opportunity decision from market research."""

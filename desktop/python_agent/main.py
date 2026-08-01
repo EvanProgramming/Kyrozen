@@ -689,6 +689,7 @@ class DesktopAgentRuntime:
                 # model cannot consume all rounds on file inspection and then
                 # return a static review without ever running the project.
                 if re.search(r"测试|运行|执行|验证|验收|回归|test|verify", message or "", re.IGNORECASE):
+                    self.logger.info("Starting deterministic testing evidence path", extra={"task_id": self.current_task_id})
                     task = self.agent.task_manager.create(
                         title=message[:60],
                         description=message,
@@ -703,6 +704,7 @@ class DesktopAgentRuntime:
                         workspace_root=root_path,
                         registry=effective_registry,
                     ) or "当前项目暂时没有可执行的测试。"
+                    self.logger.info("Deterministic testing evidence path completed", extra={"task_id": self.current_task_id})
                     task.complete(result={"answer": evidence_answer})
                     self.current_task = task
                     self._cancel_task_timeout_timer()
@@ -773,9 +775,14 @@ class DesktopAgentRuntime:
         self._task_timed_out.clear()
         self._task_cancelled.clear()
         timeout_seconds = int(params.get("timeout_seconds", self.DEFAULT_TASK_TIMEOUT_SECONDS))
+        if re.search(r"测试|运行|执行|验证|验收|回归|test|verify", message or "", re.IGNORECASE):
+            timeout_seconds = max(timeout_seconds, 120)
         self._task_timeout_timer = threading.Timer(timeout_seconds, self._handle_task_timeout)
         self._task_timeout_timer.daemon = True
         self._task_timeout_timer.start()
+        self._task_thread = threading.Thread(target=execute, daemon=True)
+        self._task_thread.start()
+        self._send_response(req_id, result={"status": "ok"})
 
     def _ensure_testing_evidence(
         self,
@@ -883,14 +890,26 @@ class DesktopAgentRuntime:
                 "result": {"test": run.to_dict(), "plan": saved.to_dict()},
             },
         })
+        result_payload = {
+            "test_case_id": "TC-SW-01",
+            "test_case_name": "运行项目自动化测试",
+            "result": "passed" if run.success else "failed",
+            "actual": str((run.data or {}).get("stdout", ""))[-4000:],
+            "errors": run.error or "",
+            "stdout": str((run.data or {}).get("stdout", "")),
+            "stderr": str((run.data or {}).get("stderr", "")),
+            "duration_ms": (run.data or {}).get("execution_time_ms"),
+            "environment": "本地桌面客户端工作区",
+            "executed_by": "TestingAgent",
+        }
+        registry.execute("save_test_result", "save", {
+            "project_id": project_id,
+            "result": result_payload,
+        })
         if not run.success:
             return f"测试计划已保存，但实际测试未通过：{run.error or '测试执行失败'}"
         stdout = str((run.data or {}).get("stdout", "")).strip()
         return f"我已实际运行项目测试，结果通过。\n\n命令：{command}\n\n{stdout[-4000:]}".strip()
-
-        self._task_thread = threading.Thread(target=execute, daemon=True)
-        self._task_thread.start()
-        self._send_response(req_id, result={"status": "ok"})
 
     def _sync_and_push_stage(self, root_path: Path, stage: str, project_id: str) -> None:
         """Sync the local gate store with the server stage and push it to UI."""

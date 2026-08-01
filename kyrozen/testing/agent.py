@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kyrozen.core.agent import BaseAgent
+from kyrozen.core.task import Task
+from kyrozen.testing.models import TestCase
 
 if TYPE_CHECKING:
     from kyrozen.project import ProjectManager
@@ -13,6 +18,11 @@ if TYPE_CHECKING:
 
 class TestingAgent(BaseAgent):
     """Agent specialized in testing, validating, and iterating on a product."""
+
+    # A testing request is not complete when the model merely reviews files.
+    # Requiring the execution tool activates the deterministic fallback below
+    # when the model spends its limited rounds on discovery instead.
+    required_actions = ("run_software_test",)
 
     def __init__(self, *args: Any, project_manager: "ProjectManager | None" = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -59,3 +69,71 @@ class TestingAgent(BaseAgent):
             "- Do NOT implement cross-project learning or autonomous knowledge migration. That is Phase 9.\n"
             "- Do NOT change product requirements, code, or hardware without explicit user confirmation.\n"
         )
+
+    def _action_required(self, user_input: str) -> bool:
+        return bool(re.search(r"测试|运行|执行|验证|验收|回归|test|verify", user_input or "", re.IGNORECASE))
+
+    def _workspace_root(self) -> Path | None:
+        root = getattr(self.config, "workspace_root", None)
+        if not root:
+            return None
+        path = Path(root).expanduser().resolve()
+        return path if path.is_dir() else None
+
+    def _test_command(self, workspace: Path) -> str | None:
+        if (workspace / "tests").is_dir():
+            if (workspace / "pytest.ini").exists() or (workspace / "pyproject.toml").exists():
+                return "python3 -m pytest -q"
+            return "python3 -m unittest discover -s tests -p 'test_*.py' -v"
+        package = workspace / "package.json"
+        if package.exists():
+            try:
+                scripts = json.loads(package.read_text(encoding="utf-8")).get("scripts", {})
+                if scripts.get("test"):
+                    return "npm test"
+            except (OSError, json.JSONDecodeError):
+                pass
+        return None
+
+    def _deterministic_fallback(self, task: Task, user_input: str, model_answer: str) -> str | None:
+        """Always turn an ordinary testing request into real local evidence."""
+        workspace = self._workspace_root()
+        if workspace is None:
+            return None
+        command = self._test_command(workspace)
+        if command is None:
+            return "我检查了当前项目，但没有找到可执行的测试目录或测试脚本。"
+
+        plan = {
+            "name": "阶段验收测试计划",
+            "objective": "验证当前项目的核心功能和可运行性",
+            "requirements": ["项目能够按 README 提供的方式运行", "已有自动化测试应全部通过"],
+            "test_cases": [TestCase(
+                id="TC-SW-01",
+                name="运行项目自动化测试",
+                type="functional",
+                related_requirement="已有自动化测试应全部通过",
+                related_feature="核心功能",
+                description=f"在项目工作区执行 {command}",
+                steps=["运行项目测试命令", "检查退出码和测试汇总"],
+                expected="命令退出码为 0，所有测试通过",
+                environment="本地桌面客户端工作区",
+                priority="high",
+                status="ready",
+            ).to_dict()],
+            "success_criteria": "测试命令成功完成且没有失败用例",
+            "environment": "本地桌面客户端工作区",
+            "status": "running",
+        }
+        calls = [
+            {"tool": "save_test_plan", "action": "save", "parameters": {"project_id": task.project_id or "local", "plan": plan}},
+            {"tool": "run_software_test", "action": "run", "parameters": {"project_id": task.project_id or "local", "command": command, "timeout": 120}},
+        ]
+        results = self._execute_tool_calls(task, calls)
+        run = next((item for item in results if item.get("tool") == "run_software_test"), None)
+        if not run or not run.get("success"):
+            error = (run or {}).get("result", {}).get("error") or (run or {}).get("error") or "测试执行失败"
+            return f"测试计划已保存，但实际测试未通过：{error}"
+        data = (run.get("result") or {}).get("data") or {}
+        stdout = str(data.get("stdout", "")).strip()
+        return f"我已实际运行项目测试，结果通过。\n\n命令：{command}\n\n{stdout[-4000:]}".strip()

@@ -333,8 +333,9 @@ class SaveIterationPlanTool(Tool):
 class RunSoftwareTestTool(Tool):
     """Execute a software test command in the project's software directory."""
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    def __init__(self, project_manager: "ProjectManager | None" = None, config: Any = None) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "run_software_test"
         self.description = "Run a software test command in projects/{project_id}/software/."
         self.schema = ToolSchema(
@@ -350,8 +351,6 @@ class RunSoftwareTestTool(Tool):
         )
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
         project_id = parameters.get("project_id")
         command = parameters.get("command", "").strip()
         timeout = int(parameters.get("timeout") or 120)
@@ -362,7 +361,19 @@ class RunSoftwareTestTool(Tool):
         if _is_dangerous(command):
             return ToolResult(success=False, data=None, error="Command blocked for safety")
 
-        cwd = _project_dir(self.project_manager, project_id, "software")
+        # The desktop client intentionally uses a filesystem workspace instead
+        # of the server-side ProjectManager.  Prefer that bound absolute path
+        # so a stale model-generated projects/{id}/software path cannot escape
+        # the project currently open in the client.
+        workspace_root = getattr(self.config, "workspace_root", None)
+        if workspace_root and Path(workspace_root).is_absolute():
+            cwd = Path(workspace_root)
+            if not cwd.is_dir():
+                return ToolResult(success=False, data=None, error="Project workspace does not exist")
+        elif self.project_manager is not None:
+            cwd = _project_dir(self.project_manager, project_id, "software")
+        else:
+            return ToolResult(success=False, data=None, error="Project manager not available")
         try:
             result = subprocess.run(
                 command,

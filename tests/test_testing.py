@@ -435,6 +435,39 @@ def test_run_software_test_tool_blocks_dangerous_command(project_manager):
     assert "blocked" in result.error.lower()
 
 
+def test_run_software_test_tool_uses_desktop_workspace(tmp_path):
+    (tmp_path / "test_sample.py").write_text("print('ok')\n", encoding="utf-8")
+    config = KyrozenConfig(workspace_root=str(tmp_path), permission_mode="permissive")
+    tool = RunSoftwareTestTool(None, config=config)
+    result = tool.execute("run", {"project_id": "proj-local", "command": "python3 test_sample.py"})
+    assert result.success, result.error
+    assert result.data["cwd"] == str(tmp_path)
+    assert "ok" in result.data["stdout"]
+
+
+def test_testing_agent_fallback_saves_plan_and_runs_local_tests(tmp_path):
+    from kyrozen.core.task import Task
+    from kyrozen.testing.agent import TestingAgent
+    from kyrozen.tools import get_default_registry
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_sample.py").write_text(
+        "import unittest\n\nclass Sample(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n",
+        encoding="utf-8",
+    )
+    config = KyrozenConfig(workspace_root=str(tmp_path), permission_mode="permissive")
+    agent = TestingAgent(
+        config=config,
+        model=MockModel(),
+        tools=get_default_registry(config=config),
+    )
+    task = Task("test", project_id="proj-local")
+    answer = agent._deterministic_fallback(task, "帮我做一次测试", "")
+    assert answer and "实际运行项目测试" in answer
+    assert (tmp_path / ".kyrozen" / "test_plan.json").exists()
+    assert any(step.metadata.get("tool") == "run_software_test" for step in task.steps)
+
+
 def test_run_hardware_test_tool_list_ports(project_manager):
     tool = RunHardwareTestTool(project_manager)
     project = project_manager.create(name="Test Project", goal="G")

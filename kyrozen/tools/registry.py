@@ -170,7 +170,7 @@ def get_default_registry(
     registry.register(RecordUserFeedbackTool(project_manager))
     registry.register(SaveValidationReportTool(project_manager, config=config))
     registry.register(SaveIterationPlanTool(project_manager))
-    registry.register(RunSoftwareTestTool(project_manager))
+    registry.register(RunSoftwareTestTool(project_manager, config=config))
     registry.register(RunHardwareTestTool(project_manager))
     registry.register(SaveLearningRecordTool(project_manager, learning_repository))
     registry.register(SaveFailureKnowledgeTool(project_manager, learning_repository))

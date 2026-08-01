@@ -684,6 +684,35 @@ class DesktopAgentRuntime:
 
         def execute() -> None:
             try:
+                # Testing is an execution request, not an open-ended research
+                # question.  Run the deterministic evidence path first so a
+                # model cannot consume all rounds on file inspection and then
+                # return a static review without ever running the project.
+                if re.search(r"测试|运行|执行|验证|验收|回归|test|verify", message or "", re.IGNORECASE):
+                    task = self.agent.task_manager.create(
+                        title=message[:60],
+                        description=message,
+                        project_id=project_id,
+                    )
+                    task.update_status("running")
+                    self.agent.task_manager.update(task)
+                    evidence_answer = self._ensure_testing_evidence(
+                        task=task,
+                        user_message=message,
+                        project_id=project_id,
+                        workspace_root=root_path,
+                        registry=effective_registry,
+                    ) or "当前项目暂时没有可执行的测试。"
+                    task.complete(result={"answer": evidence_answer})
+                    self.current_task = task
+                    self._cancel_task_timeout_timer()
+                    self._notify("task_result", {
+                        "task_id": self.current_task_id,
+                        "status": task.status,
+                        "result": {"answer": self._sanitize_user_answer(evidence_answer)},
+                        "steps": [step.to_dict() for step in task.steps],
+                    })
+                    return
                 task = self.agent.run(agent_input, project_id=project_id)
                 self.current_task = task
                 self._cancel_task_timeout_timer()
@@ -694,6 +723,20 @@ class DesktopAgentRuntime:
                     result = dict(task.result) if isinstance(task.result, dict) else {}
                     if task.result and not isinstance(task.result, dict):
                         result["answer"] = str(task.result)
+                    # A model may spend all of its rounds reading the project
+                    # and then synthesize a static review without executing a
+                    # test.  Testing is a user-visible deliverable, so close
+                    # that gap at the desktop boundary: every ordinary testing
+                    # request must leave a local plan and a real command result.
+                    evidence_answer = self._ensure_testing_evidence(
+                        task=task,
+                        user_message=message,
+                        project_id=project_id,
+                        workspace_root=root_path,
+                        registry=effective_registry,
+                    )
+                    if evidence_answer:
+                        result["answer"] = evidence_answer
                     if task.status == "failed" and not result.get("answer"):
                         errors = list(getattr(task, "errors", []) or [])
                         result["answer"] = errors[-1] if errors else "AI 服务暂时不可用，请稍后重试。"
@@ -733,6 +776,117 @@ class DesktopAgentRuntime:
         self._task_timeout_timer = threading.Timer(timeout_seconds, self._handle_task_timeout)
         self._task_timeout_timer.daemon = True
         self._task_timeout_timer.start()
+
+    def _ensure_testing_evidence(
+        self,
+        *,
+        task: Task,
+        user_message: str,
+        project_id: str,
+        workspace_root: Path,
+        registry,
+    ) -> str | None:
+        """Guarantee real evidence for a short ordinary testing request.
+
+        This is intentionally a last-mile desktop safeguard.  The specialized
+        TestingAgent should call the same tools itself, but a model that spends
+        its round budget on reading files must not be able to report a static
+        review as if it were execution.
+        """
+        if not re.search(r"测试|运行|执行|验证|验收|回归|test|verify", user_message or "", re.IGNORECASE):
+            return None
+        if any(
+            step.metadata.get("tool") == "run_software_test"
+            and step.status == "completed"
+            and isinstance(step.result, dict)
+            and step.result.get("success")
+            for step in task.steps
+        ):
+            return None
+        if not workspace_root.is_dir():
+            return "当前项目工作区不可用，暂时无法执行测试。"
+
+        # Depending on whether the project was imported or created in the
+        # desktop client, workspace_root can be either the project itself or
+        # its container. Resolve both forms before probing files or executing
+        # commands.
+        workspace = workspace_root
+        candidates = (
+            workspace_root / project_id,
+            workspace_root / "projects" / project_id,
+        )
+        if not (workspace / "tests").is_dir() and not (workspace / "package.json").exists():
+            for candidate in candidates:
+                if candidate.is_dir() and ((candidate / "tests").is_dir() or (candidate / "package.json").exists()):
+                    workspace = candidate
+                    break
+        self.config.workspace_root = str(workspace)
+        os.environ["KYROZEN_WORKSPACE"] = str(workspace)
+
+        command: str | None = None
+        if (workspace / "tests").is_dir():
+            if (workspace / "pytest.ini").exists() or (workspace / "pyproject.toml").exists():
+                command = "python3 -m pytest -q"
+            else:
+                command = "python3 -m unittest discover -s tests -p 'test_*.py' -v"
+        elif (workspace / "package.json").exists():
+            try:
+                package = json.loads((workspace / "package.json").read_text(encoding="utf-8"))
+                if package.get("scripts", {}).get("test"):
+                    command = "npm test"
+            except (OSError, json.JSONDecodeError):
+                command = None
+        if not command:
+            return "我检查了当前项目，但没有找到可执行的测试目录或测试脚本。"
+
+        plan = {
+            "name": "阶段验收测试计划",
+            "objective": "验证当前项目的核心功能和可运行性",
+            "requirements": ["已有自动化测试应全部通过"],
+            "test_cases": [{
+                "id": "TC-SW-01",
+                "name": "运行项目自动化测试",
+                "type": "functional",
+                "related_requirement": "已有自动化测试应全部通过",
+                "related_feature": "核心功能",
+                "description": f"在项目工作区执行 {command}",
+                "steps": ["运行项目测试命令", "检查退出码和测试汇总"],
+                "expected": "命令退出码为 0，所有测试通过",
+                "environment": "本地桌面客户端工作区",
+                "priority": "high",
+                "status": "ready",
+            }],
+            "success_criteria": "测试命令成功完成且没有失败用例",
+            "environment": "本地桌面客户端工作区",
+            "status": "running",
+        }
+        saved = registry.execute("save_test_plan", "save", {"project_id": project_id, "plan": plan})
+        run = registry.execute("run_software_test", "run", {
+            "project_id": project_id,
+            "command": command,
+            "timeout": 120,
+        })
+        self.logger.tool(
+            "Desktop testing evidence safeguard",
+            task_id=task.id,
+            tool="run_software_test",
+            action="run",
+            parameters={"project_id": project_id, "command": command},
+            success=run.success,
+        )
+        self._notify("task_step", {
+            "task_id": task.id,
+            "step": {
+                "description": "已执行项目测试并保存测试计划",
+                "status": "completed" if run.success and saved.success else "failed",
+                "metadata": {"tool": "run_software_test", "command": command, "saved_plan": saved.success},
+                "result": {"test": run.to_dict(), "plan": saved.to_dict()},
+            },
+        })
+        if not run.success:
+            return f"测试计划已保存，但实际测试未通过：{run.error or '测试执行失败'}"
+        stdout = str((run.data or {}).get("stdout", "")).strip()
+        return f"我已实际运行项目测试，结果通过。\n\n命令：{command}\n\n{stdout[-4000:]}".strip()
 
         self._task_thread = threading.Thread(target=execute, daemon=True)
         self._task_thread.start()

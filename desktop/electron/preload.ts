@@ -242,8 +242,6 @@ contextBridge.exposeInMainWorld('kyrozen', {
   initGitRepo: (remoteUrl?: string) => ipcRenderer.invoke('kyrozen:init-git-repo', remoteUrl),
   getGitStatus: (projectId?: string) => ipcRenderer.invoke('kyrozen:get-git-status', projectId || ''),
   commitAndPush: (message: string) => ipcRenderer.invoke('kyrozen:commit-and-push', message),
-  setAutoCommit: (enabled: boolean) => ipcRenderer.invoke('kyrozen:set-auto-commit', enabled),
-  getAutoCommit: () => ipcRenderer.invoke('kyrozen:get-auto-commit'),
 
   getOnboardingStatus: () => ipcRenderer.invoke('kyrozen:get-onboarding-status'),
   getOnboardingLanguage: () => ipcRenderer.invoke('kyrozen:get-onboarding-language'),

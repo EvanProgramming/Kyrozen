@@ -39,12 +39,10 @@ import {
 } from './updater';
 import {
   commitAndPush,
-  getAutoCommit,
   getGitCommits,
   getGitStatus,
   initGitRepo,
   maybeAutoCommit,
-  setAutoCommit,
   classifyCreateRepoError,
 } from './gitOperations';
 
@@ -1394,7 +1392,7 @@ function startWatchingProjectFiles(projectId: string, root: string): void {
           projectId,
           setTimeout(() => {
             pendingAutoCommit.delete(projectId);
-            void maybeAutoCommit(root, githubAccessToken);
+            void maybeAutoCommit(root);
           }, 10000),
         );
       },
@@ -2319,22 +2317,6 @@ ipcMain.handle('kyrozen:get-git-commits', async (_event, projectId?: string) => 
     return { success: false, commits: [], remoteUrl: null, error: '未选择项目工作区' };
   }
   return getGitCommits(root);
-});
-
-ipcMain.handle('kyrozen:set-auto-commit', async (_event, enabled: boolean) => {
-  const root = getCurrentWorkspaceRoot();
-  if (!root) {
-    return { success: false, error: '未选择项目工作区' };
-  }
-  return setAutoCommit(root, enabled);
-});
-
-ipcMain.handle('kyrozen:get-auto-commit', async () => {
-  const root = getCurrentWorkspaceRoot();
-  if (!root) {
-    return { enabled: false };
-  }
-  return getAutoCommit(root);
 });
 
 ipcMain.handle('kyrozen:ensure-project-venv', async () => {

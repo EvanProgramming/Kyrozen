@@ -46,9 +46,12 @@ async function loadGitConfig(workspaceRoot: string): Promise<GitConfig> {
   try {
     const raw = await fs.readFile(getConfigPath(workspaceRoot), 'utf-8');
     const parsed = JSON.parse(raw) as Partial<GitConfig>;
-    return { autoCommit: false, ...parsed };
+    // Automatic commits are now the default product behavior. Keep the field
+    // for compatibility with older workspace config files, but do not let an
+    // obsolete checkbox setting disable the new default.
+    return { ...parsed, autoCommit: true };
   } catch {
-    return { autoCommit: false };
+    return { autoCommit: true };
   }
 }
 
@@ -297,12 +300,11 @@ export async function getAutoCommit(workspaceRoot: string): Promise<{ enabled: b
  * Called after file changes to optionally auto-commit. Best-effort: failures are
  * swallowed to avoid breaking the agent workflow.
  */
-export async function maybeAutoCommit(workspaceRoot: string, token: string | null): Promise<void> {
-  if (!token) return;
-  const { enabled } = await getAutoCommit(workspaceRoot);
-  if (!enabled) return;
+export async function maybeAutoCommit(workspaceRoot: string): Promise<void> {
   const now = new Date().toISOString();
-  const result = await commitAndPush(workspaceRoot, token, `Kyrozen auto-commit at ${now}`);
+  // Background changes are committed locally. Pushing remains an explicit
+  // user action through the Git panel.
+  const result = await commitAndPush(workspaceRoot, null, `chore: save workspace changes (${now})`);
   if (!result.success) {
     console.warn(`Auto-commit failed for ${workspaceRoot}: ${result.error || result.reason}`);
   }

@@ -394,6 +394,15 @@ function App() {
     setProjectContextMenu(null);
   };
 
+  const handleResumeLastProject = async () => {
+    const lastProjectId = localStorage.getItem('kyrozen:last-project-id');
+    if (!lastProjectId) return;
+    const lastProject = projects.find((project) => project.id === lastProjectId);
+    if (lastProject) {
+      await handleSelectProject(lastProject.id);
+    }
+  };
+
   const handleRenameProject = async () => {
     if (!window.kyrozen || !renameTarget || !renameName.trim() || renameBusy) return;
     setRenameBusy(true);
@@ -542,6 +551,8 @@ function App() {
   }
 
   const currentProject = projects.find((p) => p.id === currentProjectId);
+  const lastProjectId = localStorage.getItem('kyrozen:last-project-id');
+  const lastProject = projects.find((project) => project.id === lastProjectId);
   const canCreateProject = quota?.plan === 'developer' || projects.length < (quota?.project_limit || 1);
 
   return (
@@ -780,7 +791,39 @@ function App() {
             </div>
           )}
           <div className="flex-1 flex overflow-hidden">
-            <ChatPage projectId={currentProjectId} onOpenPreview={handleOpenPreview} onProjectChanged={loadProjects} />
+            {currentProjectId ? (
+              <ChatPage projectId={currentProjectId} onOpenPreview={handleOpenPreview} onProjectChanged={loadProjects} />
+            ) : (
+              <div className="flex-1 flex items-center justify-center bg-paper p-8" data-testid="welcome-home">
+                <div className="w-full max-w-lg text-center">
+                  <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-white shadow-sm">
+                    <span className="font-display text-3xl">K</span>
+                  </div>
+                  <h1 className="font-display text-4xl leading-tight text-ink">Kyrozen</h1>
+                  <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-ink-soft">
+                    从一个想法开始，逐步把它变成清晰、可执行、可验证的成果。
+                  </p>
+                  <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => void handleResumeLastProject()}
+                      disabled={!lastProject}
+                      className="btn-secondary min-w-40 text-sm disabled:cursor-not-allowed disabled:opacity-45"
+                      title={lastProject ? `打开 ${lastProject.name}` : '暂无上次打开的项目'}
+                    >
+                      继续上次项目
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateProject(true)}
+                      className="btn-primary min-w-40 text-sm"
+                    >
+                      创建新项目
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {previewUrl && <PreviewPanel url={previewUrl} onClose={() => setPreviewUrl(null)} />}
           </div>
           {currentProjectId && editingFile && (

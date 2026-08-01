@@ -45,7 +45,6 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   const [repositoryPrivate, setRepositoryPrivate] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
-  const [autoCommit, setAutoCommit] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -58,8 +57,6 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     setGh(github);
     const git = await kyzen.getGitStatus(projectId ?? undefined);
     setStatus(git);
-    const auto = await kyzen.getAutoCommit();
-    setAutoCommit(auto.enabled);
     if (git.recentCommits && git.recentCommits.length > 0) {
       lastHashRef.current = git.recentCommits[0].hash;
     }
@@ -71,25 +68,6 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     const refreshTimer = window.setInterval(() => { void loadStatus(); }, 4000);
     return () => { window.clearInterval(refreshTimer); };
   }, [kyzen, projectId]);
-
-  // 3.5 #7: while auto-commit is on, surface the committed file list when a new
-  // commit appears (dismissible banner).
-  useEffect(() => {
-    if (!projectId || !autoCommit) return;
-    const timer = setInterval(async () => {
-      try {
-        const result = await kyzen.getGitCommits(projectId ?? undefined);
-        const latest = result.commits?.[0];
-        if (latest && lastHashRef.current && latest.hash !== lastHashRef.current) {
-          lastHashRef.current = latest.hash;
-          setAutoBanner(latest.files && latest.files.length > 0 ? latest.files : ['(无文件变更)']);
-        } else if (latest) {
-          lastHashRef.current = latest.hash;
-        }
-      } catch { /* ignore */ }
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [kyzen, projectId, autoCommit]);
 
   const initRepo = async () => {
     setLoading(true); setError(null); setFailure(null);
@@ -132,13 +110,22 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     await loadStatus();
   };
 
-  const toggleAutoCommit = async () => {
-    const next = !autoCommit;
-    setLoading(true);
-    const result = await kyzen.setAutoCommit(next);
-    if (!result.success) setError(result.error || '设置失败');
-    else setAutoCommit(next);
-    setLoading(false);
+  const generateCommitMessage = () => {
+    const files = [
+      ...(status?.staged || []),
+      ...(status?.modified || []),
+      ...(status?.untracked || []),
+    ];
+    const uniqueFiles = [...new Set(files)];
+    if (uniqueFiles.length === 0) {
+      setCommitMessage('chore: update project');
+      return;
+    }
+    const firstName = uniqueFiles[0].split('/').pop() || uniqueFiles[0];
+    const subject = uniqueFiles.length === 1
+      ? `update ${firstName}`
+      : `update ${uniqueFiles.length} files`;
+    setCommitMessage(`chore: ${subject}`);
   };
 
   const changedCount = (status?.modified?.length || 0) + (status?.untracked?.length || 0) + (status?.staged?.length || 0);
@@ -232,7 +219,19 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
             {changedCount === 0 && <div className="text-xs text-ink-ghost">暂无变更</div>}
           </div>
 
-          <input type="text" value={commitMessage} onChange={(e) => setCommitMessage(e.target.value)} placeholder="提交信息" className="input" />
+          <div className="flex items-center gap-1.5">
+            <input type="text" value={commitMessage} onChange={(e) => setCommitMessage(e.target.value)} placeholder="提交信息" className="input min-w-0 flex-1" />
+            <button
+              type="button"
+              onClick={generateCommitMessage}
+              disabled={loading || changedCount === 0}
+              className="btn-secondary shrink-0 px-2 py-1.5 text-sm"
+              title="自动生成提交信息"
+              aria-label="自动生成提交信息"
+            >
+              ✨
+            </button>
+          </div>
           <button type="button" onClick={commit} disabled={loading || changedCount === 0} className="btn-primary w-full text-sm py-1.5">
             {gh?.connected ? '提交并推送' : '本地提交'}
           </button>
@@ -244,10 +243,6 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-sm text-ink-soft cursor-pointer">
-            <input type="checkbox" checked={autoCommit} onChange={toggleAutoCommit} disabled={loading} className="rounded-sm border-line-strong bg-surface accent-accent focus:ring-0" />
-            自动提交变更
-          </label>
         </div>
       )}
 

@@ -321,8 +321,6 @@ export interface KyrozenAPI {
     recovery?: string;
     error?: string;
   }>;
-  setAutoCommit: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
-  getAutoCommit: () => Promise<{ enabled: boolean }>;
   onGitHubStatus: (callback: (status: { connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean }) => void) => () => void;
   onFullTrustChange: (callback: (status: { enabled: boolean }) => void) => () => void;
 

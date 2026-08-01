@@ -26,6 +26,7 @@ import {
 import { startExtensionServer, ClipPayload, TestReportPayload } from './extensionServer';
 import { registerNativeMessagingHost } from './nativeMessagingRegistry';
 import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
+import { createPythonAgentSpawnConfig } from './pythonAgentProcess';
 import {
   ensureProjectVenv,
   getProjectVenv,
@@ -108,6 +109,13 @@ let heartbeatTimer: NodeJS.Timeout | null = null;
 let workspaceMap: WorkspaceMap = {};
 let currentTaskId: string | null = null;
 let currentTaskRunning = false;
+let currentTaskProjectId: string | null = null;
+let nextPythonRequestId = 1;
+const pendingPythonRequests = new Map<number, {
+  resolve: (result: Record<string, unknown>) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}>();
 // Tasks the user cancelled: any late `completed` result for these ids must
 // never be appended to the chat (cancel race fix, acceptance 2026-07-30).
 const cancelledTaskIds = new Set<string>();
@@ -118,20 +126,20 @@ let dispatchWatchdogTimer: NodeJS.Timeout | null = null;
 let dispatchWatchdogTaskId: string | null = null;
 const DISPATCH_WATCHDOG_MS = 30_000;
 
-function startDispatchWatchdog(taskId: string) {
+function startDispatchWatchdog(taskId: string, projectId: string | null) {
   clearDispatchWatchdog();
   dispatchWatchdogTaskId = taskId;
   dispatchWatchdogTimer = setTimeout(() => {
     dispatchWatchdogTimer = null;
     if (dispatchWatchdogTaskId !== taskId || currentTaskRunning) return;
     logWarn(`Dispatched task ${taskId} never arrived over WebSocket`);
-    sendTaskActivity({ task_id: taskId, description: '任务派发失败', status: 'failed' });
+    sendTaskActivity({ task_id: taskId, project_id: projectId || '', description: '任务派发失败', status: 'failed' });
     sendChatMessage({
       role: 'error',
       content: '',
       error: '任务派发超时：云端未能把任务送达本地 Agent，请检查网络后重新发送。',
       operations: [],
-    });
+    }, projectId);
   }, DISPATCH_WATCHDOG_MS);
 }
 
@@ -407,25 +415,40 @@ function updateConnection(state: 'disconnected' | 'connecting' | 'connected' | '
 interface ChatMessage {
   role: string;
   content: string;
+  project_id?: string;
   raw?: string;
   error?: string;
   operations?: Array<{ description: string; status: string; timestamp: string }>;
 }
 
-function sendChatMessage(message: ChatMessage) {
-  mainWindow?.webContents.send('kyrozen:chat-message', message);
+function sendChatMessage(message: ChatMessage, projectId: string | null = currentTaskProjectId || currentProjectId) {
+  mainWindow?.webContents.send('kyrozen:chat-message', {
+    ...message,
+    project_id: message.project_id || projectId || '',
+  });
 }
 
-function sendExecutionPlan(plan: { task_id: string; steps: string[] }) {
-  mainWindow?.webContents.send('kyrozen:execution-plan', plan);
+function sendExecutionPlan(plan: { task_id: string; steps: string[]; project_id?: string }) {
+  mainWindow?.webContents.send('kyrozen:execution-plan', {
+    ...plan,
+    project_id: plan.project_id || currentTaskProjectId || currentProjectId || '',
+  });
 }
 
-function sendTaskActivity(activity: { task_id?: string; description: string; status?: string }) {
+function sendTaskActivity(activity: { task_id?: string; project_id?: string; description: string; status?: string }) {
   mainWindow?.webContents.send('kyrozen:task-activity', {
     task_id: activity.task_id || '',
+    project_id: activity.project_id || currentTaskProjectId || currentProjectId || '',
     description: activity.description,
     status: activity.status || 'running',
   });
+}
+
+function scopePythonEvent(params: Record<string, unknown> | undefined): Record<string, unknown> {
+  return {
+    ...(params || {}),
+    project_id: String(params?.project_id || currentTaskProjectId || currentProjectId || ''),
+  };
 }
 
 function decodeAccessTokenClaims(): Record<string, any> {
@@ -2404,8 +2427,9 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
   if (!accessToken) return { success: false, error: '未登录' };
   if (!currentProjectId) return { success: false, error: '请先选择项目' };
   if (wsClient?.readyState !== WebSocket.OPEN) return { success: false, error: '桌面客户端尚未连接云端' };
+  const submittedProjectId = currentProjectId;
   try {
-    const projectState = await apiGet(`/api/projects/${currentProjectId}/state`);
+    const projectState = await apiGet(`/api/projects/${submittedProjectId}/state`);
     const modeByStage: Record<string, string> = {
       problem_discovery: 'discovery',
       market_research: 'market_research',
@@ -2413,14 +2437,14 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
       solution_design: 'planning',
       development: 'development',
       testing: 'testing',
-      iteration: 'learning',
+      iteration: 'iteration',
     };
     const mode = modeByStage[String(projectState.stage || '')] || 'discovery';
     // P0-04: 开发阶段注入本地 PRD / TECH_DESIGN 上下文，Agent 不必依赖 Supabase artifacts。
     let enrichedMessage = message;
     if (mode === 'development') {
       try {
-        const root = await getWorkspaceRoot(currentProjectId);
+        const root = await getWorkspaceRoot(submittedProjectId);
         if (root) {
           const parts: string[] = [];
           for (const doc of ['docs/PRD.md', 'docs/TECH_DESIGN.md']) {
@@ -2433,10 +2457,10 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
         }
       } catch { /* best-effort */ }
     }
-    sendTaskActivity({ description: '正在理解你的需求' });
+    sendTaskActivity({ project_id: submittedProjectId, description: '正在理解你的需求' });
     const task = await apiPost('/api/chat', {
       message: enrichedMessage,
-      project_id: currentProjectId,
+      project_id: submittedProjectId,
       mode,
       stream: false,
     }, true);
@@ -2448,7 +2472,7 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
             timestamp: String(step.completed_at || step.started_at || new Date().toISOString()),
           }))
         : [];
-      sendTaskActivity({ task_id: String(task.task_id || ''), description: '回复已完成', status: 'completed' });
+      sendTaskActivity({ task_id: String(task.task_id || ''), project_id: submittedProjectId, description: '回复已完成', status: 'completed' });
       return {
         success: true,
         taskId: task.task_id,
@@ -2460,7 +2484,7 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
     if (task.dispatched_to_desktop && task.task_id) {
       // The cloud accepted the task and will push assign_task over WS. If
       // that push never arrives, fail fast instead of spinning forever.
-      startDispatchWatchdog(String(task.task_id));
+      startDispatchWatchdog(String(task.task_id), submittedProjectId);
     }
     return { success: true, taskId: task.task_id, dispatched: !!task.dispatched_to_desktop };
   } catch (err: any) {
@@ -2499,16 +2523,28 @@ ipcMain.on('kyrozen:cancel-task', () => {
 // Stage gate (feature 3.2): forward the renderer's gate action to the Python
 // Agent. The agent re-scans deliverables, applies the transition and pushes a
 // fresh `stage_updated` event back to the UI.
-ipcMain.handle('kyrozen:stage-action', async (_event, action: string, stage: string, riskDetails?: Record<string, string>) => {
-  const projectId = currentProjectId || '';
+ipcMain.handle('kyrozen:stage-action', async (
+  _event,
+  projectId: string,
+  action: string,
+  stage: string,
+  riskDetails?: Record<string, string>,
+) => {
+  if (!projectId) return { ok: false, error: '请先选择项目。' };
   const workspaceRoot = await chooseWorkspaceRoot(projectId);
-  sendToPythonAgent({
-    jsonrpc: '2.0',
-    id: Date.now(),
-    method: 'stage_action',
-    params: { action, workspace_root: workspaceRoot, project_id: projectId, stage, risk_details: riskDetails || {} },
-  });
-  return { ok: true };
+  try {
+    return await requestPythonAgent('stage_action', {
+      action,
+      workspace_root: workspaceRoot,
+      project_id: projectId,
+      // Kept for protocol compatibility and diagnostics only. The Python
+      // runtime treats its persisted stage gate as the source of truth.
+      stage,
+      risk_details: riskDetails || {},
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 /** Establish or re-establish the WebSocket connection to the Kyrozen cloud. */
@@ -2677,8 +2713,9 @@ async function handleTaskTimeout() {
 
   currentTaskRunning = false;
   const previousTaskId = currentTaskId;
+  const previousProjectId = currentTaskProjectId;
   taskRetryCount = 0;
-  sendTaskActivity({ task_id: previousTaskId, description: '任务执行超时，已停止', status: 'failed' });
+  sendTaskActivity({ task_id: previousTaskId, project_id: previousProjectId || '', description: '任务执行超时，已停止', status: 'failed' });
   sendToCloud({
     type: 'task_result',
     task_id: previousTaskId,
@@ -2686,7 +2723,10 @@ async function handleTaskTimeout() {
     result: { error: 'Task timed out after retries' },
   });
   // Finalize the chat so the renderer never stays stuck on "正在理解你的需求".
-  sendChatMessage({ role: 'error', content: '', error: '任务执行超时，请稍后重试或重启本地 Agent。', operations: [] });
+  sendChatMessage({ role: 'error', content: '', error: '任务执行超时，请稍后重试或重启本地 Agent。', operations: [] }, previousProjectId);
+  currentTaskId = null;
+  currentTaskProjectId = null;
+  void processNextQueuedTask();
 }
 
 function startTaskTimeout(timeoutMs = TASK_TIMEOUT_MS) {
@@ -2730,6 +2770,7 @@ async function handleServerMessage(message: Record<string, unknown>) {
 
   if (type === 'assign_task') {
     clearDispatchWatchdog(String(message.task_id || ''));
+    const assignedProjectId = String(message.project_id || currentProjectId || '');
     if (currentTaskRunning && String(message.task_id) === currentTaskId) {
       logInfo(`Ignoring duplicate assignment for active task ${currentTaskId}`);
       return;
@@ -2741,7 +2782,7 @@ async function handleServerMessage(message: Record<string, unknown>) {
         task_id: message.task_id,
         queue_length: pendingTasks.length,
       });
-      sendTaskActivity({ task_id: String(message.task_id || ''), description: '任务已排队，等待执行' });
+      sendTaskActivity({ task_id: String(message.task_id || ''), project_id: assignedProjectId, description: '任务已排队，等待执行' });
       return;
     }
     // The server can assign immediately after WebSocket auth, while the
@@ -2750,11 +2791,12 @@ async function handleServerMessage(message: Record<string, unknown>) {
     // and the UI remains stuck forever.
     if (!pythonAgent) {
       pendingTasks.unshift(message);
-      sendTaskActivity({ task_id: String(message.task_id || ''), description: '正在准备本地 Agent' });
+      sendTaskActivity({ task_id: String(message.task_id || ''), project_id: assignedProjectId, description: '正在准备本地 Agent' });
       void startPythonAgent();
       return;
     }
     currentTaskId = String(message.task_id);
+    currentTaskProjectId = assignedProjectId;
     currentTaskRunning = true;
     taskRetryCount = 0;
     // Fetch stage and project info so the local AgentRouter can route by
@@ -2762,13 +2804,13 @@ async function handleServerMessage(message: Record<string, unknown>) {
     let projectStage = '';
     let projectType = '';
     try {
-      const state = await apiGet(`/api/projects/${String(message.project_id || currentProjectId)}/state`);
+      const state = await apiGet(`/api/projects/${assignedProjectId}/state`);
       projectStage = String(state?.stage || '');
     } catch {
       // Best effort: routing falls back to the dispatched mode.
     }
     try {
-      const project = await apiGet(`/api/projects/${String(message.project_id || currentProjectId)}`);
+      const project = await apiGet(`/api/projects/${assignedProjectId}`);
       const haystack = `${String(project?.name || '')} ${String(project?.description || '')} ${String(project?.goal || '')}`;
       if (/arduino|esp32|esp8266|stm32|raspberry|单片机|开发板|固件|电路|传感器|pcb|硬件/i.test(haystack)) {
         projectType = 'hardware';
@@ -2784,12 +2826,12 @@ async function handleServerMessage(message: Record<string, unknown>) {
       method: 'run_task',
       params: {
         task_id: message.task_id,
-        project_id: message.project_id,
+        project_id: assignedProjectId,
         message: message.message,
         mode: message.mode,
         stage: projectStage,
         project_type: projectType,
-        workspace_root: await chooseWorkspaceRoot(String(message.project_id || currentProjectId)),
+        workspace_root: await chooseWorkspaceRoot(assignedProjectId),
       },
     };
     lastTaskPayload = payload;
@@ -2955,15 +2997,15 @@ async function startPythonAgentInternal() {
   }
 
   const agentScript = getPythonAgentScript();
-  logInfo(`Spawning Python Agent: ${pythonPath} ${agentScript}`);
+  const agentSpawn = createPythonAgentSpawnConfig(
+    agentScript,
+    process.cwd(),
+    process.env,
+    extraEnv,
+  );
+  logInfo(`Spawning Python Agent: ${pythonPath} ${agentSpawn.args.join(' ')}`);
 
-  pythonAgent = spawn(pythonPath, [agentScript], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      ...extraEnv,
-    },
-  });
+  pythonAgent = spawn(pythonPath, agentSpawn.args, agentSpawn.options);
   pythonAgentReady = false;
 
   // A JSON-RPC line can span multiple pipe chunks. Decode UTF-8 as a stream
@@ -3045,12 +3087,34 @@ function stopPythonAgent() {
     pythonAgent = null;
     pythonAgentReady = false;
   }
+  for (const [requestId, pending] of pendingPythonRequests) {
+    clearTimeout(pending.timer);
+    pending.reject(new Error(`本地 Agent 已停止（请求 ${requestId} 未完成）`));
+  }
+  pendingPythonRequests.clear();
   pythonAgentStdoutBuffer = '';
 }
 
-function sendToPythonAgent(payload: unknown) {
-  if (!pythonAgent) return;
+function sendToPythonAgent(payload: unknown): boolean {
+  if (!pythonAgent || pythonAgent.stdin.destroyed || !pythonAgent.stdin.writable) return false;
   pythonAgent.stdin.write(JSON.stringify(payload) + '\n');
+  return true;
+}
+
+function requestPythonAgent(method: string, params: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const requestId = nextPythonRequestId++;
+    const timer = setTimeout(() => {
+      pendingPythonRequests.delete(requestId);
+      reject(new Error('本地 Agent 响应超时，请重试。'));
+    }, timeoutMs);
+    pendingPythonRequests.set(requestId, { resolve, reject, timer });
+    if (!sendToPythonAgent({ jsonrpc: '2.0', id: requestId, method, params })) {
+      clearTimeout(timer);
+      pendingPythonRequests.delete(requestId);
+      reject(new Error('本地 Agent 尚未就绪，请稍后重试。'));
+    }
+  });
 }
 
 function sendToCloud(payload: object) {
@@ -3074,6 +3138,19 @@ function flushPendingCloudMessages() {
 function handlePythonAgentLine(line: string) {
   try {
     const message = JSON.parse(line);
+    const responseId = Number(message.id);
+    if (Number.isFinite(responseId) && pendingPythonRequests.has(responseId)
+      && (Object.prototype.hasOwnProperty.call(message, 'result') || Object.prototype.hasOwnProperty.call(message, 'error'))) {
+      const pending = pendingPythonRequests.get(responseId)!;
+      pendingPythonRequests.delete(responseId);
+      clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(new Error(String(message.error?.message || message.error)));
+      } else {
+        pending.resolve((message.result && typeof message.result === 'object') ? message.result : {});
+      }
+      return;
+    }
     if (message.type === 'model_request') {
       logInfo(`Forwarding model request ${String(message.request_id || 'unknown')} to cloud`);
       sendToCloud(message);
@@ -3099,7 +3176,7 @@ function handlePythonAgentLine(line: string) {
     } else if (message.method === 'agent_routed') {
       const display = String(message.params?.agent_display_name || message.params?.agent_name || 'Agent');
       logInfo(`Task routed to ${String(message.params?.agent_name || '')} (mode=${String(message.params?.mode || '')})`);
-      mainWindow?.webContents.send('kyrozen:agent-routed', message.params);
+      mainWindow?.webContents.send('kyrozen:agent-routed', scopePythonEvent(message.params));
       sendTaskActivity({
         task_id: String(message.params?.task_id || currentTaskId || ''),
         description: `由${display}处理`,
@@ -3107,7 +3184,7 @@ function handlePythonAgentLine(line: string) {
       });
     } else if (message.method === 'agent_degraded') {
       logWarn(`Local agent degraded to read-only: ${String(message.params?.reason || '')}`);
-      mainWindow?.webContents.send('kyrozen:agent-degraded', message.params);
+      mainWindow?.webContents.send('kyrozen:agent-degraded', scopePythonEvent(message.params));
       showNotification('Kyrozen', '本地 Agent 初始化失败，已降级为只读模式');
     } else if (message.method === 'ready') {
       // The bundled Python Agent finished booting (no import crash) and is
@@ -3122,7 +3199,8 @@ function handlePythonAgentLine(line: string) {
         mode: String(message.params?.mode || ''),
       });
     } else if (message.method === 'stage_updated') {
-      mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
+      const scopedStage = scopePythonEvent(message.params);
+      mainWindow?.webContents.send('kyrozen:stage-updated', scopedStage);
       const stageProjectId = String(message.params?.project_id || currentProjectId || '');
       if (stageProjectId && accessToken) {
         void apiPut(`/api/projects/${encodeURIComponent(stageProjectId)}`, {
@@ -3131,20 +3209,20 @@ function handlePythonAgentLine(line: string) {
         }).then(() => {
           // P0-06: only re-dispatch if the user is still on the same project.
           if (currentProjectId && currentProjectId !== stageProjectId) return;
-          mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
+          mainWindow?.webContents.send('kyrozen:stage-updated', scopedStage);
         }).catch((err: any) => logWarn(`Failed to sync stage to cloud: ${err.message || err}`));
       }
     } else if (message.method === 'software_feature') {
       // 3.3 real software generation / run / repair results for the UI panel.
-      mainWindow?.webContents.send('kyzen:software-feature', message.params);
+      mainWindow?.webContents.send('kyzen:software-feature', scopePythonEvent(message.params));
     } else if (message.method === 'status_updated') {
       // 3.4 status bar: only the six user-facing states reach the renderer.
-      mainWindow?.webContents.send('kyzen:status-updated', message.params);
+      mainWindow?.webContents.send('kyzen:status-updated', scopePythonEvent(message.params));
     } else if (message.method === 'interaction') {
       // 3.4 attachments / operation log / confirmation results for the UI panel.
-      mainWindow?.webContents.send('kyzen:interaction', message.params);
+      mainWindow?.webContents.send('kyzen:interaction', scopePythonEvent(message.params));
     } else if (message.method === 'request_confirmation') {
-      showConfirmationDialog(message.params);
+      showConfirmationDialog(scopePythonEvent(message.params));
       showNotification('Kyrozen', `请求确认：${message.params.tool}.${message.params.action}`);
     } else if (message.method === 'model_request') {
       sendToCloud(message.params);
@@ -3170,12 +3248,13 @@ function handlePythonAgentLine(line: string) {
       const url = String(message.params.url || '');
       if (url) {
         // Prefer the inline preview panel; user can move it to a window from the UI.
-        mainWindow?.webContents.send('kyrozen:open-preview-url', url);
+        mainWindow?.webContents.send('kyrozen:open-preview-url', url, currentTaskProjectId || currentProjectId || '');
         sendTaskActivity({ description: '已打开本地预览', status: 'completed' });
       }
     } else if (message.method === 'execution_plan') {
       sendExecutionPlan({
         task_id: String(message.params.task_id || currentTaskId || ''),
+        project_id: String(message.params.project_id || currentTaskProjectId || currentProjectId || ''),
         steps: Array.isArray(message.params.steps) ? message.params.steps : [],
       });
     } else if (message.method === 'plan_updated') {
@@ -3184,21 +3263,32 @@ function handlePythonAgentLine(line: string) {
       // bullet points out of model output).
       mainWindow?.webContents.send('kyrozen:plan-updated', {
         task_id: String(message.params.task_id || currentTaskId || ''),
+        project_id: String(message.params.project_id || currentTaskProjectId || currentProjectId || ''),
         plan: message.params.plan || {},
         source: message.params.source || 'unknown',
       });
     } else if (message.method === 'task_result') {
+      const resultTaskId = String(message.params.task_id || currentTaskId || '');
+      const resultProjectId = String(message.params.project_id || currentTaskProjectId || currentProjectId || '');
       currentTaskRunning = false;
       taskRetryCount = 0;
       clearTaskTimeout();
-      void processNextQueuedTask();
-      const resultTaskId = String(message.params.task_id || currentTaskId || '');
       // Cancel race fix: if the user pressed stop, a late `completed` result
       // must be treated as cancelled and never appended to the chat.
       const wasCancelled = cancelledTaskIds.delete(resultTaskId);
-      const status = wasCancelled && message.params.status === 'completed'
+      let status = wasCancelled && message.params.status === 'completed'
         ? 'cancelled'
         : message.params.status;
+      const explicitAnswer = message.params.result?.answer || message.params.result?.error;
+      const internalOnlyAnswer = typeof explicitAnswer === 'string'
+        && /^(?:Using\s+|Researching\s*:|Reading file\s*:|Editing file\s*:)/i.test(explicitAnswer.trim());
+      let answer = explicitAnswer;
+      if (status === 'completed' && (!answer || internalOnlyAnswer)) {
+        status = 'failed';
+        answer = '任务已经结束，但没有生成可显示的结果。请重试；若再次出现，请展开技术详情检查失败步骤。';
+      } else if (!answer) {
+        answer = status === 'failed' ? 'AI 服务暂时不可用，请稍后重试。' : '任务已取消';
+      }
       sendToCloud({
         type: 'task_result',
         task_id: message.params.task_id,
@@ -3206,32 +3296,32 @@ function handlePythonAgentLine(line: string) {
         result: message.params.result,
         steps: message.params.steps,
       });
-      const answer = message.params.result?.answer
-        || message.params.result?.error
-        || (status === 'failed' ? 'AI 服务暂时不可用，请稍后重试。' : '任务完成');
-      const operations = taskOperations.get(String(message.params.task_id || currentTaskId || '')) || [];
+      const operations = taskOperations.get(resultTaskId) || [];
       if (status === 'failed') {
         sendTaskActivity({
-          task_id: String(message.params.task_id || currentTaskId || ''),
+          task_id: resultTaskId,
+          project_id: resultProjectId,
           description: '处理失败，请查看提示后重试',
           status: 'failed',
         });
-        sendChatMessage({ role: 'error', content: '', error: answer, operations });
+        sendChatMessage({ role: 'error', content: '', error: String(answer), operations }, resultProjectId);
       } else if (status === 'cancelled') {
         sendTaskActivity({
-          task_id: String(message.params.task_id || currentTaskId || ''),
+          task_id: resultTaskId,
+          project_id: resultProjectId,
           description: '任务已取消',
           status: 'failed',
         });
       } else {
         sendTaskActivity({
-          task_id: String(message.params.task_id || currentTaskId || ''),
+          task_id: resultTaskId,
+          project_id: resultProjectId,
           description: '回复已完成',
           status: 'completed',
         });
-        sendChatMessage({ role: 'assistant', content: answer, operations });
+        sendChatMessage({ role: 'assistant', content: String(answer), operations }, resultProjectId);
       }
-      taskOperations.delete(String(message.params.task_id || currentTaskId || ''));
+      taskOperations.delete(resultTaskId);
       if (status === 'failed') {
         showNotification('Kyrozen', '任务执行失败');
       } else if (status === 'cancelled') {
@@ -3239,6 +3329,11 @@ function handlePythonAgentLine(line: string) {
       } else if (status === 'completed') {
         showNotification('Kyrozen', '任务已完成');
       }
+      if (currentTaskId === resultTaskId) {
+        currentTaskId = null;
+        currentTaskProjectId = null;
+      }
+      void processNextQueuedTask();
     }
   } catch {
     logWarn(`Ignoring non-JSON Agent output: ${line.slice(0, 300)}`);

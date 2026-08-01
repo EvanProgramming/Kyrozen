@@ -27,14 +27,18 @@ interface GitStatus {
   staged?: string[];
   recentCommits?: GitCommit[];
   remoteUrl?: string | null;
+  upstream?: string | null;
   error?: string;
 }
 
 interface PushFailure {
+  operation: 'create' | 'push';
   failureKind?: string;
   reason?: string;
   recovery?: string;
   error?: string;
+  repositoryUrl?: string;
+  cloneUrl?: string;
 }
 
 export function GitPanel({ projectId }: { projectId: string | null }) {
@@ -52,6 +56,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   const [failure, setFailure] = useState<PushFailure | null>(null);
   const [autoBanner, setAutoBanner] = useState<string[] | null>(null);
   const lastHashRef = useRef<string | null>(null);
+  const repositoryNameRef = useRef<HTMLInputElement | null>(null);
 
   const loadStatus = async () => {
     const github = await kyzen.getGitHubStatus();
@@ -63,6 +68,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     if (git.recentCommits && git.recentCommits.length > 0) {
       lastHashRef.current = git.recentCommits[0].hash;
     }
+    return { github, git };
   };
 
   useEffect(() => {
@@ -92,21 +98,21 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   }, [kyzen, projectId, autoCommit]);
 
   const connect = async () => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setSuccess(null);
     const result = await kyzen.connectGitHub();
     if (!result.success) setError(result.error || '连接失败');
     setLoading(false);
   };
 
   const relogin = async () => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setSuccess(null);
     const result = await kyzen.startGithubLogin();
     if (!result.success) setError(result.error || '重新连接失败');
     setLoading(false);
   };
 
   const disconnect = async () => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setSuccess(null); setFailure(null);
     await kyzen.disconnectGitHub();
     setSuccess('已断开 GitHub 连接');
     await loadStatus();
@@ -114,7 +120,8 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   };
 
   const initRepo = async () => {
-    setLoading(true); setError(null); setFailure(null);
+    if (!projectId) { setError('请先选择项目'); return; }
+    setLoading(true); setError(null); setSuccess(null); setFailure(null);
     const result = await kyzen.initGitRepo();
     if (!result.success) setError(result.error || '初始化失败');
     else setSuccess('Git 仓库已初始化（主分支 main，已包含首个提交与 .gitignore）');
@@ -123,35 +130,135 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   };
 
   const createRepository = async () => {
-    if (!repositoryName.trim() || !gh?.login) return;
-    setLoading(true); setError(null); setFailure(null); setConfirmOpen(false);
+    if (!projectId) { setError('请先选择项目'); return; }
+    if (!status?.isRepo) { setError('请先初始化当前项目的 Git 仓库'); return; }
+    if (status.remoteUrl) { setError('当前项目已经配置 origin，不能重复创建远程仓库'); return; }
+    if (!repositoryName.trim()) { setError('请输入仓库名称'); return; }
+    if (!gh?.login || !gh.connected || gh.expired) { setError('请先重新连接 GitHub'); return; }
+    setLoading(true); setError(null); setSuccess(null); setFailure(null); setConfirmOpen(false);
     const result = await kyzen.createGitHubRepo(gh.login, repositoryName.trim(), '', repositoryPrivate);
     if (result.success) {
-      setSuccess('GitHub 仓库已创建，首次提交已推送并连接到当前项目');
-      setRepositoryName('');
+      // Do not trust a generic IPC success as proof of publication.  A real
+      // first push establishes both origin and an upstream tracking branch.
+      const refreshed = await loadStatus();
+      if (refreshed.git.isRepo && refreshed.git.remoteUrl && refreshed.git.upstream) {
+        setSuccess('GitHub 仓库已创建，首次提交已推送并连接到当前项目');
+        setRepositoryName('');
+      } else {
+        setFailure({
+          operation: 'push',
+          failureKind: 'publish_unverified',
+          reason: 'GitHub 仓库可能已创建，但未确认首次推送成功。',
+          recovery: '保留当前本地提交，检查远程配置后重试推送。',
+          repositoryUrl: result.url,
+          cloneUrl: result.cloneUrl,
+        });
+      }
     } else {
-      // 3.5 #6: surface the classified reason + recovery (e.g. name_exists).
-      setFailure({ failureKind: result.failureKind, reason: result.reason || result.error, recovery: result.recovery });
+      setFailure({
+        operation: result.url || result.cloneUrl ? 'push' : 'create',
+        failureKind: result.failureKind,
+        reason: result.reason || result.error,
+        recovery: result.recovery,
+        repositoryUrl: result.url,
+        cloneUrl: result.cloneUrl,
+      });
     }
     setLoading(false);
     await loadStatus();
   };
 
   const commit = async () => {
-    if (!commitMessage.trim()) { setError('请输入提交信息'); return; }
-    setLoading(true); setError(null); setFailure(null);
+    const hasChanges = changedCount > 0;
+    if (hasChanges && !commitMessage.trim()) { setError('请输入提交信息'); return; }
+    if (!hasChanges && !canPush) { setError('当前没有需要提交的变更'); return; }
+    setLoading(true); setError(null); setSuccess(null); setFailure(null);
     const before = status ? [...(status.modified || []), ...(status.untracked || []), ...(status.staged || [])] : [];
-    const result = await kyzen.commitAndPush(commitMessage);
+    const result = await kyzen.commitAndPush(commitMessage.trim() || 'chore: sync current branch');
     if (!result.success) {
-      setFailure({ failureKind: result.failureKind, reason: result.reason || result.error, recovery: result.recovery });
+      setFailure({ operation: 'push', failureKind: result.failureKind, reason: result.reason || result.error, recovery: result.recovery });
       setError(null);
-    } else {
-      setSuccess(gh?.connected ? '提交完成并推送至 GitHub' : '本地提交成功');
+    } else if (result.pushed) {
+      setSuccess(result.committed ? '提交完成并已推送至 GitHub' : '当前分支已成功推送至 GitHub');
       setCommitMessage('');
-      if (before.length > 0) setAutoBanner(before);
+      if (result.committed && before.length > 0) setAutoBanner(before);
+    } else {
+      const reason = result.pushSkippedReason === 'no_remote'
+        ? '尚未配置 origin'
+        : result.pushSkippedReason === 'not_authenticated'
+          ? 'GitHub 尚未连接'
+          : '未执行远程推送';
+      setSuccess(result.committed ? `本地提交成功，尚未推送（${reason}）` : `没有新变更，尚未推送（${reason}）`);
+      setCommitMessage('');
+      if (result.committed && before.length > 0) setAutoBanner(before);
     }
     setLoading(false);
     await loadStatus();
+  };
+
+  const retryPush = async () => {
+    if (!projectId) { setError('请先选择项目'); return; }
+    setLoading(true); setError(null); setSuccess(null);
+    const latest = await kyzen.getGitStatus(projectId);
+    const pendingChanges = (latest.modified?.length || 0) + (latest.untracked?.length || 0) + (latest.staged?.length || 0);
+    if (pendingChanges > 0) {
+      setStatus(latest);
+      setFailure(null);
+      setError('检测到新的未提交变更。请填写提交信息，再使用“提交并推送”。');
+      setLoading(false);
+      return;
+    }
+    const result = await kyzen.commitAndPush('chore: retry GitHub push');
+    if (result.success && result.pushed) {
+      setFailure(null);
+      setSuccess('当前分支已成功推送至 GitHub');
+    } else if (result.success) {
+      setFailure({
+        operation: 'push',
+        failureKind: result.pushSkippedReason || 'push_skipped',
+        reason: '没有执行远程推送。',
+        recovery: result.pushSkippedReason === 'no_remote' ? '请先创建或配置 GitHub 远程仓库。' : '请重新连接 GitHub 后重试。',
+      });
+    } else {
+      setFailure({ operation: 'push', failureKind: result.failureKind, reason: result.reason || result.error, recovery: result.recovery });
+    }
+    await loadStatus();
+    setLoading(false);
+  };
+
+  const retryCreate = () => {
+    setFailure(null);
+    setConfirmOpen(true);
+  };
+
+  const reconnectCreatedRepository = async () => {
+    if (!failure?.cloneUrl) return;
+    setLoading(true); setError(null); setSuccess(null);
+    const initialized = await kyzen.initGitRepo(failure.cloneUrl);
+    if (!initialized.success) {
+      setError(initialized.error || '连接已创建仓库失败');
+      setLoading(false);
+      return;
+    }
+    setLoading(false);
+    await retryPush();
+  };
+
+  const copyRebaseCommand = async () => {
+    const branch = status?.branch || 'main';
+    try {
+      await navigator.clipboard.writeText(`git pull --rebase origin ${branch}`);
+      setSuccess('已复制安全的 rebase 命令；请在当前项目终端运行后点击“重试推送”。');
+    } catch {
+      setError(`无法访问剪贴板。请在当前项目终端运行：git pull --rebase origin ${branch}`);
+    }
+  };
+
+  const editRepositoryName = () => {
+    setFailure(null);
+    setConfirmOpen(false);
+    repositoryNameRef.current?.focus();
+    repositoryNameRef.current?.select();
   };
 
   const toggleAutoCommit = async () => {
@@ -164,6 +271,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   };
 
   const changedCount = (status?.modified?.length || 0) + (status?.untracked?.length || 0) + (status?.staged?.length || 0);
+  const canPush = Boolean(status?.isRepo && status.remoteUrl && gh?.connected && !gh.expired);
   const statusBadge = (s: GitStatus | null) => {
     if (!s?.isRepo) return <span className="text-xs px-2 py-0.5 rounded-sm bg-paper-edge text-ink-faint">未初始化</span>;
     return <span className="text-xs px-2 py-0.5 rounded-sm bg-success-soft text-success">已初始化</span>;
@@ -210,13 +318,12 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
         )}
       </div>
 
-      {/* P0-12 修复：创建 GitHub 仓库的条件是"无远程 origin"，不是"非仓库"。
-+           本地初始化后仍应能创建远程并推送。 */}
-      {gh?.connected && !gh.expired && !status?.remoteUrl && (
+      {/* A remote can only be created for a selected, initialized project. */}
+      {projectId && gh?.connected && !gh.expired && status?.isRepo && !status.remoteUrl && (
         <div className="mb-4 p-3 panel space-y-2">
           <div className="text-sm font-medium">创建 GitHub 仓库</div>
           <div className="text-xs text-ink-faint">所有者：<span className="text-ink-soft">{gh.login}</span></div>
-          <input className="input" value={repositoryName} onChange={(e) => setRepositoryName(e.target.value)} placeholder="仓库名称" />
+          <input ref={repositoryNameRef} className="input" value={repositoryName} onChange={(e) => setRepositoryName(e.target.value)} placeholder="仓库名称" />
           <label className="flex items-center gap-2 text-xs text-ink-soft">
             <input type="checkbox" checked={repositoryPrivate} onChange={(e) => setRepositoryPrivate(e.target.checked)} />
             私有仓库
@@ -234,18 +341,26 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
               </div>
             </div>
           )}
-          {failure && (
+          {failure?.operation === 'create' && (
             <div className="border-l-2 border-l-danger bg-danger-soft p-2 space-y-1">
-              <div className="text-xs font-medium text-danger">{failure.reason}</div>
+              <div className="text-xs font-medium text-danger">{failure.reason || failure.error || '创建仓库失败'}</div>
               {failure.recovery && <div className="text-xs text-ink-soft">{failure.recovery}</div>}
-              <button type="button" onClick={() => setFailure(null)} className="btn-ghost text-xs">关闭</button>
+              <div className="flex gap-2 pt-1">
+                {failure.failureKind === 'name_exists'
+                  ? <button type="button" onClick={editRepositoryName} disabled={loading} className="btn-secondary text-xs flex-1">更换仓库名</button>
+                  : <button type="button" onClick={retryCreate} disabled={loading} className="btn-secondary text-xs flex-1">重新检查并重试</button>}
+                {failure.failureKind === 'auth_failed' && (
+                  <button type="button" onClick={relogin} disabled={loading} className="btn-primary text-xs flex-1">重新连接 GitHub</button>
+                )}
+                <button type="button" onClick={() => setFailure(null)} className="btn-ghost text-xs">关闭</button>
+              </div>
             </div>
           )}
         </div>
       )}
 
       {/* 3.5 #3: init local repo (and first commit handled by backend) */}
-      {!status?.isRepo && (
+      {projectId && !status?.isRepo && (
         <div className="mb-4 p-3 panel space-y-2">
           <div className="text-sm font-medium">本地仓库</div>
           <button type="button" onClick={initRepo} disabled={loading} className="btn-secondary w-full text-sm py-1.5">初始化 Git 仓库（main 分支 + .gitignore + 首个提交）</button>
@@ -267,6 +382,13 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
           {status.remoteUrl && (
             <div className="text-xs text-ink-faint break-all">
               远程: <a href={status.remoteUrl} target="_blank" rel="noreferrer" className="text-accent underline">{status.remoteUrl}</a>
+            </div>
+          )}
+          {status.remoteUrl && (
+            <div className="text-xs text-ink-faint">
+              推送跟踪: {status.upstream
+                ? <span className="text-success">{status.upstream}</span>
+                : <span className="text-warning">尚未建立；首次推送未完成</span>}
             </div>
           )}
 
@@ -291,14 +413,33 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
           </div>
 
           <input type="text" value={commitMessage} onChange={(e) => setCommitMessage(e.target.value)} placeholder="提交信息" className="input" />
-          <button type="button" onClick={commit} disabled={loading || changedCount === 0} className="btn-primary w-full text-sm py-1.5">
-            {gh?.connected ? '提交并推送' : '本地提交'}
+          <button
+            type="button"
+            onClick={commit}
+            disabled={loading || (changedCount === 0 && !canPush)}
+            className="btn-primary w-full text-sm py-1.5"
+          >
+            {canPush ? (changedCount > 0 ? '提交并推送' : '推送当前分支') : '本地提交'}
           </button>
-          {failure && (
+          {failure?.operation === 'push' && (
             <div className="border-l-2 border-l-danger bg-danger-soft p-2 space-y-1">
               <div className="text-xs font-medium text-danger">{failure.reason || failure.error}</div>
               {failure.recovery && <div className="text-xs text-ink-soft">{failure.recovery}</div>}
-              <button type="button" onClick={() => setFailure(null)} className="btn-ghost text-xs">关闭</button>
+              {failure.repositoryUrl && (
+                <a href={failure.repositoryUrl} target="_blank" rel="noreferrer" className="block text-xs text-accent underline">打开已创建的 GitHub 仓库</a>
+              )}
+              <div className="flex gap-2 pt-1">
+                {failure.cloneUrl
+                  ? <button type="button" onClick={reconnectCreatedRepository} disabled={loading} className="btn-primary text-xs flex-1">连接仓库并重试推送</button>
+                  : failure.failureKind === 'auth_failed' || failure.failureKind === 'not_authenticated'
+                  ? <button type="button" onClick={relogin} disabled={loading} className="btn-primary text-xs flex-1">重新连接 GitHub</button>
+                  : <button type="button" onClick={retryPush} disabled={loading} className="btn-primary text-xs flex-1">重新检查并重试推送</button>}
+                {failure.failureKind === 'non_fast_forward' && (
+                  <button type="button" onClick={copyRebaseCommand} disabled={loading} className="btn-secondary text-xs flex-1">复制 rebase 修复命令</button>
+                )}
+                <button type="button" onClick={() => { setFailure(null); void loadStatus(); }} className="btn-ghost text-xs">刷新状态</button>
+                <button type="button" onClick={() => setFailure(null)} className="btn-ghost text-xs">关闭</button>
+              </div>
             </div>
           )}
 

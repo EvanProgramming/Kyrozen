@@ -98,7 +98,18 @@ function splitQuestionBlock(content: string): { markdown: string; question: Ques
       ...parsed,
       options: Array.isArray(parsed.options) ? parsed.options : [],
     };
-    return { markdown: content.replace(match[0], '').trim(), question };
+    let markdown = content.replace(match[0], '').trim();
+    // Models sometimes print the same question as prose immediately before
+    // the structured block. Keep one copy: the card itself is the canonical
+    // rendering and must not make a normal user read the prompt twice.
+    const normalizedQuestion = question.question.replace(/\s+/g, ' ').trim();
+    const paragraphs = markdown.split(/\n\s*\n/);
+    const lastParagraph = (paragraphs.at(-1) || '').replace(/\s+/g, ' ').trim();
+    if (lastParagraph === normalizedQuestion) {
+      paragraphs.pop();
+      markdown = paragraphs.join('\n\n').trim();
+    }
+    return { markdown, question };
   } catch {
     // Malformed block: strip the raw protocol text instead of leaking it.
     // Salvage the human-readable question text when possible.
@@ -106,6 +117,67 @@ function splitQuestionBlock(content: string): { markdown: string; question: Ques
     const markdown = content.replace(match[0], questionText ? questionText[1] : '').trim();
     return { markdown, question: null };
   }
+}
+
+const INTERNAL_PROGRESS_RE = /^(?:Using\s+\S+\s*:\s*\S*|Researching\s*:[\s\S]+|Reading file\s*:[\s\S]+|Editing file\s*:[\s\S]+|Inspecting files\s*:[\s\S]+|Running command\s*:[\s\S]+|Updating Git repository\s*:[\s\S]+)$/i;
+
+function isInternalProgressOnly(content: string): boolean {
+  const compact = content.trim();
+  if (!compact) return true;
+  if (INTERNAL_PROGRESS_RE.test(compact)) return true;
+  // Some providers concatenate duplicate tool notices into one line.
+  return /^(?:Using\s+[\w.-]+\s*:\s*[\w.-]+\s*)+$/i.test(compact);
+}
+
+function localizeActivity(description: string): string {
+  const value = description.trim();
+  if (/^Researching\s*:/i.test(value)) return '正在检索市场与用户资料';
+  if (/^Reading file\s*:/i.test(value)) return '正在读取项目文件';
+  if (/^Editing file\s*:/i.test(value)) return '正在修改项目文件';
+  if (/^Inspecting files\s*:/i.test(value)) return '正在整理项目文件';
+  if (/^Running command\s*:/i.test(value)) return '正在运行项目命令';
+  if (/^Updating Git repository\s*:/i.test(value)) return '正在更新 Git 仓库';
+  if (/^Using\s+save_research_source\s*:/i.test(value)) return '正在保存调研来源';
+  if (/^Using\s+save_market_research_report\s*:/i.test(value)) return '正在保存市场调研报告';
+  if (/^Using\s+(?:save_problem_brief|save_prd|save_solution_design)\s*:/i.test(value)) return '正在保存项目交付物';
+  if (/^Using\s+(?:record_|update_project)/i.test(value)) return '正在记录项目决策';
+  if (/^Using\s+/i.test(value)) return '正在处理项目资料';
+  return value;
+}
+
+function normalizeOperations(operations?: Operation[]): Operation[] | undefined {
+  if (!operations?.length) return undefined;
+  const seen = new Set<string>();
+  const normalized: Operation[] = [];
+  for (const operation of operations) {
+    const description = localizeActivity(String(operation.description || '正在处理项目'));
+    const status = operation.status === 'success' ? 'completed' : String(operation.status || 'completed');
+    const key = `${description}\u0000${status}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({ ...operation, description, status });
+  }
+  return normalized;
+}
+
+function mediaAttachmentContext(attachments: AttachmentInfo[]): string {
+  const usable = attachments.filter((attachment) => !attachment.error);
+  if (!usable.length) return '';
+  const lines = usable.map((attachment) => {
+    const analysis = attachment.analysis || {};
+    const details = [analysis.description, analysis.summary, analysis.transcript]
+      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+      .map((value) => value.trim())
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .join('；')
+      .slice(0, 5000);
+    return [
+      `- 文件：${attachment.filename}（${attachment.kind}，${attachment.mime}）`,
+      `  本地路径：${attachment.path}`,
+      `  分析结果：${details || '已上传，但暂时没有可用的视觉或转写结果'}`,
+    ].join('\n');
+  });
+  return `\n\n[本次消息的媒体附件]\n${lines.join('\n')}\n请把这些附件及其分析结果作为本次需求上下文，不要忽略。`;
 }
 
 /**
@@ -717,6 +789,7 @@ function useMediaAttachments(
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const uploadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingUploadCountRef = useRef(0);
   const agentDown = agentReady != null && agentReady.status !== 'ready';
 
   const send = async (extra: Record<string, unknown>) => {
@@ -727,11 +800,13 @@ function useMediaAttachments(
 
   useEffect(() => {
     if (!window.kyrozen) return;
+    setAttachments([]);
+    setUploadError(null);
+    pendingUploadCountRef.current = 0;
     const unsubStatus = window.kyrozen.onStatusUpdated((s) => setStatus(s));
     const unsubInt = window.kyrozen.onInteraction((payload) => {
       const action = String(payload.action || '');
       if (action === 'attach') {
-        if (uploadTimerRef.current) { clearTimeout(uploadTimerRef.current); uploadTimerRef.current = null; }
         if (payload.error) {
           setUploadError(String(payload.error));
         } else if (payload.attachment) {
@@ -739,18 +814,21 @@ function useMediaAttachments(
           setAttachments((prev) => [...prev.filter((a) => a.id !== att.id), att]);
           setUploadError(null);
         }
-        setUploading(false);
+        pendingUploadCountRef.current = Math.max(0, pendingUploadCountRef.current - 1);
+        if (pendingUploadCountRef.current === 0) {
+          if (uploadTimerRef.current) { clearTimeout(uploadTimerRef.current); uploadTimerRef.current = null; }
+          setUploading(false);
+        }
       } else if (action === 'delete_attachment') {
-        // Refresh the list from disk so deletes always reflect.
-        void send({ action: 'attach_list' });
-      } else if (action === 'attach_list') {
-        setAttachments((payload.attachments as AttachmentInfo[]) ?? []);
+        // The chip is removed optimistically by onDelete. Persisted historical
+        // attachments belong to the project, not to the next composer send.
       }
     });
-    if (projectId && agentReady?.status === 'ready') {
-      void send({ action: 'attach_list' });
-    }
     return () => {
+      if (uploadTimerRef.current) {
+        clearTimeout(uploadTimerRef.current);
+        uploadTimerRef.current = null;
+      }
       unsubStatus();
       unsubInt();
     };
@@ -767,6 +845,7 @@ function useMediaAttachments(
     }
     setUploading(true);
     setUploadError(null);
+    pendingUploadCountRef.current = files.length;
     // Reset uploading after a timeout so the button never stays "上传中…".
     uploadTimerRef.current = setTimeout(() => {
       uploadTimerRef.current = null;
@@ -788,7 +867,12 @@ function useMediaAttachments(
 
   const statusText = status?.state ? (STATUS_LABEL[status.state] ?? status.state) : '';
 
-  return { attachments, uploading, uploadError, statusText, fileRef, onPick, onDelete };
+  const clearPending = () => {
+    setAttachments([]);
+    setUploadError(null);
+  };
+
+  return { attachments, uploading, uploadError, statusText, fileRef, onPick, onDelete, clearPending };
 }
 
 export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPageProps) {
@@ -815,12 +899,14 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
   // (optimistic), 'down'/'degraded' means we must not hang on a dead Agent.
   const [agentReady, setAgentReady] = useState<{ status: string; version?: string; mode?: string; reason?: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last user message that entered the send pipeline; used by the retry
   // button on failure so the user never has to re-type after a timeout.
   const lastSentRef = useRef<string>('');
   const media = useMediaAttachments(projectId, agentReady);
 
   useEffect(() => {
+    let cancelled = false;
     // Conversation UI is project-scoped. Never carry a user's messages,
     // execution plan, confirmation, or attachments into another project.
     setMessages([]);
@@ -838,7 +924,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     // the persisted real progress even before any task runs.
     if (window.kyrozen && projectId) {
       window.kyrozen.getProjectState(projectId)
-        .then((state) => { window.kyrozen?.sendStageAction('refresh', state?.stage ?? ''); })
+        .then((state) => {
+          if (!cancelled) window.kyrozen?.sendStageAction(projectId, 'refresh', state?.stage ?? '');
+        })
         .catch(() => {});
     }
 
@@ -847,14 +935,16 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     if (window.kyrozen && projectId) {
       window.kyrozen.loadChatMessages(projectId)
         .then((result) => {
-          if (!result.success || !result.messages?.length) return;
+          if (cancelled || !result.success || !result.messages?.length) return;
           setMessages(
             reconcileQuestionAnswers(
-              result.messages.map((m: { role: string; content: string; operations?: unknown[] }) => ({
-                role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role as Message['role'] : 'system',
-                content: m.content,
-                operations: (Array.isArray(m as any) ? undefined : (m as any).operations),
-              }))
+              result.messages
+                .filter((m: { role: string; content: string }) => !isInternalProgressOnly(m.content))
+                .map((m: { role: string; content: string; operations?: unknown[] }) => ({
+                  role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role as Message['role'] : 'system',
+                  content: m.content,
+                  operations: normalizeOperations(Array.isArray(m as any) ? undefined : (m as any).operations),
+                }))
             )
           );
         })
@@ -867,7 +957,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       window.kyrozen.getWorkspaceRoot(projectId)
         .then(({ workspaceRoot }) => workspaceRoot ? window.kyrozen?.readWorkspacePlan(workspaceRoot) : null)
         .then((result) => {
-          if (!result?.success || !result.plan?.steps) return;
+          if (cancelled || !result?.success || !result.plan?.steps) return;
           const steps = result.plan.steps.map((step) => ({
             id: String(step.id || ''),
             title: String(step.title || step.id || ''),
@@ -884,22 +974,37 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         })
         .catch(() => {});
     }
+    return () => { cancelled = true; };
   }, [projectId]);
 
   useEffect(() => {
     if (!window.kyrozen) return;
     const unsubChat = window.kyrozen.onChatMessage((msg) => {
       if (msg.role === 'system' && /PlatformIO|Python Agent|项目工作目录|Artifact|\[INFO\]|\[model\]|\[tool\]|Failed to persist/i.test(msg.content)) return;
+      const eventProjectId = String((msg as { project_id?: string }).project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
       if (msg.role === 'error') {
+        if (completionTimerRef.current) {
+          clearTimeout(completionTimerRef.current);
+          completionTimerRef.current = null;
+        }
         setChatError(friendlyChatError(msg.error || msg.raw || msg.content));
         setIsRunning(false);
         setActivity('');
         return;
       }
+      if (isInternalProgressOnly(msg.content)) {
+        setActivity(localizeActivity(msg.content));
+        return;
+      }
+      if (completionTimerRef.current) {
+        clearTimeout(completionTimerRef.current);
+        completionTimerRef.current = null;
+      }
       setMessages((prev) => [...prev, {
         role: msg.role as Message['role'],
         content: msg.content,
-        operations: msg.operations,
+        operations: normalizeOperations(msg.operations),
       }]);
       if (msg.role === 'assistant') {
         // P0-R6: do NOT clear isRunning / activity on every assistant message.
@@ -908,11 +1013,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         // staring at a blank screen until the next activity event arrives
         // (which can take several seconds, looking like a freeze). Terminal
         // clearing happens only on task-activity {status=failed/completed}
-        // or chat-error messages. We only auto-mark plan steps complete.
-        setPlan((current) => current ? {
-          ...current,
-          steps: current.steps.map((step) => ({ ...step, status: 'completed' })),
-        } : null);
+        // or chat-error messages. Plan step state only comes from PLAN.json /
+        // task events; a prose assistant message is not proof every step ran.
         onProjectChanged?.();
         // P0-R8: refresh the operation log after each assistant turn so the
         // panel count reflects work actually performed this session (not just
@@ -925,6 +1027,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       }
     });
     const unsubPlan = window.kyrozen.onExecutionPlan((incoming) => {
+      const eventProjectId = String((incoming as { project_id?: string }).project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
       // Legacy path: model-output plan detection. Use it as a lightweight
       // fallback; the file-based plan (onPlanUpdated) overrides when
       // available.
@@ -935,6 +1039,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       setPlanExpanded(true);
     });
     const unsubPlanFile = window.kyrozen.onPlanUpdated((incoming) => {
+      const eventProjectId = String((incoming as { project_id?: string }).project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
       // P0-R6: real planning. The plan comes from .kyrozen/PLAN.json, not from
       // guessing model output bullets. Includes stage/title/goal/steps with
       // live status (pending/in_progress/completed/failed).
@@ -954,11 +1060,25 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       setPlanExpanded(true);
     });
     const unsubActivity = window.kyrozen.onTaskActivity((incoming) => {
-      setActivity(incoming.description);
+      const eventProjectId = String((incoming as { project_id?: string }).project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
+      setActivity(incoming.status === 'running' ? localizeActivity(incoming.description) : '');
       if (incoming.status === 'running' && incoming.task_id) setIsRunning(true);
       // Terminal activity states must always re-enable the input box, even
       // when no chat message follows (e.g. cancelled / dispatch failure).
-      if (incoming.status === 'failed' || incoming.status === 'completed') setIsRunning(false);
+      if (incoming.status === 'failed' || incoming.status === 'completed') {
+        setIsRunning(false);
+        if (incoming.status === 'completed') {
+          if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+          completionTimerRef.current = setTimeout(() => {
+            completionTimerRef.current = null;
+            setChatError({
+              summary: '任务已经结束，但没有返回可显示的结果。你可以重试刚才的消息。',
+              raw: `task ${incoming.task_id || 'unknown'} completed without a chat result`,
+            });
+          }, 1500);
+        }
+      }
       setPlan((current) => {
         if (!current || (incoming.task_id && current.task_id && incoming.task_id !== current.task_id)) return current;
         const steps = current.steps.map((step) => ({ ...step }));
@@ -976,11 +1096,15 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       });
     });
     const unsubConfirmation = window.kyrozen.onConfirmationRequest((request) => {
+      const eventProjectId = String((request as { project_id?: string }).project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
       setConfirmation(request);
       setConfirmationExpanded(false);
       setActivity('等待你确认下一步操作');
     });
     const unsubRouted = window.kyrozen.onAgentRouted((decision) => {
+      const eventProjectId = String((decision as { project_id?: string }).project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
       setRoutedAgent(decision);
       if (decision.degraded) {
         setActivity(`已降级为只读模式（${decision.agent_display_name}）`);
@@ -989,6 +1113,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       }
     });
     const unsubDegraded = window.kyrozen.onAgentDegraded((info) => {
+      const eventProjectId = String((info as { project_id?: string }).project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
       setDegraded(info);
     });
     // P0-06: on stage update, ignore events for other projects to prevent
@@ -1003,7 +1129,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       setAgentReady(info);
       if (info.status === 'ready' && projectId) {
         window.kyrozen?.getProjectState(projectId)
-          .then((state) => { window.kyrozen?.sendStageAction('refresh', state?.stage ?? ''); })
+          .then((state) => { window.kyrozen?.sendStageAction(projectId, 'refresh', state?.stage ?? ''); })
           .catch(() => {});
       }
     });
@@ -1017,6 +1143,10 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       unsubDegraded();
       unsubStage();
       unsubAgentReady();
+      if (completionTimerRef.current) {
+        clearTimeout(completionTimerRef.current);
+        completionTimerRef.current = null;
+      }
     };
   }, [onProjectChanged, projectId]);
 
@@ -1044,8 +1174,8 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     return map[key] || key;
   }
 
-  const sendMessage = async (message: string, options?: { echoUser?: boolean }) => {
-    if (!window.kyrozen || !projectId || !message.trim()) return;
+  const sendMessage = async (message: string, options?: { echoUser?: boolean }): Promise<boolean> => {
+    if (!window.kyrozen || !projectId || !message.trim()) return false;
     lastSentRef.current = message;
     if (options?.echoUser !== false) {
       setMessages((prev) => [...prev, { role: 'user', content: message }]);
@@ -1058,30 +1188,41 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     setRoutedAgent(null);
     setDegraded(null);
     setChatError(null);
-    const result = await window.kyrozen.sendChat(message);
+    let result: Awaited<ReturnType<typeof window.kyrozen.sendChat>>;
+    try {
+      result = await window.kyrozen.sendChat(message);
+    } catch (error) {
+      const friendly = friendlyChatError(error instanceof Error ? error.message : String(error));
+      setChatError(friendly);
+      setIsRunning(false);
+      setActivity('');
+      return false;
+    }
     if (!result.success) {
       const friendly = friendlyChatError(result.error);
       setChatError(friendly);
       setIsRunning(false);
       setActivity('');
+      return false;
     } else if (result.content) {
+      if (completionTimerRef.current) {
+        clearTimeout(completionTimerRef.current);
+        completionTimerRef.current = null;
+      }
       setMessages((prev) => [...prev, {
         role: 'assistant',
         content: result.content || '',
-        operations: result.operations,
+        operations: normalizeOperations(result.operations),
       }]);
       setIsRunning(false);
       setActivity('');
-      setPlan((current) => current ? {
-        ...current,
-        steps: current.steps.map((step) => ({ ...step, status: 'completed' })),
-      } : null);
       onProjectChanged?.();
     }
+    return true;
   };
 
   const handleSend = async () => {
-    if (!input.trim() && pendingAttachments.length === 0) return;
+    if (!input.trim() && pendingAttachments.length === 0 && media.attachments.length === 0) return;
     if (!projectId) {
       setMessages((prev) => [...prev, { role: 'system', content: '请先选择左侧项目。' }]);
       return;
@@ -1089,7 +1230,11 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     const attachmentText = pendingAttachments
       .map((att) => `\n\n--- 附件：${att.name} ---\n${att.content.slice(0, 8000)}${att.content.length > 8000 ? '\n...' : ''}`)
       .join('');
-    await sendMessage(input.trim() ? `${input.trim()}${attachmentText}` : attachmentText.trim());
+    const mediaText = mediaAttachmentContext(media.attachments);
+    const content = input.trim()
+      ? `${input.trim()}${attachmentText}${mediaText}`
+      : `${attachmentText}${mediaText}`.trim();
+    if (await sendMessage(content)) media.clearPending();
   };
 
   const respondConfirmation = async (confirmed: boolean, trust = false, storeId?: string | null) => {
@@ -1361,7 +1506,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
                   {expanded && (
                     <div className="mt-2 bg-paper-sink border border-line rounded-sm p-3 space-y-1.5">
                       {message.operations.map((operation, operationIndex) => (
-                        <div key={`${operation.timestamp}-${operationIndex}`} className="flex gap-2 text-xs text-ink-soft font-mono">
+                        <div key={`${operation.timestamp}-${operationIndex}`} className="flex gap-2 text-xs text-ink-soft">
                           <span className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${dotClass[(operation.status as OperationStatus) || 'completed'] || dotClass.completed}`} />
                           <span>{operation.description}</span>
                         </div>
@@ -1479,7 +1624,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           {isRunning ? (
             <button type="button" onClick={() => { window.kyrozen?.cancelTask(); setIsRunning(false); setActivity('已停止本次任务'); }} className="btn-danger px-5">停止</button>
           ) : (
-            <button type="button" onClick={() => void handleSend()} disabled={!projectId || (!input.trim() && pendingAttachments.length === 0)} className="btn-primary px-5">发送</button>
+            <button type="button" onClick={() => void handleSend()} disabled={!projectId || media.uploading || (!input.trim() && pendingAttachments.length === 0 && media.attachments.length === 0)} className="btn-primary px-5">发送</button>
           )}
         </div>
         {media.statusText && (

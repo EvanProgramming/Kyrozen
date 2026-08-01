@@ -32,6 +32,16 @@ from kyrozen.core import deliverable_templates as dt
 from kyrozen.tools.software_feature_tools import SoftwareFeatureTool
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_owned_previews():
+    """No feature-generation test may leave a live preview behind."""
+    yield
+    for workspace, preview in list(fg._PREVIEW_PROCESSES.items()):
+        fg._PREVIEW_PROCESSES.pop(workspace, None)
+        if preview.poll() is None:
+            fg._kill_preview_proc(preview)
+
+
 # --------------------------------------------------------------------------- #
 # Spec
 # --------------------------------------------------------------------------- #
@@ -142,7 +152,7 @@ def test_build_and_test_real_subprocess(tmp_path: Path):
     assert test.success, test.stdout + test.stderr
 
 
-def test_preview_does_not_accept_an_orphan_server_health_check(tmp_path: Path):
+def test_preview_skips_an_unowned_server_without_killing_it(tmp_path: Path):
     _scaffold_web(tmp_path)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -161,16 +171,38 @@ def test_preview_does_not_accept_an_orphan_server_health_check(tmp_path: Path):
                 time.sleep(0.05)
         run = fg.BuildRunner().start_preview(tmp_path, port=occupied_port, timeout=2)
         assert run.success, run.stderr
-        # The orphan should be killed; the new preview claims the now-free port
-        assert orphan.poll() is not None, "orphan preview should have been killed"
+        assert run.stdout != f"http://localhost:{occupied_port}"
+        assert orphan.poll() is None, "an unowned listener must never be killed"
     finally:
         if orphan.poll() is None:
             orphan.terminate()
             try: orphan.wait(timeout=5)
             except Exception: orphan.kill()
-        preview = fg._PREVIEW_PROCESSES.pop(str(tmp_path.resolve()), None)
-        if preview and preview.poll() is None:
-            fg._kill_preview_proc(preview)  # preview uses setsid, safe to killpg
+
+
+def test_preview_replaces_only_the_owned_workspace_process(tmp_path: Path):
+    _scaffold_web(tmp_path)
+    runner = fg.BuildRunner()
+    first = runner.start_preview(tmp_path, port=fg.DEFAULT_PORT, timeout=2)
+    assert first.success, first.stderr
+    first_process = fg._PREVIEW_PROCESSES[str(tmp_path.resolve())]
+
+    second = runner.start_preview(tmp_path, port=fg.DEFAULT_PORT, timeout=2)
+
+    assert second.success, second.stderr
+    assert first_process.poll() is not None
+    assert fg._PREVIEW_PROCESSES[str(tmp_path.resolve())].poll() is None
+
+
+def test_stop_preview_only_stops_the_owned_workspace_process(tmp_path: Path):
+    _scaffold_web(tmp_path)
+    runner = fg.BuildRunner()
+    run = runner.start_preview(tmp_path, port=fg.DEFAULT_PORT, timeout=2)
+    assert run.success, run.stderr
+
+    assert runner.stop_preview(tmp_path)
+    assert not runner.stop_preview(tmp_path)
+    assert str(tmp_path.resolve()) not in fg._PREVIEW_PROCESSES
 
 
 def test_core_flow_runs_real_server(tmp_path: Path):

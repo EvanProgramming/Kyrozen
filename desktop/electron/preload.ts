@@ -177,8 +177,8 @@ contextBridge.exposeInMainWorld('kyrozen', {
   sendSoftwareFeature: (params: Record<string, unknown>) =>
     ipcRenderer.send('kyzen:software-feature', params),
 
-  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string, riskDetails?: Record<string, string>) =>
-    ipcRenderer.invoke('kyrozen:stage-action', action, stage, riskDetails),
+  sendStageAction: (projectId: string, action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string, riskDetails?: Record<string, string>) =>
+    ipcRenderer.invoke('kyrozen:stage-action', projectId, action, stage, riskDetails),
 
   onConfirmationRequest: (callback: (request: Record<string, unknown>) => void) => {
     const handler = (_event: unknown, request: Record<string, unknown>) => callback(request);

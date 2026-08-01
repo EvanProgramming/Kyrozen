@@ -42,6 +42,16 @@ interface UserProfile {
   avatarUrl: string;
 }
 
+interface GitHubStatus {
+  connected: boolean;
+  scope: string;
+  login?: string;
+  avatarUrl?: string;
+  expired?: boolean;
+}
+
+const SESSION_HINT_KEY = 'kyrozen:has-saved-session';
+
 function formatQuota(quota: QuotaInfo) {
   if (quota.plan === 'developer') return '开发者账户 · 无限制';
   return `免费账户 · 可完整使用 ${quota.project_limit || 1} 个项目`;
@@ -60,11 +70,14 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
-  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; scope: string; login?: string; avatarUrl?: string; expired?: boolean }>({ connected: false, scope: '' });
+  const [githubStatus, setGithubStatus] = useState<GitHubStatus>({ connected: false, scope: '' });
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
-  // P0-16: prevent the 4-second window where the UI shows free-account
-  // restrictions before quota / fullTrust / gitHubStatus finish loading.
-  const [sessionRestoring, setSessionRestoring] = useState(false);
+  // Start in a neutral state. The main process restores credentials
+  // asynchronously, so rendering LoginPage immediately causes a distracting
+  // login-page flash for returning users.
+  const [sessionRestoring, setSessionRestoring] = useState(true);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
+  const [connectionMessage, setConnectionMessage] = useState('正在检查连接状态');
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
@@ -140,13 +153,14 @@ function App() {
     if (!window.kyrozen) return;
     try {
       const status = await window.kyrozen.getGitHubStatus();
-      setGithubStatus({
-        connected: status.connected,
-        scope: status.scope || '',
-        login: status.login,
-        avatarUrl: status.avatarUrl,
-        expired: status.expired,
-      });
+      setGithubStatus((previous) => status.connected ? {
+        ...previous,
+        connected: true,
+        scope: status.scope ?? previous.scope,
+        login: status.login ?? previous.login,
+        avatarUrl: status.avatarUrl ?? previous.avatarUrl,
+        expired: status.expired ?? previous.expired,
+      } : { connected: false, scope: status.scope || '' });
     } catch {
       setGithubStatus({ connected: false, scope: '' });
     }
@@ -169,7 +183,43 @@ function App() {
   };
 
   useEffect(() => {
-    if (!window.kyrozen) return;
+    if (!window.kyrozen) {
+      // Vite/browser previews do not have the Electron preload bridge. Do not
+      // leave them on the neutral splash forever; fall back to the signed-out
+      // surface so the shell remains inspectable.
+      setOnboardingStatus('completed');
+      setSessionRestoring(false);
+      return;
+    }
+
+    let mounted = true;
+    let sessionHydrationId = 0;
+
+    const hydrateAuthenticatedSession = async (wsToken: string, preferredProjectId?: string | null) => {
+      const hydrationId = ++sessionHydrationId;
+      setSessionNotice(null);
+      setToken(wsToken);
+      setSessionRestoring(true);
+      localStorage.setItem(SESSION_HINT_KEY, '1');
+
+      const savedProjectId = preferredProjectId || localStorage.getItem('kyrozen:last-project-id');
+      if (savedProjectId) {
+        setCurrentProjectId(savedProjectId);
+        void window.kyrozen?.setCurrentProject(savedProjectId);
+      }
+
+      await Promise.allSettled([
+        loadProjects(),
+        loadQuota(),
+        loadFullTrust(),
+        loadGitHubStatus(),
+        loadUserProfile(),
+        loadLanguage(),
+      ]);
+      if (mounted && hydrationId === sessionHydrationId) {
+        setSessionRestoring(false);
+      }
+    };
 
     window.kyrozen
       .getOnboardingStatus()
@@ -187,36 +237,16 @@ function App() {
       if (openToken && window.kyrozen) {
         const verified = await window.kyrozen.verifyOpenToken(openToken);
         if (verified) {
-          setToken(verified.wsToken);
-          void loadProjects();
-          void loadUserProfile();
           if (projectId) {
-            setCurrentProjectId(projectId);
             localStorage.setItem('kyrozen:last-project-id', projectId);
-            void window.kyrozen.setCurrentProject(projectId);
           }
+          void hydrateAuthenticatedSession(verified.wsToken, projectId);
         }
       }
     });
 
     const unsubSessionResumed = window.kyrozen.onSessionResumed((token: string) => {
-      setSessionNotice(null);
-      setToken(token);
-      setSessionRestoring(true);
-      const savedProjectId = localStorage.getItem('kyrozen:last-project-id');
-      if (savedProjectId) {
-        setCurrentProjectId(savedProjectId);
-        void window.kyrozen?.setCurrentProject(savedProjectId);
-      }
-      // Load all panels; hide the loading screen only after everything settles.
-      Promise.all([
-        loadProjects(),
-        loadQuota(),
-        loadGitHubStatus(),
-        loadUserProfile(),
-        loadLanguage(),
-      ]).finally(() => setSessionRestoring(false));
-      loadFullTrust(); // non-blocking
+      void hydrateAuthenticatedSession(token);
     });
 
     const unsubSessionEnded = window.kyrozen.onSessionEnded(() => {
@@ -227,6 +257,8 @@ function App() {
       setFullTrust(false);
       setGithubStatus({ connected: false, scope: '' });
       setUserProfile(null);
+      setSessionRestoring(false);
+      localStorage.removeItem(SESSION_HINT_KEY);
       localStorage.removeItem('kyrozen:last-project-id');
     });
 
@@ -239,11 +271,14 @@ function App() {
       setFullTrust(false);
       setGithubStatus({ connected: false, scope: '' });
       setUserProfile(null);
+      setSessionRestoring(false);
+      localStorage.removeItem(SESSION_HINT_KEY);
       localStorage.removeItem('kyrozen:last-project-id');
       setSessionNotice(message || '登录已过期，请重新登录。');
     });
 
     const unsubOpenSettings = window.kyrozen.onOpenSettings(() => {
+      setShowUserMenu(false);
       setShowSettings(true);
     });
 
@@ -256,7 +291,22 @@ function App() {
     });
 
     const unsubGitHubStatus = window.kyrozen.onGitHubStatus((status) => {
-      setGithubStatus({ connected: status.connected, scope: status.scope || '' });
+      // Some main-process notifications only carry connected/scope. Preserve
+      // the last known identity fields, then immediately request the complete,
+      // validated status so Settings and the account menu update without a
+      // project switch or reload.
+      setGithubStatus((previous) => status.connected ? {
+        ...previous,
+        ...status,
+        connected: true,
+        scope: status.scope ?? previous.scope,
+      } : { connected: false, scope: status.scope || '' });
+      void loadGitHubStatus();
+    });
+
+    const unsubConnectionChange = window.kyrozen.onConnectionChange((state, message) => {
+      setConnectionState(state);
+      setConnectionMessage(message || '');
     });
 
     const unsubUpdateStatus = window.kyrozen.onUpdateStatus((status) => {
@@ -272,32 +322,44 @@ function App() {
 
     let initialSessionTimer: number | null = null;
     let initialSessionAttempts = 0;
+    const expectsSavedSession = localStorage.getItem(SESSION_HINT_KEY) === '1'
+      || Boolean(localStorage.getItem('kyrozen:last-project-id'));
+    // A known saved session gets a longer window for credential refresh. A
+    // truly signed-out user reaches LoginPage quickly instead of waiting for
+    // the full recovery window. Both paths are explicitly bounded.
+    const maxInitialSessionAttempts = expectsSavedSession ? 30 : 4;
     const hydrateInitialSession = () => window.kyrozen?.getInitialSession().then((session) => {
+      if (!mounted) return;
+      if (!session) {
+        setSessionRestoring(false);
+        return;
+      }
+      setConnectionState(session.connection);
+      setConnectionMessage(session.message || '');
       if (session?.wsToken) {
-        setToken(session.wsToken);
-        const savedProjectId = session.currentProjectId || localStorage.getItem('kyrozen:last-project-id');
-        if (savedProjectId) {
-          setCurrentProjectId(savedProjectId);
-          void window.kyrozen?.setCurrentProject(savedProjectId);
-        }
-        void loadProjects();
-        void loadQuota();
-        void loadFullTrust();
-        void loadLanguage();
-        void loadGitHubStatus();
-        void loadUserProfile();
+        void hydrateAuthenticatedSession(session.wsToken, session.currentProjectId);
         window.kyrozen?.requestInitialToken();
-      } else if (initialSessionAttempts < 30) {
+      } else if (initialSessionAttempts < maxInitialSessionAttempts) {
         initialSessionAttempts += 1;
         window.kyrozen?.requestInitialToken();
         initialSessionTimer = window.setTimeout(hydrateInitialSession, 1000);
+      } else {
+        setSessionRestoring(false);
       }
     }).catch(() => {
-      window.kyrozen?.requestInitialToken();
+      if (!mounted) return;
+      initialSessionAttempts += 1;
+      if (initialSessionAttempts < maxInitialSessionAttempts) {
+        window.kyrozen?.requestInitialToken();
+        initialSessionTimer = window.setTimeout(hydrateInitialSession, 1000);
+      } else {
+        setSessionRestoring(false);
+      }
     });
     void hydrateInitialSession();
 
     return () => {
+      mounted = false;
       clearTimeout(updateTimer);
       if (initialSessionTimer != null) window.clearTimeout(initialSessionTimer);
       unsubProtocolUrl();
@@ -308,6 +370,7 @@ function App() {
       unsubOpenPreviewUrl();
       unsubFullTrustChange();
       unsubGitHubStatus();
+      unsubConnectionChange();
       unsubUpdateStatus();
     };
   }, []);
@@ -320,12 +383,14 @@ function App() {
     await loadLanguage();
     await loadGitHubStatus();
     await loadUserProfile();
+    setSessionRestoring(false);
   };
 
   const handleToggleFullTrust = async () => {
     if (!window.kyrozen) return;
     const next = !fullTrust;
     if (next) {
+      setShowUserMenu(false);
       setShowFullTrustConfirm(true);
       return;
     }
@@ -417,16 +482,18 @@ function App() {
   }
 
   if (!token) {
+    if (sessionRestoring) {
+      return (
+        <div className="h-screen w-screen flex items-center justify-center bg-paper text-ink" role="status" aria-live="polite">
+          <div className="text-center">
+            <div className="font-display text-3xl">Kyrozen</div>
+            <div className="text-sm text-ink-faint mt-2">正在检查登录状态...</div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="h-screen w-screen flex flex-col bg-paper">
-        {sessionRestoring && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-paper">
-            <div className="text-center">
-              <div className="font-display text-3xl">Kyrozen</div>
-              <div className="text-sm text-ink-faint mt-2">正在恢复会话...</div>
-            </div>
-          </div>
-        )}
         <LoginPage notice={sessionNotice} />
       </div>
     );
@@ -447,9 +514,28 @@ function App() {
 
   const currentProject = projects.find((p) => p.id === currentProjectId);
   const canCreateProject = quota?.plan === 'developer' || projects.length < (quota?.project_limit || 1);
+  const connectionPresentation: Record<ConnectionState, { className: string; label: string }> = {
+    connected: { className: 'bg-success', label: '云端已连接' },
+    connecting: { className: 'bg-warning', label: '正在连接云端' },
+    error: { className: 'bg-danger', label: '连接异常' },
+    disconnected: { className: 'bg-ink-ghost', label: '云端未连接' },
+  };
+  const visibleConnection = connectionPresentation[connectionState];
 
   return (
     <div className="h-screen w-screen flex flex-col bg-paper text-ink">
+      <div
+        className={`h-7 flex-shrink-0 px-4 flex items-center justify-center text-xs text-white ${visibleConnection.className}`}
+        role="status"
+        aria-live="polite"
+        title={connectionMessage || visibleConnection.label}
+        data-testid="connection-status"
+      >
+        <span className="font-medium">{visibleConnection.label}</span>
+        {connectionMessage && connectionMessage !== visibleConnection.label && (
+          <span className="ml-1 opacity-90 truncate">· {connectionMessage}</span>
+        )}
+      </div>
       <header className="app-drag h-12 border-b border-line bg-surface flex items-center justify-between pl-20 pr-4 flex-shrink-0">
         <div className="flex items-center gap-3 app-no-drag">
           <span className="font-display text-2xl leading-none text-ink">Kyrozen</span>
@@ -471,7 +557,7 @@ function App() {
           {currentProjectId && (
             <button
               type="button"
-              onClick={() => setShowProjectWorkspace(true)}
+              onClick={() => { setShowUserMenu(false); setShowProjectWorkspace(true); }}
               className="btn-primary text-xs px-3 py-1.5"
             >
               项目画布
@@ -479,7 +565,7 @@ function App() {
           )}
           <button
             type="button"
-            onClick={() => setShowSettings(true)}
+            onClick={() => { setShowUserMenu(false); setShowSettings(true); }}
             className="btn-secondary text-xs px-3 py-1.5"
           >
             设置
@@ -489,7 +575,7 @@ function App() {
               type="button"
               onClick={() => setShowUserMenu((value) => !value)}
               className="w-7 h-7 rounded-full overflow-hidden bg-accent flex items-center justify-center text-xs font-medium text-white border border-line-strong"
-              aria-label="用户菜单"
+              aria-label={`${userProfile?.name || 'Kyrozen 用户'}的 Kyrozen 账号菜单`}
               aria-expanded={showUserMenu}
             >
               {userProfile?.avatarUrl ? (
@@ -499,8 +585,19 @@ function App() {
             {showUserMenu && (
               <div className="absolute right-0 top-9 z-40 w-56 panel p-2">
                 <div className="px-2 py-2 border-b border-line">
+                  <div className="text-[11px] text-ink-faint mb-1">Kyrozen 账号</div>
                   <div className="text-sm font-medium truncate">{userProfile?.name || 'Kyrozen 用户'}</div>
-                  <div className="text-xs text-ink-faint truncate">{userProfile?.githubUsername ? `@${userProfile.githubUsername}` : userProfile?.email}</div>
+                  <div className="text-xs text-ink-faint truncate">{userProfile?.email || '已登录'}</div>
+                </div>
+                <div className="px-2 py-2 border-b border-line">
+                  <div className="text-[11px] text-ink-faint mb-1">GitHub 授权</div>
+                  <div className={`text-xs ${githubStatus.connected && !githubStatus.expired ? 'text-success' : githubStatus.expired ? 'text-danger' : 'text-ink-faint'}`}>
+                    {githubStatus.expired
+                      ? '授权已过期'
+                      : githubStatus.connected
+                        ? `已授权${githubStatus.login ? ` · @${githubStatus.login}` : ''}`
+                        : '未授权（不影响 Kyrozen 登录）'}
+                  </div>
                 </div>
                 <button type="button" onClick={() => { setShowUserMenu(false); void handleLogout(); }} className="btn-ghost w-full text-sm text-danger mt-1 justify-start">
                   退出登录
@@ -514,7 +611,10 @@ function App() {
         <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-line bg-paper-sink flex flex-col">
           <div className="p-4 border-b border-line flex items-center justify-between">
             <div className="flex items-center gap-1.5">
-              <h2 className="font-display text-lg leading-none text-ink">我的项目</h2>
+              <h2 className="font-display text-lg leading-none text-ink" aria-label={`我的项目，共 ${projects.length} 个`}>
+                我的项目
+              </h2>
+              <span className="text-[11px] text-ink-faint" aria-hidden="true">{projects.length}</span>
               {/* UI cleanup: cross-project search condensed into a small icon
                   next to "我的项目"; click to expand the input below. */}
               <button
@@ -534,7 +634,7 @@ function App() {
             <div className="flex gap-1">
               <button
                 type="button"
-                onClick={() => setShowCreateProject(true)}
+                onClick={() => { setShowUserMenu(false); setShowCreateProject(true); }}
                 title={canCreateProject ? '创建新项目' : '免费账户可完整使用一个项目'}
                 className="btn-primary text-xs px-2 py-1"
                 disabled={!canCreateProject}
@@ -657,9 +757,9 @@ function App() {
         </div>
       </div>
       {showCreateProject && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40" role="dialog" aria-modal="true" aria-labelledby="create-project-title">
           <div className="w-full max-w-sm panel p-6">
-            <h2 className="font-display text-2xl text-ink mb-4">新建项目</h2>
+            <h2 id="create-project-title" className="font-display text-2xl text-ink mb-4">新建项目</h2>
             <div className="space-y-3">
               <div>
                 <label className="label">项目名称 *</label>
@@ -736,12 +836,12 @@ function App() {
         />
       )}
       {showFullTrustConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/40" role="dialog" aria-modal="true" aria-labelledby="full-trust-title">
           <div className="panel w-full max-w-md p-5">
-            <h2 className="font-display text-2xl">开启完全信任模式？</h2>
+            <h2 id="full-trust-title" className="font-display text-2xl">开启完全信任模式？</h2>
             <p className="text-sm text-ink-soft mt-2">本次会话内，文件写入和命令执行等高风险操作将自动继续，不再逐次询问。</p>
             <div className="flex justify-end gap-2 mt-5">
-              <button type="button" onClick={() => setShowFullTrustConfirm(false)} className="btn-ghost text-sm">取消</button>
+              <button type="button" onClick={() => setShowFullTrustConfirm(false)} className="btn-ghost text-sm" autoFocus>取消</button>
               <button type="button" onClick={() => void enableFullTrust()} className="btn-primary text-sm">确认开启</button>
             </div>
           </div>

@@ -111,6 +111,14 @@ def test_progress_reflects_task_completion(tmp_path: Path):
     assert high > low
 
 
+def test_no_registered_task_is_not_full_task_completion(tmp_path: Path):
+    s = _store(tmp_path, "problem_discovery")
+    without_task = compute_progress(s)
+    s.record_task("discovery", "completed")
+    with_completed_task = compute_progress(s)
+    assert with_completed_task > without_task
+
+
 def test_progress_reaches_high_when_stage_complete(tmp_path: Path):
     s = _store(tmp_path, "problem_discovery")
     base = compute_progress(s)
@@ -298,6 +306,35 @@ def test_failed_task_shows_repair_entry(tmp_path: Path):
     assert failed
     assert "修复" in failed[0].detail or "修复" in gate.failed_tasks[0]["repair"]
     assert gate.failed_tasks[0]["task_id"] == "step-3"
+
+
+def test_failed_registered_task_blocks_normal_advance(tmp_path: Path):
+    s = _store(tmp_path, "market_research")
+    s.record_deliverable("market_report", True)
+    s.record_task("research", "failed", error="search provider timeout")
+    result = advance(s, "normal")
+    assert result["ok"] is False
+    assert "research" in result["error"]
+    assert s.current_stage == "market_research"
+
+
+def test_pending_registered_task_blocks_normal_advance(tmp_path: Path):
+    s = _store(tmp_path, "market_research")
+    s.record_deliverable("market_report", True)
+    s.record_task("persist-report", "running")
+    result = advance(s, "normal")
+    assert result["ok"] is False
+    assert "persist-report" in result["error"]
+    assert s.current_stage == "market_research"
+
+
+def test_completed_registered_task_allows_normal_advance(tmp_path: Path):
+    s = _store(tmp_path, "market_research")
+    s.record_deliverable("market_report", True)
+    s.record_task("research", "completed")
+    result = advance(s, "normal")
+    assert result["ok"] is True
+    assert s.current_stage == "product_definition"
 
 
 # ---------------------------------------------------------------------------

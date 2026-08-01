@@ -159,8 +159,11 @@ class SaveProblemBriefTool(Tool):
             return ToolResult(success=False, data=None, error=str(e))
 
     def _refresh_problem_stage(self, root: Path, project_id: str) -> None:
-        """Re-scan the stage gate so the freshly written PROBLEM.md is detected,
-        then auto-confirm the paired confirmation item."""
+        """Re-scan the gate so the freshly written PROBLEM.md is detected.
+
+        The paired user confirmation remains open until the user explicitly
+        accepts the problem definition and advances.
+        """
         try:
             from kyrozen.core.stagegate import record_report_deliverable
 

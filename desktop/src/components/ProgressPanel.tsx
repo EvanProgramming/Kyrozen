@@ -58,6 +58,7 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
   const [state, setState] = useState<ProjectState | null>(null);
   const [gateStatus, setGateStatus] = useState<StageGateStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [riskOpen, setRiskOpen] = useState(false);
   const [riskDetails, setRiskDetails] = useState<RiskDetails>({ reason: '', impact: '', recovery: '' });
@@ -66,6 +67,7 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
     if (!window.kyrozen || !projectId) return;
     let cancelled = false;
     setGateStatus(null);
+    setActionError(null);
     setMoreOpen(false);
     setRiskOpen(false);
     const refresh = async () => {
@@ -87,11 +89,12 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
   const handleAction = async (action: StageAction, details?: RiskDetails) => {
     if (!window.kyrozen || !projectId) return;
     setBusy(true);
+    setActionError(null);
     try {
-      await window.kyrozen.sendStageAction(action, gateStatus?.stage ?? state?.stage ?? '', details);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-    } catch {
-      // The Python Agent pushes a fresh stage_updated event on success.
+      const result = await window.kyrozen.sendStageAction(projectId, action, gateStatus?.stage ?? state?.stage ?? '', details);
+      if (!result.ok) setActionError(result.error || '阶段操作未完成，请修复提示后重试。');
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '阶段操作失败，请重试。');
     } finally {
       setBusy(false);
     }
@@ -242,6 +245,7 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
           <div className="text-xs text-ink-faint mt-1">{state.next_action.reason}</div>
         </div>
       )}
+      {actionError && <div className="mt-3 bg-danger-soft text-danger border border-line rounded-sm p-2 text-xs" role="alert">{actionError}</div>}
       {state.blocked_reason && <div className="mt-3 bg-danger-soft text-danger border border-line rounded-sm p-2 text-xs">{state.blocked_reason}</div>}
     </section>
   );

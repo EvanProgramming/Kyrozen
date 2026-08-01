@@ -2,8 +2,8 @@
 
 These reproduce the desktop scenario where ``project_manager`` is ``None`` and the
 workspace is identified only via ``config.workspace_root``. Every tool must still
-materialize its deliverable markdown file (so the stage gate detects it) and must
-auto-confirm the paired confirmation item.
+materialize its deliverable markdown file (so the stage gate detects it), while
+leaving the paired user-confirmation item open.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def _make_store(root: str):
     return StageGateStore(Path(root) / ".kyrozen" / "stagegate.json")
 
 
-def test_save_problem_brief_writes_problem_md_and_autoconfirms():
+def test_save_problem_brief_writes_problem_md_without_confirming_user():
     import tempfile
 
     tmp = tempfile.mkdtemp()
@@ -43,10 +43,10 @@ def test_save_problem_brief_writes_problem_md_and_autoconfirms():
     assert target.exists(), "docs/PROBLEM.md was not written"
     store = _make_store(tmp)
     assert store.records.get("problem_statement", {}).get("detected") is True
-    assert store.records.get("problem_confirmed", {}).get("confirmed") is True
+    assert store.records.get("problem_confirmed", {}).get("confirmed") is not True
 
 
-def test_save_prd_writes_prd_md_and_autoconfirms():
+def test_save_prd_writes_prd_md_without_confirming_user():
     import tempfile
 
     tmp = tempfile.mkdtemp()
@@ -65,11 +65,10 @@ def test_save_prd_writes_prd_md_and_autoconfirms():
     assert target.exists(), "PRD.md was not written"
     store = _make_store(tmp)
     assert store.records.get("prd", {}).get("detected") is True
-    # prd_confirmed is the hard-gate confirmation; auto-tick it.
-    assert store.records.get("prd_confirmed", {}).get("confirmed") is True
+    assert store.records.get("prd_confirmed", {}).get("confirmed") is not True
 
 
-def test_save_technical_plan_writes_tech_design_md_and_autoconfirms():
+def test_save_technical_plan_writes_tech_design_md_without_confirming_user():
     import tempfile
 
     tmp = tempfile.mkdtemp()
@@ -91,10 +90,10 @@ def test_save_technical_plan_writes_tech_design_md_and_autoconfirms():
     assert target.exists(), "docs/TECH_DESIGN.md was not written"
     store = _make_store(tmp)
     assert store.records.get("tech_design", {}).get("detected") is True
-    assert store.records.get("design_confirmed", {}).get("confirmed") is True
+    assert store.records.get("design_confirmed", {}).get("confirmed") is not True
 
 
-def test_save_market_research_writes_market_md_and_autoconfirms():
+def test_save_market_research_writes_market_md_without_confirming_user():
     import tempfile
 
     tmp = tempfile.mkdtemp()
@@ -118,10 +117,11 @@ def test_save_market_research_writes_market_md_and_autoconfirms():
     assert target.exists(), "docs/MARKET.md was not written"
     store = _make_store(tmp)
     assert store.records.get("market_report", {}).get("detected") is True
-    assert store.records.get("market_confirmed", {}).get("confirmed") is True
+    assert store.records.get("market_confirmed", {}).get("confirmed") is not True
+    assert res.data["confirmation_required"] is True
 
 
-def test_save_changelog_writes_changelog_md_and_autoconfirms():
+def test_save_changelog_writes_changelog_md_without_confirming_user():
     import tempfile
 
     tmp = tempfile.mkdtemp()
@@ -143,7 +143,7 @@ def test_save_changelog_writes_changelog_md_and_autoconfirms():
     assert "Changelog" in content and "v0.2.0" in content
     store = _make_store(tmp)
     assert store.records.get("changelog", {}).get("detected") is True
-    assert store.records.get("changelog_confirmed", {}).get("confirmed") is True
+    assert store.records.get("changelog_confirmed", {}).get("confirmed") is not True
 
 
 def test_save_market_research_without_evidence_not_confirmed():

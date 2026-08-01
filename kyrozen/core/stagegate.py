@@ -65,6 +65,10 @@ class StageDefinition:
     label: str
     items: tuple[GateItem, ...] = ()
     note: str = ""
+    # Lifecycle stages execute real work.  An empty task list therefore must
+    # not be reported as 100% task completion unless a future stage explicitly
+    # opts out of task tracking.
+    requires_tasks: bool = True
 
 
 def _d(item_id: str, label: str, detect: tuple[str, ...] = (), skippable: bool = False) -> GateItem:
@@ -408,7 +412,7 @@ def compute_progress(store: StageGateStore) -> int:
     def task_ratio() -> float:
         tasks = list(store.tasks.values())
         if not tasks:
-            return 1.0
+            return 0.0 if definition.requires_tasks else 1.0
         done = sum(1 for t in tasks if t.get("status") == "completed")
         return done / len(tasks)
 
@@ -442,10 +446,13 @@ def compute_gate(store: StageGateStore) -> GateStatus:
             )
             (satisfied if is_sat else missing).append(cond)
 
-    # Failed tasks are surfaced as missing conditions with a repair entry.
+    # Every registered task must finish before normal advancement. Failed
+    # tasks additionally expose a repair entry; pending/running/cancelled tasks
+    # remain visible blockers rather than disappearing from the gate.
     failed_tasks: list[dict[str, Any]] = []
     for tid, t in store.tasks.items():
-        if t.get("status") == "failed":
+        status = str(t.get("status") or "pending")
+        if status == "failed":
             err = t.get("error", "") or "任务执行失败"
             failed_tasks.append({"task_id": tid, "error": err, "repair": f"定位失败任务 {tid} 并修复后重新运行"})
             missing.append(
@@ -457,6 +464,19 @@ def compute_gate(store: StageGateStore) -> GateStatus:
                     skippable=False,
                     skipped=False,
                     detail=err,
+                    required=True,
+                )
+            )
+        elif status != "completed":
+            missing.append(
+                Condition(
+                    item_id=tid,
+                    label=f"任务未完成：{tid}",
+                    kind="task",
+                    satisfied=False,
+                    skippable=False,
+                    skipped=False,
+                    detail=f"当前状态：{status}",
                     required=True,
                 )
             )
@@ -525,25 +545,26 @@ def refresh_gate(store: StageGateStore, workspace_root: str | Path) -> GateStatu
 def record_report_deliverable(
     workspace_root: str | Path,
     deliverable_id: str,
-    confirmation_id: str,
-    detail: str = "报告已生成，已自动确认",
-    auto_confirm: bool = True,
+    confirmation_id: str | None = None,
+    detail: str = "",
+    auto_confirm: bool = False,
 ) -> None:
-    """After a report deliverable file is materialized on disk, re-scan the gate
-    and auto-record the stage's paired confirmation item.
+    """Record a materialized report as a detected deliverable.
 
-    This keeps the progress panel honest: once the agent has actually produced
-    the report file (e.g. ``PRD.md``), the "用户确认…" item that pairs with it
-    is checked automatically so the user does not have to click it manually.
-    The user can still re-confirm by advancing the stage (which overwrites the
-    record with an explicit confirmation).
+    Artifact creation and user confirmation are deliberately separate facts.
+    Writing ``PRD.md`` or another report proves only that a deliverable exists;
+    it must never be treated as consent to accept that report or advance the
+    lifecycle.  ``confirmation_id``, ``detail`` and ``auto_confirm`` remain as
+    compatibility parameters for older callers, but are intentionally ignored.
+    Confirmation is recorded only by an explicit user stage-advance action.
 
-    The deliverable is detected explicitly (scanning every stage) so the
-    auto-confirm works even when the persisted ``current_stage`` has not yet
-    been advanced to the stage that owns this deliverable. Silent no-op if the
-    store cannot be opened, or the deliverable was not actually detected on disk
-    (so we never confirm a report that was never written).
+    The deliverable is detected explicitly across all stages so a report can be
+    reflected even when the active stage has not changed yet. Silent no-op if
+    the store cannot be opened or the file was not actually found.
     """
+    # Keep backward-compatible call sites from turning report generation into
+    # user consent.  These values must not affect persisted confirmation state.
+    del confirmation_id, detail, auto_confirm
     try:
         root = Path(workspace_root)
         store = StageGateStore(root / ".kyrozen" / "stagegate.json")
@@ -557,8 +578,6 @@ def record_report_deliverable(
                 break
         if found:
             store.record_deliverable(deliverable_id, True)
-            if auto_confirm:
-                store.record_confirmation(confirmation_id, True, detail=detail)
             store.save()
     except Exception:
         pass
@@ -636,7 +655,10 @@ def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | Non
     if idx >= len(STAGES) - 1:
         return {"ok": False, "error": "已是最后阶段，无法继续推进。", **_status_dict(store, gate)}
 
-    required_missing = [c for c in gate.missing if c.kind not in {"task", "confirmation"} and c.required]
+    # The advance operation must enforce the same truth as ``can_advance``.
+    # Confirmation is supplied by this explicit user action itself; registered
+    # pending/running/failed tasks are real blockers and may not be ignored.
+    required_missing = [c for c in gate.missing if c.kind != "confirmation" and c.required]
     if mode == "normal" and required_missing:
         reason = gate.blocked_entry_reason or ("未满足：" + "、".join(c.label for c in required_missing))
         return {"ok": False, "error": reason, **_status_dict(store, gate)}

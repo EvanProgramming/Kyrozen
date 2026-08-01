@@ -247,7 +247,7 @@ export interface KyrozenAPI {
   onAgentReady: (callback: (info: { status: 'ready' | 'down'; version?: string; mode?: string; code?: number | null; retrying?: boolean }) => void) => () => void;
   onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => () => void;
   sendSoftwareFeature: (params: Record<string, unknown>) => void;
-  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string, riskDetails?: Record<string, string>) => Promise<{ ok: boolean }>;
+  sendStageAction: (projectId: string, action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string, riskDetails?: Record<string, string>) => Promise<{ ok: boolean; error?: string }>;
   onConfirmationRequest: (callback: (request: { confirmation_id: string; store_id?: string | null; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string; choices?: string[] }) => void) => () => void;
   respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean, storeId?: string | null) => Promise<{ success: boolean; error?: string }>;
   onStatusUpdated: (callback: (status: InteractionStatus) => void) => () => void;
@@ -307,12 +307,15 @@ export interface KyrozenAPI {
     staged?: string[];
     recentCommits?: Array<{ hash: string; message: string; date: string; author: string }>;
     remoteUrl?: string | null;
+    upstream?: string | null;
     error?: string;
   }>;
   getGitCommits: (projectId?: string) => Promise<{ success: boolean; commits: Array<{ hash: string; message: string; date: string; author: string; files?: string[] }>; remoteUrl: string | null; error?: string }>;
   commitAndPush: (message: string) => Promise<{
     success: boolean;
     committed?: boolean;
+    pushed?: boolean;
+    pushSkippedReason?: 'no_remote' | 'not_authenticated';
     failureKind?: string;
     reason?: string;
     recovery?: string;

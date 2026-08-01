@@ -137,7 +137,7 @@ class SaveTechnicalPlanTool(Tool):
                 data=None,
                 error="无法保存技术方案：未找到可写的项目工作区，且项目管理器不可用。",
             )
-        # Auto-confirm the paired confirmation item now that the file exists.
+        # Detect the deliverable. User acceptance is a separate, explicit gate.
         if workspace and result.get("file"):
             try:
                 from kyrozen.core.stagegate import record_report_deliverable
@@ -244,7 +244,7 @@ class SaveChangelogTool(Tool):
                 data=None,
                 error="无法保存变更记录：未找到可写的项目工作区，且项目管理器不可用。",
             )
-        # Auto-confirm the paired confirmation item now that the file exists.
+        # Detect the deliverable. User acceptance is a separate, explicit gate.
         if workspace and result.get("file"):
             try:
                 from kyrozen.core.stagegate import record_report_deliverable

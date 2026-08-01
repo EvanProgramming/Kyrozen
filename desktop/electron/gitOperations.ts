@@ -85,6 +85,8 @@ export interface GitStatus {
   staged?: string[];
   recentCommits?: GitCommit[];
   remoteUrl?: string | null;
+  /** The configured upstream for the current branch, for example origin/main. */
+  upstream?: string | null;
   error?: string;
 }
 
@@ -99,6 +101,10 @@ export interface GitCommit {
 export interface PushResult {
   success: boolean;
   committed?: boolean;
+  /** True only after a git push command completed successfully. */
+  pushed?: boolean;
+  /** Explains a successful local-only commit without implying it was pushed. */
+  pushSkippedReason?: 'no_remote' | 'not_authenticated';
   failureKind?: string;
   reason?: string;
   recovery?: string;
@@ -181,6 +187,12 @@ export async function getGitStatus(workspaceRoot: string): Promise<GitStatus> {
     const remotes = await git.getRemotes(true);
     const origin = remotes.find((r) => r.name === 'origin');
     const commits = await getGitCommits(workspaceRoot);
+    const upstream = await git.raw([
+      'rev-parse',
+      '--abbrev-ref',
+      '--symbolic-full-name',
+      '@{upstream}',
+    ]).then((value) => value.trim() || null).catch(() => null);
     return {
       success: true,
       isRepo: true,
@@ -192,6 +204,7 @@ export async function getGitStatus(workspaceRoot: string): Promise<GitStatus> {
       staged: status.staged,
       recentCommits: commits.commits,
       remoteUrl: origin?.refs.fetch || null,
+      upstream,
     };
   } catch (err: any) {
     return { success: false, isRepo: false, error: err.message || String(err) };
@@ -237,7 +250,14 @@ export async function commitAndPush(
     const git = gitInstance(workspaceRoot);
     const isRepo = await git.checkIsRepo();
     if (!isRepo) {
-      return { success: false, error: '工作区不是 Git 仓库，请先初始化' };
+      return {
+        success: false,
+        pushed: false,
+        failureKind: 'not_repository',
+        reason: '工作区不是 Git 仓库。',
+        recovery: '请先初始化当前项目的 Git 仓库，然后再提交。',
+        error: '工作区不是 Git 仓库，请先初始化',
+      };
     }
 
     const config = await loadGitConfig(workspaceRoot);
@@ -251,9 +271,12 @@ export async function commitAndPush(
 
     const remotes = await git.getRemotes(true);
     const origin = remotes.find((r) => r.name === 'origin');
-    if (!origin?.refs.fetch || !token) {
-      // Local commit only (no remote or not connected).
-      return { success: true, committed };
+    if (!origin?.refs.fetch) {
+      // This is a successful local operation, but it is explicitly not a push.
+      return { success: true, committed, pushed: false, pushSkippedReason: 'no_remote' };
+    }
+    if (!token) {
+      return { success: true, committed, pushed: false, pushSkippedReason: 'not_authenticated' };
     }
 
     // Token travels only as a one-shot header; never persisted to .git/config.
@@ -265,14 +288,28 @@ export async function commitAndPush(
       ]);
     } catch (pushErr: any) {
       const classified = classifyPushError(pushErr.message || String(pushErr));
-      return { success: false, committed, ...classified };
+      return {
+        success: false,
+        committed,
+        pushed: false,
+        failureKind: classified.kind,
+        reason: classified.reason,
+        recovery: classified.recovery,
+      };
     }
 
     config.remoteUrl = origin.refs.fetch;
     await saveGitConfig(workspaceRoot, config);
-    return { success: true, committed };
+    return { success: true, committed, pushed: true };
   } catch (err: any) {
-    return { success: false, error: err.message || String(err) };
+    return {
+      success: false,
+      pushed: false,
+      failureKind: 'git_failed',
+      reason: 'Git 操作失败。',
+      recovery: '请检查当前项目的 Git 状态与文件权限后重试。',
+      error: err.message || String(err),
+    };
   }
 }
 
@@ -315,15 +352,15 @@ export function classifyPushError(stderr: string): { kind: string; reason: strin
   if (text.includes('already exists') && text.includes('origin')) {
     return { kind: 'remote_exists', reason: "远程 'origin' 已存在。", recovery: PUSH_FAILURE_RECOVERY.remote_exists };
   }
-  if (text.includes('could not resolve host') || text.includes('failed to connect') || text.includes('connection refused') ||
-      text.includes('network is unreachable') || text.includes('operation timed out') || text.includes('timeout') ||
-      text.includes('fatal: unable to access') || text.includes('temporary failure in name resolution')) {
-    return { kind: 'network_failed', reason: '推送失败：无法连接 GitHub 服务器。', recovery: PUSH_FAILURE_RECOVERY.network_failed };
-  }
   if (text.includes('authentication failed') || text.includes('could not read username') ||
       text.includes('repository not found') || text.includes('invalid username or password') ||
       text.includes('bad credentials') || text.includes('permission denied') || text.includes('403') || text.includes('401')) {
     return { kind: 'auth_failed', reason: '推送被拒绝：GitHub 令牌无效或权限不足。', recovery: PUSH_FAILURE_RECOVERY.auth_failed };
+  }
+  if (text.includes('could not resolve host') || text.includes('failed to connect') || text.includes('connection refused') ||
+      text.includes('network is unreachable') || text.includes('operation timed out') || text.includes('timeout') ||
+      text.includes('temporary failure in name resolution')) {
+    return { kind: 'network_failed', reason: '推送失败：无法连接 GitHub 服务器。', recovery: PUSH_FAILURE_RECOVERY.network_failed };
   }
   if (text.includes('non-fast-forward') || text.includes('fetch first') ||
       text.includes('updates were rejected because the tip') || text.includes('rejected')) {

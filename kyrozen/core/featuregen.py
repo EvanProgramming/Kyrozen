@@ -18,6 +18,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -64,6 +65,25 @@ def _kill_preview_proc(proc: subprocess.Popen) -> None:
                 except Exception: proc.kill()
         except (ProcessLookupError, OSError):
             pass
+
+
+def _preview_port_is_available(port: int) -> bool:
+    """Return whether a preview can bind ``port`` without disturbing its owner.
+
+    Preview ports are shared machine resources.  A listener that is not in
+    ``_PREVIEW_PROCESSES`` is not ours to stop, even when it happens to serve a
+    Kyrozen-shaped ``/health`` response.  Binding a short-lived socket lets us
+    skip occupied ports without inspecting or signalling unrelated processes.
+    The launched preview still verifies its private preview id below, which
+    safely handles the small check-to-bind race.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -853,23 +873,9 @@ class BuildRunner:
         if previous and previous.poll() is None:
             _kill_preview_proc(previous)
         preview_id = f"{os.getpid()}-{time.time_ns()}"
-        # kill any orphaned process still holding our preferred port range
         for candidate_port in range(port, port + 21):
-            try:
-                result = subprocess.run(
-                    ["lsof", "-ti", f":{candidate_port}"],
-                    capture_output=True, text=True, timeout=3,
-                )
-                for orphan_pid_s in result.stdout.strip().splitlines():
-                    try:
-                        orphan_pid = int(orphan_pid_s.strip())
-                        if orphan_pid != os.getpid():
-                            os.kill(orphan_pid, signal.SIGKILL)
-                    except (ValueError, OSError):
-                        pass
-            except Exception:
-                pass
-        for candidate_port in range(port, port + 21):
+            if not _preview_port_is_available(candidate_port):
+                continue
             env = {
                 **os.environ,
                 "PORT": str(candidate_port),
@@ -900,6 +906,15 @@ class BuildRunner:
             if proc.poll() is None:
                 _kill_preview_proc(proc)
         return RunResult(command=f"preview (ports {port}-{port + 20})", exit_code=1, stderr="preview server did not become healthy", cwd=key)
+
+    def stop_preview(self, cwd: str | Path) -> bool:
+        """Stop the live preview explicitly owned by this process/workspace."""
+        key = str(Path(cwd).resolve())
+        preview = _PREVIEW_PROCESSES.pop(key, None)
+        if preview is None or preview.poll() is not None:
+            return False
+        _kill_preview_proc(preview)
+        return True
 
     def run_all(self, cwd: str | Path, port: int = DEFAULT_PORT) -> "RunSummary":
         install = self.install(cwd)

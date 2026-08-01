@@ -246,10 +246,9 @@ class SaveMarketResearchReportTool(Tool):
                 logger.debug("write MARKET.md failed: %s", exc)
         if not result:
             return ToolResult(success=False, data=None, error="无法保存调研报告：未找到可写的项目工作区。")
-        # GATE HONESTY: only auto-confirm the research when the report carries
-        # real external evidence (clickable http(s) sources). A report that says
-        # "搜索失败 / 无结果" must NOT silently satisfy the gate -- the user has to
-        # confirm it manually (or configure the search service and retry).
+        # Evidence quality and user acceptance are independent. A report with
+        # real links is a detected deliverable, but it still must not confirm
+        # the user's decision on their behalf.
         has_evidence = self._has_external_evidence(report)
         result["external_evidence"] = has_evidence
         quality_warning = self._source_quality_warning(report)
@@ -259,23 +258,14 @@ class SaveMarketResearchReportTool(Tool):
             try:
                 from kyrozen.core.stagegate import record_report_deliverable
 
-                if has_evidence:
-                    record_report_deliverable(workspace, "market_report", "market_confirmed")
-                else:
-                    # File was written, so the deliverable IS detected; only the
-                    # user-confirmation gate is held back until real evidence exists.
-                    record_report_deliverable(
-                        workspace,
-                        "market_report",
-                        "market_confirmed",
-                        auto_confirm=False,
-                    )
+                record_report_deliverable(workspace, "market_report", "market_confirmed")
             except Exception:
                 pass
+            result["confirmation_required"] = True
             if not has_evidence:
                 result["warning"] = (
-                    "报告中没有任何外部证据链接（http/https 来源），未自动确认市场调研门禁。"
-                    "请配置搜索服务后重新调研，或由用户在进度面板手动确认。"
+                    "报告中没有任何外部证据链接（http/https 来源）。"
+                    "请配置搜索服务后重新调研，再由用户明确确认结论。"
                 )
         return ToolResult(success=True, data=result)
 

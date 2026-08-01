@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import simpleGit from 'simple-git';
@@ -29,7 +29,11 @@ test('initializes a main branch and creates a local commit without GitHub', asyn
   const directory = await workspace();
   assert.equal((await initGitRepo(directory)).success, true);
   await writeFile(path.join(directory, 'README.md'), '# Test\n', 'utf-8');
-  assert.equal((await commitAndPush(directory, null, 'feat: initial project')).success, true);
+  const result = await commitAndPush(directory, null, 'feat: initial project');
+  assert.equal(result.success, true);
+  assert.equal(result.committed, true);
+  assert.equal(result.pushed, false);
+  assert.equal(result.pushSkippedReason, 'no_remote');
 
   const git = simpleGit(directory);
   assert.equal((await git.branch()).current, 'main');
@@ -42,10 +46,55 @@ test('does not write credentials into the configured remote URL', async () => {
   const remote = 'https://github.com/example/project.git';
   await initGitRepo(directory, remote);
   await writeFile(path.join(directory, 'index.js'), 'export {}\n', 'utf-8');
-  assert.equal((await commitAndPush(directory, null, 'feat: local work')).success, true);
+  const result = await commitAndPush(directory, null, 'feat: local work');
+  assert.equal(result.success, true);
+  assert.equal(result.committed, true);
+  assert.equal(result.pushed, false);
+  assert.equal(result.pushSkippedReason, 'not_authenticated');
 
   const origin = (await simpleGit(directory).getRemotes(true)).find((item) => item.name === 'origin');
   assert.equal(origin?.refs.fetch, remote);
+});
+
+test('reports pushed only after a real push establishes an upstream', async () => {
+  const directory = await workspace();
+  const remoteDirectory = await workspace();
+  await mkdir(path.join(directory, 'src'), { recursive: true });
+  await simpleGit(remoteDirectory).init(true);
+  await initGitRepo(directory, remoteDirectory);
+  await writeFile(path.join(directory, 'src', 'index.ts'), 'export const ready = true;\n', 'utf-8');
+
+  const result = await commitAndPush(directory, 'one-shot-test-token', 'feat: add application');
+  assert.equal(result.success, true);
+  assert.equal(result.committed, true);
+  assert.equal(result.pushed, true);
+  assert.equal(result.pushSkippedReason, undefined);
+
+  const status = await getGitStatus(directory);
+  assert.equal(status.remoteUrl, remoteDirectory);
+  assert.equal(status.upstream, 'origin/main');
+  assert.equal(status.ahead, 0);
+});
+
+test('push failures expose the canonical failureKind field', async () => {
+  const directory = await workspace();
+  const missingRemote = path.join(directory, 'missing-remote.git');
+  await initGitRepo(directory, missingRemote);
+
+  const result = await commitAndPush(directory, 'one-shot-test-token', 'chore: retry push');
+  assert.equal(result.success, false);
+  assert.equal(result.pushed, false);
+  assert.equal(result.failureKind, 'unknown');
+  assert.equal('kind' in result, false, 'public push result must not leak the internal kind field');
+});
+
+test('a non-repository failure also uses the canonical failureKind field', async () => {
+  const directory = await workspace();
+  const result = await commitAndPush(directory, 'one-shot-test-token', 'feat: impossible');
+  assert.equal(result.success, false);
+  assert.equal(result.pushed, false);
+  assert.equal(result.failureKind, 'not_repository');
+  assert.match(result.recovery || '', /初始化/);
 });
 
 // --- 3.5 #3: init must seed the .gitignore and create the first commit when
@@ -108,6 +157,10 @@ test('classifyPushError maps the five failure kinds', () => {
   );
   assert.equal(classifyPushError('remote: Invalid username or password').kind, 'auth_failed');
   assert.equal(
+    classifyPushError("fatal: unable to access 'https://github.com/example/repo': The requested URL returned error: 403").kind,
+    'auth_failed',
+  );
+  assert.equal(
     classifyPushError('! [rejected] (non-fast-forward)').kind,
     'non_fast_forward',
   );
@@ -121,4 +174,3 @@ test('classifyCreateRepoError maps name-exists / auth / network / unknown', () =
   assert.equal(classifyCreateRepoError(0, null).kind, 'network_failed');
   assert.equal(classifyCreateRepoError(500, {}).kind, 'unknown');
 });
-

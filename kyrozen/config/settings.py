@@ -165,6 +165,9 @@ class KyrozenConfig:
             self.provider_costs = _load_provider_costs()
 
     def project_dir(self, project_id: str) -> str:
+        active_project_dir = getattr(self, "_active_project_dir", "")
+        if active_project_dir:
+            return str(active_project_dir)
         return os.path.join(self.projects_dir, project_id)
 
     def project_memory_path(self, project_id: str) -> str:

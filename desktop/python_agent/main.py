@@ -26,11 +26,11 @@ from kyrozen.core.handoff import HandoffStore, HandoffTool
 from kyrozen.core.router import AgentRouter, LocalCapabilities
 from kyrozen.core.stagegate import (
     STAGES,
+    STAGE_LABELS,
     StageGateStore,
     advance,
     compute_gate,
     compute_progress,
-    entry_blocked,
     get_status,
     refresh_gate,
 )
@@ -44,6 +44,7 @@ from kyrozen.core import confirmation as confirmation_mod
 from kyrozen.desktop import CloudProxyModelProvider
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory
+from kyrozen.project import KyrozenDatabase, Project, ProjectManager
 from kyrozen.tools import get_default_registry
 
 # Round-3 (2026-07-30): natural-language stage progression. A normal user moves
@@ -92,6 +93,118 @@ def _detect_intended_stage(message: str) -> str | None:
                 target = stage
                 target_idx = idx
     return target
+
+
+# These phrases are explicit lifecycle decisions from an ordinary user.  They
+# intentionally do not include a bare "继续" embedded in analytical requests such as
+# "继续调研第二个竞品", which should stay in the current stage.
+_EXPLICIT_ADVANCE_RE = re.compile(
+    r"自己从零(?:做|开发)|"
+    r"(?:继续|接着)(?:吧|推进|下一步|帮我做|做|开发|完成|开始)|"
+    r"进入下一阶段|开始下一步|"
+    r"可以(?:继续|进入下一步)|"
+    r"就按(?:这个|这样)[^\n]{0,12}(?:继续|推进)",
+    re.IGNORECASE,
+)
+
+
+def _is_explicit_stage_advance_message(message: str) -> bool:
+    """Whether the user clearly accepted the current result and asked to move on."""
+    return bool(message and _EXPLICIT_ADVANCE_RE.search(message))
+
+
+def _ensure_desktop_project_manager(
+    workspace_root: Path,
+    project_id: str,
+    stage: str = "",
+) -> ProjectManager | None:
+    """Create the project-scoped local artifact/decision store used by Desktop.
+
+    Cloud project IDs do not necessarily exist in the bundled SQLite database.
+    Registering tools with a manager whose project row is missing is equivalent
+    to registering no manager at all: every ``save_*`` / ``record_*`` call fails
+    with ``Project not found``.  The desktop therefore keeps a small SQLite
+    store beside its other project state and seeds the exact cloud/local ID.
+    """
+    project_id = project_id.strip()
+    if not project_id:
+        return None
+    state_dir = workspace_root / ".kyrozen"
+    db = KyrozenDatabase(str(state_dir / "project.db"))
+    manager = ProjectManager(db, workspace_root=str(workspace_root))
+    project = manager.get(project_id)
+    effective_stage = stage if stage in STAGES else STAGES[0]
+    if project is None:
+        db.save_project(
+            Project(
+                id=project_id,
+                name=workspace_root.name or project_id,
+                current_stage=effective_stage,
+                next_steps="Continue the current Kyrozen project stage",
+            )
+        )
+    elif stage in STAGES and project.current_stage != stage:
+        manager.update(project_id, current_stage=stage)
+    return manager
+
+
+def _advance_stage_for_user_message(
+    store: StageGateStore,
+    workspace_root: Path,
+    message: str,
+) -> dict[str, object] | None:
+    """Advance at most one satisfied gate for an explicit user decision.
+
+    A request for a later lifecycle activity (for example "直接帮我做出来")
+    does not authorize skipping market/product/design gates.  It is treated as
+    confirmation of the *current* completed stage and advances exactly one
+    step.  If the current deliverable is missing, ``advance`` returns a visible
+    blocker and the store remains unchanged.
+    """
+    if store.current_stage not in STAGES:
+        return None
+    current_idx = STAGES.index(store.current_stage)
+    intended = _detect_intended_stage(message)
+    intended_ahead = bool(
+        intended in STAGES and STAGES.index(str(intended)) > current_idx
+    )
+    if not intended_ahead and not _is_explicit_stage_advance_message(message):
+        return None
+    refresh_gate(store, str(workspace_root))
+    source_stage = store.current_stage
+    result: dict[str, object] = advance(store, "normal")
+    result["from_stage"] = source_stage
+    result["requested_stage"] = intended or (
+        STAGES[current_idx + 1] if current_idx + 1 < len(STAGES) else source_stage
+    )
+    return result
+
+
+def _persist_stage_transition_decision(
+    handoff_store: HandoffStore,
+    project_manager: ProjectManager | None,
+    project_id: str,
+    message: str,
+    transition: dict[str, object] | None,
+) -> str | None:
+    """Persist one successful explicit transition in both local truth stores."""
+    if not transition or not transition.get("ok"):
+        return None
+    source_stage = str(transition.get("from_stage") or "")
+    target_stage = str(transition.get("stage") or "")
+    decision_text = (
+        f"用户确认{STAGE_LABELS.get(source_stage, source_stage)}结果并进入"
+        f"{STAGE_LABELS.get(target_stage, target_stage)}：{message.strip()}"
+    )
+    handoff_store.add_decision(decision_text, mode=source_stage)
+    if project_manager is not None:
+        project_manager.add_decision(
+            project_id=project_id,
+            decision=decision_text,
+            reason="用户在对话中明确要求继续推进",
+            source="user",
+        )
+    return decision_text
 
 
 class PendingConfirmation:
@@ -313,6 +426,7 @@ class DesktopAgentRuntime:
         self.agent: BaseAgent | None = None
         self.router = AgentRouter()
         self.current_task_id: str | None = None
+        self.current_project_id: str = ""
         self.current_task: Task | None = None
         self._pending_confirmations: dict[str, PendingConfirmation] = {}
         self._lock = threading.Lock()
@@ -512,6 +626,10 @@ class DesktopAgentRuntime:
 
         # Override workspace root for this task so file tools operate locally.
         self.config.workspace_root = str(root_path)
+        # Imported local projects can have an ID that differs from the folder
+        # name.  Preserve the exact selected directory for Config.project_dir()
+        # instead of reconstructing a sibling path from the ID.
+        setattr(self.config, "_active_project_dir", str(root_path))
         # Tool calls carry project_id. Point projects_dir at the selected
         # desktop workspace parent so config.project_dir(project_id) resolves
         # back to this exact directory instead of <workspace>/projects/<id>.
@@ -521,11 +639,14 @@ class DesktopAgentRuntime:
         # Route the task to the correct specialized agent (AgentRouter).
         # ------------------------------------------------------------------
         project_id = str(params.get("project_id", ""))
+        self.current_project_id = project_id
         requested_mode = str(params.get("mode", ""))
         stage = str(params.get("stage", ""))
         project_type = str(params.get("project_type", ""))
 
         state_dir = root_path / ".kyrozen"
+        desktop_project_manager: ProjectManager | None = None
+        stage_transition: dict[str, object] | None = None
 
         # P0 (acceptance 2026-07-30): the local stage gate is the source of
         # truth for routing. The cloud-reported stage/mode can lag behind (the
@@ -545,47 +666,73 @@ class DesktopAgentRuntime:
                     )
                     stage = local_stage
                     requested_mode = ""  # let the stage decide the mode
+                elif cloud_idx > local_idx:
+                    # Match the existing sync policy before interpreting this
+                    # message, otherwise an explicit response to a market-stage
+                    # question can accidentally advance stale local state from
+                    # problem_discovery back into market_research.
+                    local_store.current_stage = stage
+                    local_store.progress = compute_progress(local_store)
+                    local_store.save()
         except Exception:
             self.logger.debug("local stage probe failed", exc_info=True)
 
-        # Round-3 (2026-07-30): a normal user advances through the journey by
-        # plain language ("帮我看看有没有人需要" -> market, "把产品功能定下来" ->
-        # product, "设计实现方式" -> tech, "直接帮我做出来" -> development). The
-        # stage gate MUST follow this intent, otherwise the agent is pinned to
-        # problem_discovery forever and the development agent never runs (so no
-        # source is ever written). Fast-forward the LOCAL gate to the furthest
-        # intended stage (never regress) and route by it.
+        # Give every desktop tool a real project-scoped persistence dependency.
+        # This store uses the exact cloud/local project ID, so save_research_source,
+        # record_opportunity_decision, save_product_brief, etc. do not fail with
+        # "Project manager not available" or "Project not found".
         try:
-            intended = _detect_intended_stage(message)
-            if intended and intended in STAGES:
-                probe = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
-                cur = probe.current_stage
-                if cur in STAGES and STAGES.index(intended) > STAGES.index(cur):
-                    # P0-R5: do NOT fast-forward into a stage whose hard entry
-                    # gate is not satisfied.  Otherwise plain-language intent
-                    # ("帮我做出来") can skip the PRD requirement, which makes
-                    # the gate, stage, and actual generation inconsistent.
-                    blocked = entry_blocked(probe, intended)
-                    if blocked:
-                        self.logger.info(
-                            "Intent-based stage fast-forward blocked at %s: %s",
-                            intended, blocked,
-                        )
-                    else:
-                        probe.current_stage = intended
-                        probe.progress = compute_progress(probe)
-                        probe.save()
-                        self.logger.info(
-                            "Natural-language stage progression: %s -> %s", cur, intended,
-                        )
-                        stage = intended
-                        requested_mode = ""
+            effective_stage = stage
+            if not effective_stage:
+                effective_stage = StageGateStore(
+                    state_dir / "stagegate.json", project_id=project_id
+                ).current_stage
+            desktop_project_manager = _ensure_desktop_project_manager(
+                root_path, project_id, effective_stage
+            )
         except Exception:
-            self.logger.debug("intent-based stage fast-forward failed", exc_info=True)
+            self.logger.error("desktop project store initialization failed", exc_info=True)
+
+        # A normal user advances by plain language.  Treat that message as an
+        # explicit confirmation of the current result, but cross exactly one
+        # gate: never jump from market research straight to development.
+        try:
+            probe = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
+            stage_transition = _advance_stage_for_user_message(probe, root_path, message)
+            if stage_transition and stage_transition.get("ok"):
+                stage = str(stage_transition.get("stage") or probe.current_stage)
+                requested_mode = ""
+                if desktop_project_manager is not None:
+                    desktop_project_manager.update(project_id, current_stage=stage)
+                self.logger.info(
+                    "Explicit user stage decision: %s -> %s (requested %s)",
+                    stage_transition.get("from_stage"),
+                    stage,
+                    stage_transition.get("requested_stage"),
+                )
+            elif stage_transition:
+                self.logger.info(
+                    "User requested progression but the current gate is blocked: %s",
+                    stage_transition.get("error", "unknown gate blocker"),
+                )
+        except Exception:
+            self.logger.debug("explicit stage progression failed", exc_info=True)
 
         handoff_store = HandoffStore(state_dir / "handoff.json", project_id=project_id)
+        if stage_transition and stage_transition.get("ok"):
+            try:
+                _persist_stage_transition_decision(
+                    handoff_store,
+                    desktop_project_manager,
+                    project_id,
+                    message,
+                    stage_transition,
+                )
+            except Exception:
+                self.logger.debug("failed to persist explicit stage decision", exc_info=True)
         handoff_tool = HandoffTool(handoff_store)
         registry = get_default_registry(
+            project_manager=desktop_project_manager,
             config=self.config,
             tavily_api_key=self.config.tavily_api_key,
             serper_api_key=self.config.serper_api_key,
@@ -593,6 +740,21 @@ class DesktopAgentRuntime:
             semantic_scholar_api_key=self.config.semantic_scholar_api_key,
         )
         registry.register(handoff_tool)
+
+        # Register the real task against the now-active stage.  A transition
+        # decision above clears the previous stage's task list first, so this
+        # turn belongs to the destination stage and truthfully remains running
+        # until the agent returns a terminal result.
+        if self.current_task_id:
+            try:
+                task_store = StageGateStore(
+                    state_dir / "stagegate.json", project_id=project_id
+                )
+                task_store.record_task(self.current_task_id, "running")
+                task_store.progress = compute_progress(task_store)
+                task_store.save()
+            except Exception:
+                self.logger.debug("failed to register stage task", exc_info=True)
 
         # Stage gate (feature 3.2): keep the local gate in sync with the
         # server-reported lifecycle stage, scan deliverables, and push the gate
@@ -698,6 +860,20 @@ class DesktopAgentRuntime:
                         # protocol too: a prose question becomes a card here.
                         result["answer"] = BaseAgent._enforce_question_protocol(result["answer"])
                         result["answer"] = self._normalize_question_blocks(result["answer"])
+                    try:
+                        task_store = StageGateStore(
+                            state_dir / "stagegate.json", project_id=project_id
+                        )
+                        errors = list(getattr(task, "errors", []) or [])
+                        gate_task_status = "completed" if task.status == "completed" else "failed"
+                        task_store.record_task(
+                            str(self.current_task_id or task.id),
+                            gate_task_status,
+                            error=errors[-1] if errors and gate_task_status == "failed" else "",
+                        )
+                        task_store.save()
+                    except Exception:
+                        self.logger.debug("failed to finish stage task", exc_info=True)
                     # Re-scan the stage gate AFTER the agent's tool calls so any
                     # deliverable it just wrote (e.g. docs/PROBLEM.md) is detected
                     # and the gate advances without requiring a manual refresh.
@@ -715,6 +891,17 @@ class DesktopAgentRuntime:
                 self._cancel_task_timeout_timer()
                 traceback_str = traceback.format_exc()
                 if not self._task_timed_out.is_set() and not self._task_cancelled.is_set():
+                    try:
+                        task_store = StageGateStore(
+                            state_dir / "stagegate.json", project_id=project_id
+                        )
+                        task_store.record_task(
+                            str(self.current_task_id or "unknown-task"), "failed", error=str(exc)
+                        )
+                        task_store.save()
+                        self._sync_and_push_stage(root_path, stage, project_id)
+                    except Exception:
+                        self.logger.debug("failed to record crashed stage task", exc_info=True)
                     self._notify("task_result", {
                         "task_id": self.current_task_id,
                         "status": "failed",
@@ -779,12 +966,12 @@ class DesktopAgentRuntime:
         action = str(params.get("action", "refresh"))
         workspace_root = str(params.get("workspace_root", "."))
         project_id = str(params.get("project_id", ""))
-        stage = str(params.get("stage", ""))
         root_path = Path(workspace_root).resolve()
         try:
             store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=project_id)
-            if stage and stage in STAGES:
-                store.current_stage = stage
+            # The persisted local gate is the lifecycle source of truth. The
+            # renderer's ``stage`` value is only a display snapshot and can be
+            # stale in either direction, so it must never overwrite the store.
             # Always re-scan so the gate reflects the latest workspace state
             # before any transition decision.
             gate = refresh_gate(store, str(root_path))
@@ -1065,6 +1252,28 @@ class DesktopAgentRuntime:
             timer.cancel()
             self._task_timeout_timer = None
 
+    def _record_current_stage_task_status(
+        self,
+        status: str,
+        error: str = "",
+        task_id: str = "",
+    ) -> None:
+        """Persist a terminal/pending task state and push the truthful gate."""
+        root = self._workspace_path()
+        effective_task_id = task_id or str(self.current_task_id or "")
+        if root is None or not self.current_project_id or not effective_task_id:
+            return
+        try:
+            store = StageGateStore(
+                root / ".kyrozen" / "stagegate.json",
+                project_id=self.current_project_id,
+            )
+            store.record_task(effective_task_id, status, error=error)
+            gate = refresh_gate(store, root)
+            self._push_stage(store, gate)
+        except Exception:
+            self.logger.debug("failed to persist stage task status", exc_info=True)
+
     def _handle_task_timeout(self) -> None:
         """Mark the current task as timed out and cancel the agent."""
         self._task_timed_out.set()
@@ -1073,6 +1282,7 @@ class DesktopAgentRuntime:
             self.agent.cancel()
         if self.current_task and self.current_task.status == "running":
             self.current_task.update_status("failed")
+        self._record_current_stage_task_status("failed", "任务执行超时")
         self._notify("task_result", {
             "task_id": self.current_task_id,
             "status": "failed",
@@ -1436,6 +1646,11 @@ class DesktopAgentRuntime:
             self.agent.cancel()
         if self.current_task and self.current_task.status == "running":
             self.current_task.update_status("cancelled")
+        self._record_current_stage_task_status(
+            "cancelled",
+            "用户取消任务；需要重新运行后才能推进",
+            task_id=task_id,
+        )
         self._notify("task_result", {
             "task_id": task_id or self.current_task_id,
             "status": "cancelled",

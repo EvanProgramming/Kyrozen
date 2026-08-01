@@ -1468,7 +1468,7 @@ ipcMain.handle('kyrozen:read-workspace-plan', async (_event, workspaceRoot: stri
     const planPath = path.join(workspaceRoot, '.kyrozen', 'PLAN.json');
     try {
       await fs.access(planPath);
-    } catch (_err) {
+    } catch {
       return { success: true, plan: null };
     }
     const raw = await fs.readFile(planPath, 'utf-8');

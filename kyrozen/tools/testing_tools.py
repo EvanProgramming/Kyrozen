@@ -67,11 +67,22 @@ def _project_dir(project_manager: "ProjectManager | None", project_id: str, subd
     return base
 
 
+def _save_local_artifact(config: Any, filename: str, content: str) -> ToolResult:
+    workspace_root = getattr(config, "workspace_root", None)
+    if not workspace_root or not Path(workspace_root).is_absolute():
+        return ToolResult(success=False, data=None, error="No project workspace available")
+    artifact_path = Path(workspace_root) / ".kyrozen" / filename
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(content, encoding="utf-8")
+    return ToolResult(success=True, data={"path": str(artifact_path), "cloud_sync": False})
+
+
 class SaveTestPlanTool(Tool):
     """Save or update the Test Plan artifact for a project."""
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    def __init__(self, project_manager: "ProjectManager | None" = None, config: Any = None) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "save_test_plan"
         self.description = "Save or update the Test Plan artifact for the current project."
         self.schema = ToolSchema(
@@ -86,8 +97,6 @@ class SaveTestPlanTool(Tool):
         )
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
         project_id = parameters.get("project_id")
         plan_data = parameters.get("plan", {})
         if not project_id:
@@ -95,14 +104,19 @@ class SaveTestPlanTool(Tool):
         try:
             plan = TestPlan.from_dict(plan_data)
             content = json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
-            artifact = self.project_manager.save_artifact(
-                project_id=project_id,
-                type="test_plan",
-                title="Test Plan",
-                content=content,
-                change_reason="Test plan update",
-            )
-            return ToolResult(success=True, data={"artifact_id": artifact.id, "version": artifact.version})
+            if self.project_manager is not None:
+                artifact = self.project_manager.save_artifact(
+                    project_id=project_id,
+                    type="test_plan",
+                    title="Test Plan",
+                    content=content,
+                    change_reason="Test plan update",
+                )
+                return ToolResult(success=True, data={"artifact_id": artifact.id, "version": artifact.version})
+            workspace_root = getattr(self.config, "workspace_root", None)
+            if workspace_root and Path(workspace_root).is_absolute():
+                return _save_local_artifact(self.config, "test_plan.json", content)
+            return ToolResult(success=False, data=None, error="No project workspace available")
         except ValueError as e:
             return ToolResult(success=False, data=None, error=str(e))
 
@@ -151,8 +165,9 @@ class SaveTestCaseTool(Tool):
 class SaveTestResultTool(Tool):
     """Save a Test Result artifact for a project."""
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    def __init__(self, project_manager: "ProjectManager | None" = None, config: Any = None) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "save_test_result"
         self.description = "Save a Test Result artifact for the current project."
         self.schema = ToolSchema(
@@ -167,8 +182,6 @@ class SaveTestResultTool(Tool):
         )
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
         project_id = parameters.get("project_id")
         result_data = parameters.get("result", {})
         if not project_id:
@@ -179,6 +192,8 @@ class SaveTestResultTool(Tool):
             result = TestResult.from_dict(result_data)
             title = f"Test Result: {result.test_case_id} -> {result.result}" if result.test_case_id else "Test Result"
             content = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+            if self.project_manager is None:
+                return _save_local_artifact(self.config, "test_result.json", content)
             artifact = self.project_manager.save_artifact(
                 project_id=project_id,
                 type="test_result",
@@ -237,8 +252,9 @@ class RecordUserFeedbackTool(Tool):
 class SaveValidationReportTool(Tool):
     """Save or update the Product Validation Report artifact."""
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    def __init__(self, project_manager: "ProjectManager | None" = None, config: Any = None) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "save_validation_report"
         self.description = "Save or update the Product Validation Report artifact."
         self.schema = ToolSchema(
@@ -253,8 +269,6 @@ class SaveValidationReportTool(Tool):
         )
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
         project_id = parameters.get("project_id")
         report_data = parameters.get("report", {})
         if not project_id:
@@ -262,6 +276,8 @@ class SaveValidationReportTool(Tool):
         try:
             report = ValidationReport.from_dict(report_data)
             content = json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
+            if self.project_manager is None:
+                return _save_local_artifact(self.config, "validation_report.json", content)
             artifact = self.project_manager.save_artifact(
                 project_id=project_id,
                 type="validation_report",

@@ -358,6 +358,14 @@ def test_save_test_plan_tool(project_manager, test_plan_data: dict[str, Any]):
     assert result.data["version"] == 1
 
 
+def test_save_test_plan_tool_falls_back_to_desktop_workspace(tmp_path, test_plan_data: dict[str, Any]):
+    tool = SaveTestPlanTool(None, config=KyrozenConfig(workspace_root=str(tmp_path)))
+    result = tool.execute("save", {"project_id": "proj-local", "plan": test_plan_data})
+    assert result.success, result.error
+    assert result.data["cloud_sync"] is False
+    assert (tmp_path / ".kyrozen" / "test_plan.json").exists()
+
+
 def test_save_test_case_tool(project_manager, test_case_data: dict[str, Any]):
     tool = SaveTestCaseTool(project_manager)
     project = project_manager.create(name="Test Project", goal="G")

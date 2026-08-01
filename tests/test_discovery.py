@@ -141,6 +141,63 @@ def test_record_evidence_tool_via_api(api_client: TestClient):
     assert res.json()["success"] is True
 
 
+def test_record_evidence_tool_falls_back_to_workspace_when_artifact_store_fails(tmp_path):
+    from kyrozen.tools.discovery_tools import RecordEvidenceTool
+
+    class FailingProjectManager:
+        def save_artifact(self, **kwargs):
+            raise RuntimeError("cloud unavailable")
+
+    config = KyrozenConfig(workspace_root=str(tmp_path))
+    result = RecordEvidenceTool(FailingProjectManager(), config=config).execute(
+        "record",
+        {
+            "project_id": "proj-local",
+            "claim": "用户在微信群接龙报名",
+            "source": "user_statement",
+        },
+    )
+
+    assert result.success is True
+    assert result.data["cloud_sync"] is False
+    assert list((tmp_path / ".kyrozen" / "evidence").glob("*.json"))
+
+
+def test_record_evidence_tool_works_without_cloud_project_manager(tmp_path):
+    from kyrozen.tools.discovery_tools import RecordEvidenceTool
+
+    result = RecordEvidenceTool(None, config=KyrozenConfig(workspace_root=str(tmp_path))).execute(
+        "record",
+        {
+            "project_id": "proj-local",
+            "claim": "用户通过微信群报名",
+            "source": "user_statement",
+        },
+    )
+
+    assert result.success is True
+
+
+def test_assess_confidence_reads_local_problem_brief_without_cloud_project_manager(tmp_path):
+    from kyrozen.tools.discovery_tools import AssessConfidenceTool
+
+    problem_dir = tmp_path / "docs"
+    problem_dir.mkdir()
+    (problem_dir / "PROBLEM.md").write_text(
+        "**目标用户**：社区组织者\n**使用场景**：周末活动\n**表面问题**：统计人数困难\n"
+        "**深层需求**：准确掌握报名人数\n**当前解决方案**：微信群接龙\n"
+        "**当前方案痛点**：需要人工统计\n",
+        encoding="utf-8",
+    )
+
+    result = AssessConfidenceTool(None, config=KyrozenConfig(workspace_root=str(tmp_path))).execute(
+        "assess", {"project_id": "proj-local"}
+    )
+
+    assert result.success is True
+    assert result.data["confidence"] == "high"
+
+
 def test_assess_confidence_tool_via_api(api_client: TestClient):
     create = api_client.post("/api/projects", json={"name": "AI Running Device"})
     pid = create.json()["id"]

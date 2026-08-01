@@ -108,14 +108,18 @@ class SoftwareFeatureTool(Tool):
 
     def _resolve_workspace(self, params: dict[str, Any]) -> str:
         """workspace_root parameter, falling back to the desktop config workspace."""
-        ws = str(params.get("workspace_root") or "")
-        if ws:
-            return ws
         cfg_ws = getattr(self.config, "workspace_root", None)
         if cfg_ws:
             from pathlib import Path
             if Path(cfg_ws).is_absolute():
+                # The desktop Agent binds config.workspace_root to the
+                # selected project directory for the current task. Models may
+                # still emit the historical `/projects/<id>` convention; do
+                # not let that stale path escape the real local workspace.
                 return str(cfg_ws)
+        ws = str(params.get("workspace_root") or "")
+        if ws:
+            return ws
         return ""
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:

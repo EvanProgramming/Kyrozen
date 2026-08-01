@@ -516,6 +516,12 @@ class DesktopAgentRuntime:
         # desktop workspace parent so config.project_dir(project_id) resolves
         # back to this exact directory instead of <workspace>/projects/<id>.
         self.config.projects_dir = str(root_path.parent)
+        # Path helpers used by the shared tools call get_config() afresh rather
+        # than holding this runtime config object. Keep that configuration
+        # source aligned for the lifetime of the task; otherwise list/read/write
+        # tools silently fall back to the repository's `projects/` directory.
+        os.environ["KYROZEN_WORKSPACE"] = str(root_path)
+        os.environ["KYROZEN_PROJECTS_DIR"] = str(root_path.parent)
 
         # ------------------------------------------------------------------
         # Route the task to the correct specialized agent (AgentRouter).
@@ -1270,19 +1276,38 @@ class DesktopAgentRuntime:
         path = str(parameters.get("path") or parameters.get("file_path") or parameters.get("directory") or "").strip()
         command = str(parameters.get("command") or "").strip()
         if tool_name in {"read_file", "file_read"}:
-            return f"Reading file: {path or 'project file'}"
+            return f"正在读取文件：{path or '项目文件'}"
         if tool_name in {"write_file", "file_write", "edit_file"}:
-            return f"Editing file: {path or 'project file'}"
+            return f"正在修改文件：{path or '项目文件'}"
         if tool_name in {"list_dir", "find_files"}:
-            return f"Inspecting files: {path or 'project workspace'}"
+            return f"正在查看文件：{path or '项目工作区'}"
         if tool_name == "terminal":
             summary = command.splitlines()[0][:80] if command else action
-            return f"Running command: {summary}"
+            return f"正在运行命令：{summary}"
         if tool_name in {"web_search", "search_github"}:
-            return f"Researching: {str(parameters.get('query') or 'market information')[:80]}"
+            return f"正在查找：{str(parameters.get('query') or '相关资料')[:80]}"
         if tool_name.startswith("git") or tool_name == "git":
-            return f"Updating Git repository: {action}"
-        return f"Using {tool_name}: {action}"
+            return f"正在更新 Git 仓库：{action}"
+        # Never expose internal tool identifiers or action names in the
+        # user-facing activity line.  The raw pair is already retained in the
+        # diagnostics log; ordinary users need a short description of the
+        # outcome-oriented work instead.
+        friendly = {
+            "save_problem_brief": "整理问题摘要",
+            "record_evidence": "记录问题证据",
+            "record_problem_decision": "记录问题判断",
+            "save_market_research_report": "整理市场研究",
+            "record_opportunity_decision": "记录机会判断",
+            "save_prd": "整理产品需求",
+            "save_solution": "整理实现方案",
+            "save_plan": "整理执行计划",
+            "update_plan_step": "更新执行计划",
+            "save_feature_implementation": "记录功能实现",
+            "run_tests": "运行项目测试",
+            "run_project": "运行项目",
+            "generate_software": "生成软件项目",
+        }
+        return friendly.get(tool_name, "正在处理项目资料")
 
     def _extract_local_url(self, text: str) -> str | None:
         """Look for common local development server URLs in command output."""

@@ -68,8 +68,9 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   useEffect(() => {
     if (!projectId) { setStatus(null); return; }
     void loadStatus();
+    const refreshTimer = window.setInterval(() => { void loadStatus(); }, 4000);
     const unsubscribe = kyzen.onGitHubStatus((st) => { setGh(st); void loadStatus(); });
-    return () => { unsubscribe?.(); };
+    return () => { window.clearInterval(refreshTimer); unsubscribe?.(); };
   }, [kyzen, projectId]);
 
   // 3.5 #7: while auto-commit is on, surface the committed file list when a new

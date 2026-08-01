@@ -159,6 +159,22 @@ function friendlyChatError(raw?: string): { summary: string; raw: string } {
   return { summary: `发送失败：${short}`, raw: text };
 }
 
+// Persisted agent context can contain workspace paths or internal document
+// delimiters. Keep those details in diagnostics, never in ordinary chat
+// bubbles, including when an old failed attempt is restored after restart.
+function sanitizeUserVisibleContent(content: string): string {
+  return content
+    .replace(/\[Project Documents from workspace\][\s\S]*?\[End of project documents\]\s*/gi, '')
+    .replace(/\/(?:projects(?:\/[A-Za-z0-9._-]+)*|Users\/[^\s/]+(?:\/[A-Za-z0-9._-]+)*\/KyrozenProjects(?:\/[A-Za-z0-9._-]+)*)/g, '项目工作区')
+    .replace(/项目管理服务不可用/gi, '云端记录暂时不可用，结果已保留在本地')
+    .replace(/文件系统为[^，。；;\n]{0,12}只读/gi, '当前工作区暂时不可写')
+    .replace(/项目目录[^。\n]{0,32}不存在/gi, '当前项目还没有可运行的文件')
+    .replace(/\b只读\b/gi, '不可写')
+    .replace(/['"]dict['"] object has no attribute ['"]strip['"]/gi, '内部格式处理失败')
+    .replace(/High-risk action ['"][^'"]+['"] requires user confirmation/gi, '需要确认后才能继续执行')
+    .trim();
+}
+
 function Markdown({ content, onOpenPreview }: { content: string; onOpenPreview?: (url: string) => void }) {
   return (
     <ReactMarkdown
@@ -852,7 +868,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
             reconcileQuestionAnswers(
               result.messages.map((m: { role: string; content: string; operations?: unknown[] }) => ({
                 role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role as Message['role'] : 'system',
-                content: m.content,
+                content: sanitizeUserVisibleContent(m.content),
                 operations: (Array.isArray(m as any) ? undefined : (m as any).operations),
               }))
             )
@@ -898,7 +914,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
       }
       setMessages((prev) => [...prev, {
         role: msg.role as Message['role'],
-        content: msg.content,
+        content: sanitizeUserVisibleContent(msg.content),
         operations: msg.operations,
       }]);
       if (msg.role === 'assistant') {
@@ -1067,7 +1083,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     } else if (result.content) {
       setMessages((prev) => [...prev, {
         role: 'assistant',
-        content: result.content || '',
+        content: sanitizeUserVisibleContent(result.content || ''),
         operations: result.operations,
       }]);
       setIsRunning(false);

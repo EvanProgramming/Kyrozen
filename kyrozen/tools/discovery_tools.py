@@ -7,6 +7,7 @@ and assess problem confidence without directly touching the database.
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -172,8 +173,13 @@ class SaveProblemBriefTool(Tool):
 class RecordEvidenceTool(Tool):
     """Record an evidence item for the current discovery session."""
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    def __init__(
+        self,
+        project_manager: "ProjectManager | None" = None,
+        config: "Config | None" = None,
+    ) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "record_evidence"
         self.description = "Record a claim, its source, and verification status as project evidence."
         self.schema = ToolSchema(
@@ -191,8 +197,6 @@ class RecordEvidenceTool(Tool):
         )
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
         project_id = parameters.get("project_id")
         claim = parameters.get("claim")
         if not project_id:
@@ -208,23 +212,66 @@ class RecordEvidenceTool(Tool):
             )
             # Store evidence as a lightweight artifact for persistence
             content = json.dumps(evidence.to_dict(), ensure_ascii=False, indent=2)
-            artifact = self.project_manager.save_artifact(
-                project_id=project_id,
-                type="discovery_evidence",
-                title=f"Evidence: {claim[:40]}",
-                content=content,
-                change_reason="New evidence recorded",
-            )
-            return ToolResult(success=True, data={"artifact_id": artifact.id, "evidence": evidence.to_dict()})
-        except ValueError as e:
+            try:
+                if self.project_manager is None:
+                    raise RuntimeError("Project manager not available")
+                artifact = self.project_manager.save_artifact(
+                    project_id=project_id,
+                    type="discovery_evidence",
+                    title=f"Evidence: {claim[:40]}",
+                    content=content,
+                    change_reason="New evidence recorded",
+                )
+                return ToolResult(success=True, data={"artifact_id": artifact.id, "evidence": evidence.to_dict()})
+            except Exception:
+                # Desktop sessions can temporarily lose access to the cloud
+                # artifact store. Keep the evidence durable in the project
+                # workspace so a transient cloud failure does not make the
+                # discovery agent retry the same operation until timeout.
+                root = self._resolve_workspace_root(parameters)
+                if root is not None:
+                    evidence_dir = root / ".kyrozen" / "evidence"
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    evidence_path = evidence_dir / f"evidence-{uuid.uuid4().hex}.json"
+                    evidence_path.write_text(content, encoding="utf-8")
+                    return ToolResult(
+                        success=True,
+                        data={"path": str(evidence_path), "evidence": evidence.to_dict(), "cloud_sync": False},
+                    )
+                raise
+        except (ValueError, OSError) as e:
             return ToolResult(success=False, data=None, error=str(e))
+
+    def _resolve_workspace_root(self, parameters: dict[str, Any]) -> Path | None:
+        candidates: list[Path] = []
+        if self.config is not None:
+            ws = getattr(self.config, "workspace_root", None)
+            if ws and str(ws) not in (".", ""):
+                candidates.append(Path(str(ws)).resolve())
+            else:
+                projects_dir = getattr(self.config, "projects_dir", None)
+                project_id = parameters.get("project_id")
+                if projects_dir and project_id:
+                    candidate = Path(str(projects_dir)) / str(project_id)
+                    if candidate.is_absolute():
+                        candidates.append(candidate.resolve())
+        try:
+            candidates.append(_get_allowed_root(parameters).resolve())
+        except Exception:
+            pass
+        return next((candidate for candidate in candidates if candidate.is_absolute()), None)
 
 
 class AssessConfidenceTool(Tool):
     """Assess the confidence level of the current Problem Brief."""
 
-    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+    def __init__(
+        self,
+        project_manager: "ProjectManager | None" = None,
+        config: "Config | None" = None,
+    ) -> None:
         self.project_manager = project_manager
+        self.config = config
         self.name = "assess_confidence"
         self.description = "Assess the confidence level of the current Problem Brief based on available information."
         self.schema = ToolSchema(
@@ -238,20 +285,42 @@ class AssessConfidenceTool(Tool):
         )
 
     def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
-        if self.project_manager is None:
-            return ToolResult(success=False, data=None, error="Project manager not available")
         project_id = parameters.get("project_id")
         if not project_id:
             return ToolResult(success=False, data=None, error="Missing project_id")
-        artifacts = self.project_manager.list_artifacts(project_id)
-        brief_artifacts = [a for a in artifacts if a.type == "problem_brief"]
-        if not brief_artifacts:
+        brief_data: dict[str, Any] | None = None
+        if self.project_manager is not None:
+            artifacts = self.project_manager.list_artifacts(project_id)
+            brief_artifacts = [a for a in artifacts if a.type == "problem_brief"]
+            if brief_artifacts:
+                latest = sorted(brief_artifacts, key=lambda a: a.version, reverse=True)[0]
+                try:
+                    brief_data = json.loads(latest.content)
+                except json.JSONDecodeError:
+                    brief_data = None
+        if brief_data is None:
+            root = SaveProblemBriefTool._resolve_workspace_root(self, parameters)
+            problem_path = root / "docs" / "PROBLEM.md" if root is not None else None
+            if problem_path is not None and problem_path.exists():
+                labels = {
+                    "目标用户": "target_user",
+                    "使用场景": "scenario",
+                    "表面问题": "surface_problem",
+                    "深层需求": "deep_need",
+                    "当前解决方案": "current_solution",
+                    "当前方案痛点": "current_solution_problem",
+                    "发生频率": "frequency",
+                    "实际影响": "impact",
+                }
+                brief_data = {field: "" for field in labels.values()}
+                for line in problem_path.read_text(encoding="utf-8").splitlines():
+                    for label, field in labels.items():
+                        prefix = f"**{label}**："
+                        if line.startswith(prefix):
+                            brief_data[field] = line[len(prefix):].strip()
+                            break
+        if brief_data is None:
             return ToolResult(success=True, data={"confidence": "low", "reason": "No Problem Brief found."})
-        latest = sorted(brief_artifacts, key=lambda a: a.version, reverse=True)[0]
-        try:
-            brief_data = json.loads(latest.content)
-        except json.JSONDecodeError:
-            return ToolResult(success=False, data=None, error="Problem Brief content is not valid JSON")
         confidence, reason = assess_confidence(brief_data)
         return ToolResult(success=True, data={"confidence": confidence, "reason": reason})
 

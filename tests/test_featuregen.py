@@ -345,6 +345,13 @@ def test_tool_generate_and_run_real(tmp_path: Path):
     assert (tmp_path / ".kyrozen" / "software_feature.json").exists()
 
 
+def test_tool_uses_bound_desktop_workspace_over_stale_model_path(tmp_path: Path):
+    from kyrozen.config import KyrozenConfig
+
+    tool = SoftwareFeatureTool(config=KyrozenConfig(workspace_root=str(tmp_path)))
+    assert tool._resolve_workspace({"workspace_root": "/projects/proj-stale"}) == str(tmp_path)
+
+
 def test_tool_repair_real(tmp_path: Path):
     tool = SoftwareFeatureTool(executor=fg.CommandExecutor())
     tool.execute("generate", {"workspace_root": str(tmp_path), "app_type": "web_app",

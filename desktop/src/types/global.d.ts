@@ -250,7 +250,7 @@ export interface KyrozenAPI {
   onAgentReady: (callback: (info: { status: 'ready' | 'down'; version?: string; mode?: string; code?: number | null; retrying?: boolean }) => void) => () => void;
   onSoftwareFeature: (callback: (result: SoftwareFeatureResult) => void) => () => void;
   sendSoftwareFeature: (params: Record<string, unknown>) => void;
-  sendStageAction: (action: 'refresh' | 'advance_normal' | 'advance_risk' | 'return', stage: string, riskDetails?: Record<string, string>) => Promise<{ ok: boolean }>;
+  sendStageAction: (action: 'refresh' | 'advance_normal' | 'return', stage: string) => Promise<{ ok: boolean }>;
   onConfirmationRequest: (callback: (request: { confirmation_id: string; store_id?: string | null; task_id: string; tool: string; action: string; parameters: Record<string, unknown>; reason: string; detail: string; choices?: string[] }) => void) => () => void;
   respondConfirmation: (confirmationId: string, confirmed: boolean, trustForSession?: boolean, storeId?: string | null) => Promise<{ success: boolean; error?: string }>;
   onStatusUpdated: (callback: (status: InteractionStatus) => void) => () => void;

@@ -104,6 +104,7 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [projectActionNotice, setProjectActionNotice] = useState<string | null>(null);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
 
   const loadProjects = useCallback(async () => {
     if (!window.kyrozen) return;
@@ -560,6 +561,18 @@ function App() {
       <header className="app-drag h-12 border-b border-line bg-surface flex items-center justify-between pl-20 pr-4 flex-shrink-0">
         <div className="flex items-center gap-3 app-no-drag">
           <span className="font-display text-2xl leading-none text-ink">Kyrozen</span>
+          <button
+            type="button"
+            onClick={() => setSidebarVisible((visible) => !visible)}
+            className="btn-ghost p-1.5 text-ink-faint hover:text-ink"
+            aria-label={sidebarVisible ? '隐藏项目栏' : '显示项目栏'}
+            title={sidebarVisible ? '隐藏项目栏' : '显示项目栏'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" className="h-4 w-4" aria-hidden>
+              <path d="M4 6h16M4 12h16M4 18h16" />
+              <path d={sidebarVisible ? 'M9 6v12' : 'M15 6v12'} />
+            </svg>
+          </button>
           {currentProject && (
             <select
               value={currentProjectId || ''}
@@ -618,7 +631,7 @@ function App() {
         </div>
       </header>
       <div className="flex-1 flex overflow-hidden">
-        <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-line bg-paper-sink flex flex-col">
+        {sidebarVisible && <aside data-testid="project-list" className="w-64 flex-shrink-0 border-r border-line bg-paper-sink flex flex-col">
           <div className="p-4 border-b border-line flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <h2 className="font-display text-lg leading-none text-ink">我的项目</h2>
@@ -775,7 +788,7 @@ function App() {
               </div>
             )}
           </div>
-        </aside>
+        </aside>}
         <main className="flex-1 flex flex-col overflow-hidden relative">
           {updateStatus && updateStatus.status !== 'up-to-date' && (
             <div className="px-4 py-2 bg-accent-soft border-b border-line text-sm flex items-center justify-between">

@@ -952,7 +952,6 @@ class DesktopAgentRuntime:
         actions:
           * 'refresh'        -- re-scan deliverables and return the gate
           * 'advance_normal' -- 继续当前阶段 (only if gate satisfied)
-          * 'advance_risk'   -- 带风险推进 (skip missing required items)
           * 'return'         -- 返回上一阶段
         """
         action = str(params.get("action", "refresh"))
@@ -970,8 +969,9 @@ class DesktopAgentRuntime:
             if action == "advance_normal":
                 result = advance(store, "normal")
             elif action == "advance_risk":
-                raw_details = params.get("risk_details") or {}
-                result = advance(store, "risk", raw_details if isinstance(raw_details, dict) else {})
+                # Risk bypass is intentionally disabled in the desktop client:
+                # stage transitions must satisfy the gate requirements.
+                result = {"ok": False, "error": "必须满足当前阶段条件后才能进入下一阶段。"}
             elif action == "return":
                 result = advance(store, "return")
             else:
@@ -980,7 +980,7 @@ class DesktopAgentRuntime:
             # the newly active stage before responding/pushing; otherwise the
             # UI briefly (and sometimes permanently) reports files such as
             # docs/TECH_DESIGN.md as missing until a manual refresh.
-            if action in {"advance_normal", "advance_risk", "return"} and result.get("ok"):
+            if action in {"advance_normal", "return"} and result.get("ok"):
                 gate = refresh_gate(store, str(root_path))
                 result = {**result, **get_status(store, gate)}
             self._send_response(req_id, result=result)

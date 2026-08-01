@@ -106,6 +106,7 @@ let wsUrl = getWebSocketUrlFromHttp(serverUrl);
 let reconnectTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let workspaceMap: WorkspaceMap = {};
+let workspaceNames: Record<string, string> = {};
 let currentTaskId: string | null = null;
 let currentTaskRunning = false;
 // Tasks the user cancelled: any late `completed` result for these ids must
@@ -194,6 +195,8 @@ let taskTimeoutTimer: NodeJS.Timeout | null = null;
 let lastTaskPayload: Record<string, unknown> | null = null;
 let taskRetryCount = 0;
 const MAX_TASK_RETRIES = 2;
+let sessionRefreshTimer: NodeJS.Timeout | null = null;
+let refreshTokenInvalid = false;
 
 const PROTOCOL_SCHEME = 'kyrozen';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -201,8 +204,11 @@ const TASK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEPENDENCY_TIMEOUT_MS = 5 * 60 * 1000;
 const MODEL_TIMEOUT_MS = 2 * 60 * 1000;
 const HARDWARE_TIMEOUT_MS = 15 * 60 * 1000;
+const SESSION_REFRESH_FALLBACK_MS = 5 * 60 * 1000;
+const SESSION_REFRESH_LEEWAY_MS = 2 * 60 * 1000;
 
 const WORKSPACE_CONFIG_PATH = path.join(app.getPath('userData'), 'workspaces.json');
+const WORKSPACE_NAMES_PATH = path.join(app.getPath('userData'), 'workspace-names.json');
 const TOKEN_STORE_PATH = path.join(app.getPath('userData'), 'credentials.json');
 const ONBOARDING_CONFIG_PATH = path.join(app.getPath('userData'), 'onboarding.json');
 
@@ -256,6 +262,21 @@ async function loadWorkspaceMap(): Promise<void> {
 async function saveWorkspaceMap(): Promise<void> {
   await fs.mkdir(path.dirname(WORKSPACE_CONFIG_PATH), { recursive: true });
   await fs.writeFile(WORKSPACE_CONFIG_PATH, JSON.stringify(workspaceMap, null, 2));
+}
+
+async function loadWorkspaceNames(): Promise<void> {
+  try {
+    const raw = await fs.readFile(WORKSPACE_NAMES_PATH, 'utf-8');
+    const parsed = JSON.parse(raw);
+    workspaceNames = parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    workspaceNames = {};
+  }
+}
+
+async function saveWorkspaceNames(): Promise<void> {
+  await fs.mkdir(path.dirname(WORKSPACE_NAMES_PATH), { recursive: true });
+  await fs.writeFile(WORKSPACE_NAMES_PATH, JSON.stringify(workspaceNames, null, 2));
 }
 
 async function saveCredentials(
@@ -327,6 +348,8 @@ async function loadCredentials(): Promise<{
 }
 
 async function clearCredentials(): Promise<void> {
+  clearSessionRefreshTimer();
+  refreshTokenInvalid = false;
   currentWsToken = null;
   accessToken = null;
   try {
@@ -334,6 +357,46 @@ async function clearCredentials(): Promise<void> {
   } catch {
     // ignore
   }
+}
+
+function clearSessionRefreshTimer(): void {
+  if (sessionRefreshTimer) {
+    clearTimeout(sessionRefreshTimer);
+    sessionRefreshTimer = null;
+  }
+}
+
+function accessTokenExpiryMs(token: string | null): number | null {
+  if (!token) return null;
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
+    return typeof decoded.exp === 'number' ? decoded.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function scheduleSessionRefresh(): void {
+  clearSessionRefreshTimer();
+  if (!accessToken) return;
+  const expiry = accessTokenExpiryMs(accessToken);
+  const delay = expiry
+    ? Math.max(30_000, expiry - Date.now() - SESSION_REFRESH_LEEWAY_MS)
+    : SESSION_REFRESH_FALLBACK_MS;
+  sessionRefreshTimer = setTimeout(async () => {
+    sessionRefreshTimer = null;
+    if (await refreshAccessToken()) {
+      scheduleSessionRefresh();
+      // Access-token refresh does not renew the WebSocket token. Renew it before
+      // its 24-hour TTL expires so an idle desktop remains signed in.
+      await reconnectWithFreshWebSocketToken();
+    } else if (!refreshTokenInvalid) {
+      // A temporary outage must not turn into a logout. Retry with backoff.
+      sessionRefreshTimer = setTimeout(scheduleSessionRefresh, SESSION_REFRESH_FALLBACK_MS);
+    }
+  }, delay);
 }
 
 async function saveServerUrl(url: string): Promise<void> {
@@ -634,6 +697,8 @@ async function handleProtocolUrl(url: string) {
               refreshTok || undefined,
               accessToken || undefined,
             );
+            refreshTokenInvalid = false;
+            scheduleSessionRefresh();
             connectWebSocket(verify.ws_token);
             mainWindow?.webContents.send('kyrozen:session-resumed', verify.ws_token, serverUrl);
             logInfo('GitHub login completed successfully');
@@ -695,6 +760,7 @@ app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
 app.whenReady().then(async () => {
   logInfo('App ready, initializing Kyrozen desktop client');
   await loadWorkspaceMap();
+  await loadWorkspaceNames();
   onboardingConfig = await loadOnboardingConfig();
   createWindow();
   createTray();
@@ -788,7 +854,8 @@ app.whenReady().then(async () => {
             // Supabase access tokens are short-lived. Refresh once before
             // treating the saved login as dead; otherwise a healthy long-lived
             // GitHub session turns into an empty project list after expiry.
-            if (await refreshAccessToken() && accessToken) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed && accessToken) {
               try {
                 const verify = await apiPost('/api/desktop/verify-token', {
                   access_token: accessToken,
@@ -809,9 +876,11 @@ app.whenReady().then(async () => {
                 sessionExpired = true;
                 logWarn(`Refreshed session could not be verified: ${refreshErr.message || refreshErr}`);
               }
-            } else {
+            } else if (refreshTokenInvalid || !credentials.refreshToken) {
               sessionExpired = true;
               logWarn('Stored session refresh failed; requiring re-login');
+            } else {
+              logWarn('Stored session refresh was temporarily unavailable; keeping credentials for retry');
             }
           } else {
             logWarn(`Could not refresh desktop session; trying stored token: ${err.message || err}`);
@@ -821,6 +890,7 @@ app.whenReady().then(async () => {
       if (sessionExpired) {
         accessToken = null;
         currentWsToken = null;
+        clearSessionRefreshTimer();
         await clearCredentials();
         const notifySessionExpired = () => {
           mainWindow?.webContents.send('kyrozen:session-expired', '登录已过期，请重新登录。');
@@ -833,6 +903,7 @@ app.whenReady().then(async () => {
       } else {
         currentWsToken = resumeWsToken;
         connectWebSocket(resumeWsToken);
+        scheduleSessionRefresh();
         void fetchGitHubToken();
         const notifySessionResumed = () => {
           mainWindow?.webContents.send('kyrozen:session-resumed', resumeWsToken, credentials.serverUrl);
@@ -897,22 +968,32 @@ async function refreshAccessToken(): Promise<boolean> {
   accessRefreshPromise = (async () => {
     try {
       const credentials = await loadCredentials();
-      if (!credentials?.refreshToken) return false;
+      if (!credentials?.refreshToken) {
+        refreshTokenInvalid = true;
+        return false;
+      }
       const response = await fetch(`${serverUrl}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: credentials.refreshToken }),
       });
-      if (!response.ok) return false;
+      if (!response.ok) {
+        // 400/401 means the user must authenticate again. Other failures are
+        // transient and should leave the persisted session intact for retry.
+        refreshTokenInvalid = response.status === 400 || response.status === 401;
+        return false;
+      }
       const data = await response.json() as { access_token?: string; refresh_token?: string };
       if (!data.access_token) return false;
       accessToken = data.access_token;
+      refreshTokenInvalid = false;
       await saveCredentials(
         currentWsToken || credentials.wsToken,
         data.refresh_token || credentials.refreshToken,
         data.access_token,
       );
       logInfo('Refreshed expired API session');
+      scheduleSessionRefresh();
       return true;
     } catch (err: any) {
       logWarn(`Failed to refresh API session: ${err.message || err}`);
@@ -959,8 +1040,13 @@ async function reconnectWithFreshWebSocketToken(): Promise<boolean> {
       return true;
     } catch (err: any) {
       logWarn(`Failed to renew WebSocket token: ${err.message || err}`);
-      updateConnection('error', '云端会话恢复失败，请重新登录');
-      mainWindow?.webContents.send('kyrozen:session-expired', '登录已过期，请重新登录。');
+      updateConnection('error', refreshTokenInvalid ? '登录已失效，请重新登录' : '云端暂时不可用，正在自动恢复');
+      if (refreshTokenInvalid) {
+        mainWindow?.webContents.send('kyrozen:session-expired', '登录已过期，请重新登录。');
+      } else {
+        logWarn('WebSocket renewal failed transiently; retaining persisted session');
+        sessionRefreshTimer = setTimeout(scheduleSessionRefresh, SESSION_REFRESH_FALLBACK_MS);
+      }
       return false;
     } finally {
       websocketTokenRefreshPromise = null;
@@ -1348,6 +1434,8 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
     accessToken = data.access_token;
     logInfo(`Signin success, verifying desktop token`);
     await saveCredentials(verify.ws_token, data.refresh_token || verify.refresh_token, accessToken || undefined);
+    refreshTokenInvalid = false;
+    scheduleSessionRefresh();
     connectWebSocket(verify.ws_token);
     void fetchGitHubToken();
     logInfo(`Login complete, wsToken acquired`);
@@ -1392,6 +1480,8 @@ ipcMain.handle('kyrozen:poll-pairing', async (_event, url: string, code: string)
       wsUrl = getWebSocketUrlFromHttp(serverUrl);
       accessToken = data.access_token || null;
       await saveCredentials(data.ws_token, undefined, accessToken || undefined);
+      refreshTokenInvalid = !data.access_token;
+      scheduleSessionRefresh();
       connectWebSocket(data.ws_token);
       return { success: true, wsToken: data.ws_token };
     }
@@ -1414,6 +1504,8 @@ ipcMain.handle('kyrozen:verify-open-token', async (_event, token: string) => {
     logInfo(`Open token verified, wsToken acquired`);
     setUpdateApiBaseUrl(serverUrl);
     await saveCredentials(data.ws_token, data.refresh_token, accessToken || undefined);
+    refreshTokenInvalid = false;
+    scheduleSessionRefresh();
     await saveOnboardingConfig({ completed: true, completedAt: new Date().toISOString() });
     connectWebSocket(data.ws_token);
     void fetchGitHubToken();
@@ -1697,6 +1789,7 @@ ipcMain.handle('kyrozen:save-file', async (_event, projectId: string, relativePa
 });
 
 async function localProjectName(root: string, projectId: string): Promise<string> {
+  if (workspaceNames[projectId]) return workspaceNames[projectId];
   try {
     for (const rel of ['README.md', 'docs/PROBLEM.md', 'PROBLEM.md']) {
       const p = path.join(root, rel);
@@ -1762,6 +1855,54 @@ ipcMain.handle('kyrozen:create-project', async (_event, name: string, descriptio
     return { success: true, project };
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:rename-project', async (_event, projectId: string, name: string) => {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return { success: false, error: '项目名称不能为空' };
+  if (trimmed.length > 80) return { success: false, error: '项目名称不能超过 80 个字符' };
+  try {
+    if (projectId.startsWith('local_')) {
+      if (!workspaceMap[projectId]) return { success: false, error: '本地项目不存在' };
+      workspaceNames[projectId] = trimmed;
+      await saveWorkspaceNames();
+      return { success: true, project: { id: projectId, name: trimmed } };
+    }
+    const project = await apiPut(`/api/projects/${encodeURIComponent(projectId)}`, { name: trimmed });
+    return { success: true, project };
+  } catch (err: any) {
+    return { success: false, error: err.message || '重命名失败' };
+  }
+});
+
+ipcMain.handle('kyrozen:open-project-in-finder', async (_event, projectId: string) => {
+  try {
+    const root = await getWorkspaceRoot(projectId);
+    if (!root) return { success: false, error: '项目没有本地工作区' };
+    const error = await shell.openPath(root);
+    return error ? { success: false, error } : { success: true, workspaceRoot: root };
+  } catch (err: any) {
+    return { success: false, error: err.message || '无法在 Finder 中打开项目' };
+  }
+});
+
+ipcMain.handle('kyrozen:delete-project', async (_event, projectId: string) => {
+  try {
+    if (!projectId.startsWith('local_')) {
+      await apiDelete(`/api/projects/${encodeURIComponent(projectId)}`);
+    }
+    if (currentProjectId === projectId) {
+      stopWatchingProjectFiles(projectId);
+      currentProjectId = null;
+    }
+    delete workspaceMap[projectId];
+    delete workspaceNames[projectId];
+    await Promise.all([saveWorkspaceMap(), saveWorkspaceNames()]);
+    logInfo(`Deleted project ${projectId}; local workspace was preserved`);
+    return { success: true, projectId, localWorkspacePreserved: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || '删除项目失败' };
   }
 });
 

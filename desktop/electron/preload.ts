@@ -28,6 +28,12 @@ contextBridge.exposeInMainWorld('kyrozen', {
   getProjects: () => ipcRenderer.invoke('kyrozen:get-projects'),
   createProject: (name: string, description?: string, goal?: string) =>
     ipcRenderer.invoke('kyrozen:create-project', name, description, goal),
+  renameProject: (projectId: string, name: string) =>
+    ipcRenderer.invoke('kyrozen:rename-project', projectId, name),
+  openProjectInFinder: (projectId: string) =>
+    ipcRenderer.invoke('kyrozen:open-project-in-finder', projectId),
+  deleteProject: (projectId: string) =>
+    ipcRenderer.invoke('kyrozen:delete-project', projectId),
   getProjectState: (projectId: string) => ipcRenderer.invoke('kyrozen:get-project-state', projectId),
   getProjectWorkspace: (projectId: string) => ipcRenderer.invoke('kyrozen:get-project-workspace', projectId),
   createDecision: (projectId: string, decision: string, reason: string) =>

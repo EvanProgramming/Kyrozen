@@ -18,6 +18,13 @@ interface Project {
   current_stage: string;
   description?: string;
   localOnly?: boolean;
+  local_only?: boolean;
+}
+
+interface ProjectContextMenuState {
+  project: Project;
+  x: number;
+  y: number;
 }
 
 interface UpdateStatus {
@@ -45,6 +52,21 @@ interface UserProfile {
 function formatQuota(quota: QuotaInfo) {
   if (quota.plan === 'developer') return '开发者账户 · 无限制';
   return `免费账户 · 可完整使用 ${quota.project_limit || 1} 个项目`;
+}
+
+const PROJECT_STAGE_LABELS: Record<string, string> = {
+  problem_discovery: '问题探索',
+  market_research: '市场调研',
+  product_definition: '产品定义',
+  solution_design: '方案设计',
+  development: '软件开发',
+  hardware_development: '硬件开发',
+  testing: '测试验证',
+  iteration: '迭代改进',
+};
+
+function projectStageLabel(stage: string): string {
+  return PROJECT_STAGE_LABELS[stage] || '进行中';
 }
 
 function App() {
@@ -75,6 +97,13 @@ function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showFullTrustConfirm, setShowFullTrustConfirm] = useState(false);
+  const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null);
+  const [renameTarget, setRenameTarget] = useState<Project | null>(null);
+  const [renameName, setRenameName] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [projectActionNotice, setProjectActionNotice] = useState<string | null>(null);
 
   const loadProjects = useCallback(async () => {
     if (!window.kyrozen) return;
@@ -312,6 +341,20 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!projectContextMenu) return;
+    const closeMenu = () => setProjectContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+    window.addEventListener('click', closeMenu);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('click', closeMenu);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [projectContextMenu]);
+
   const handleOnboardingComplete = async () => {
     setOnboardingStatus('completed');
     await loadProjects();
@@ -348,6 +391,59 @@ function App() {
     setPreviewUrl(null);
     setEditingFile(null);
     setShowProjectWorkspace(false);
+    setProjectContextMenu(null);
+  };
+
+  const handleRenameProject = async () => {
+    if (!window.kyrozen || !renameTarget || !renameName.trim() || renameBusy) return;
+    setRenameBusy(true);
+    setProjectActionNotice(null);
+    try {
+      const result = await window.kyrozen.renameProject(renameTarget.id, renameName.trim());
+      if (!result.success) {
+        setProjectActionNotice(result.error || '重命名失败');
+        return;
+      }
+      await loadProjects();
+      setRenameTarget(null);
+    } catch (err: any) {
+      setProjectActionNotice(err.message || '重命名失败');
+    } finally {
+      setRenameBusy(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    if (!window.kyrozen || !deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    setProjectActionNotice(null);
+    try {
+      const result = await window.kyrozen.deleteProject(deleteTarget.id);
+      if (!result.success) {
+        setProjectActionNotice(result.error || '删除失败');
+        return;
+      }
+      setProjects((prev) => prev.filter((project) => project.id !== deleteTarget.id));
+      if (currentProjectId === deleteTarget.id) {
+        setCurrentProjectId(null);
+        setPreviewUrl(null);
+        setEditingFile(null);
+        setShowProjectWorkspace(false);
+        localStorage.removeItem('kyrozen:last-project-id');
+      }
+      setDeleteTarget(null);
+    } catch (err: any) {
+      setProjectActionNotice(err.message || '删除失败');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  const handleOpenProjectInFinder = async (project: Project) => {
+    if (!window.kyrozen) return;
+    setProjectContextMenu(null);
+    const result = await window.kyrozen.openProjectInFinder(project.id);
+    if (!result.success) setProjectActionNotice(result.error || '无法在 Finder 中打开项目');
   };
 
   const handleOpenPreview = (url: string) => {
@@ -556,6 +652,11 @@ function App() {
               <SearchPanel onOpenFile={handleOpenFileFromSearch} />
             </div>
           )}
+          {projectActionNotice && (
+            <div role="alert" className="mx-2 mt-2 rounded-sm border border-danger/30 bg-danger-soft px-2 py-1.5 text-xs text-danger">
+              {projectActionNotice}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {projects.length === 0 && (
               <div className="text-xs text-ink-faint p-2">暂无项目</div>
@@ -564,6 +665,15 @@ function App() {
               <button
                 key={project.id}
                 onClick={() => handleSelectProject(project.id)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setProjectActionNotice(null);
+                  setProjectContextMenu({
+                    project,
+                    x: Math.min(event.clientX, window.innerWidth - 220),
+                    y: Math.min(event.clientY, window.innerHeight - 150),
+                  });
+                }}
                 className={`w-full text-left px-3 py-2 rounded-sm text-sm transition-colors border-l-2 ${
                   project.id === currentProjectId
                     ? 'bg-accent-soft border-accent text-ink'
@@ -572,11 +682,53 @@ function App() {
               >
                 <div className="font-medium truncate">{project.name}</div>
                 <div className="text-xs text-ink-faint truncate">
-                  {project.current_stage}
+                  {projectStageLabel(project.current_stage)}
                 </div>
               </button>
             ))}
           </div>
+          {projectContextMenu && (
+            <div
+              className="fixed z-50 w-52 panel p-1 shadow-lg"
+              style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <div className="px-3 py-2 border-b border-line text-xs text-ink-faint truncate">
+                {projectContextMenu.project.name}
+              </div>
+              <button
+                type="button"
+                className="btn-ghost w-full justify-start text-sm"
+                onClick={() => {
+                  const project = projectContextMenu.project;
+                  setProjectContextMenu(null);
+                  setRenameTarget(project);
+                  setRenameName(project.name);
+                }}
+              >
+                重命名
+              </button>
+              <button
+                type="button"
+                className="btn-ghost w-full justify-start text-sm"
+                onClick={() => void handleOpenProjectInFinder(projectContextMenu.project)}
+              >
+                在 Finder 中打开
+              </button>
+              <button
+                type="button"
+                className="btn-ghost w-full justify-start text-sm text-danger hover:bg-danger-soft"
+                onClick={() => {
+                  const project = projectContextMenu.project;
+                  setProjectContextMenu(null);
+                  setDeleteTarget(project);
+                }}
+              >
+                删除
+              </button>
+            </div>
+          )}
 
           {/* UI cleanup: 本地文件 / 硬件工具链 moved into 设置; 会员权益 sits at the
               bottom-left corner of the sidebar. */}
@@ -625,12 +777,6 @@ function App() {
               >
                 ×
               </button>
-            </div>
-          )}
-          {currentProject && (
-            <div className="px-4 py-2 bg-surface border-b border-line text-sm text-ink-soft">
-              当前项目：<span className="font-medium text-ink">{currentProject.name}</span>
-              <span className="ml-2 text-ink-faint text-xs">{currentProject.current_stage}</span>
             </div>
           )}
           <div className="flex-1 flex overflow-hidden">
@@ -712,6 +858,48 @@ function App() {
                 className="btn-primary text-sm"
               >
                 {creatingProject ? '创建中...' : '创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {renameTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40" role="dialog" aria-modal="true" aria-labelledby="rename-project-title">
+          <div className="w-full max-w-sm panel p-5">
+            <h2 id="rename-project-title" className="font-display text-2xl text-ink">重命名项目</h2>
+            <p className="text-sm text-ink-soft mt-2">修改左侧项目列表中的显示名称。</p>
+            <input
+              autoFocus
+              value={renameName}
+              onChange={(event) => setRenameName(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void handleRenameProject(); }}
+              className="input mt-4"
+              maxLength={80}
+              aria-label="项目名称"
+            />
+            {projectActionNotice && <div role="alert" className="mt-3 text-sm text-danger">{projectActionNotice}</div>}
+            <div className="flex justify-end gap-2 mt-5">
+              <button type="button" className="btn-ghost text-sm" onClick={() => setRenameTarget(null)} disabled={renameBusy}>取消</button>
+              <button type="button" className="btn-primary text-sm" onClick={() => void handleRenameProject()} disabled={renameBusy || !renameName.trim()}>
+                {renameBusy ? '保存中…' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
+          <div className="w-full max-w-md panel p-5">
+            <h2 id="delete-project-title" className="font-display text-2xl text-ink">删除项目？</h2>
+            <p className="text-sm text-ink-soft mt-3">
+              确定要删除“<span className="font-medium text-ink">{deleteTarget.name}</span>”吗？云端项目、聊天记录和阶段数据将被删除。
+            </p>
+            <p className="text-xs text-ink-faint mt-2">本地工作区文件会保留，不会被删除。</p>
+            {projectActionNotice && <div role="alert" className="mt-3 text-sm text-danger">{projectActionNotice}</div>}
+            <div className="flex justify-end gap-2 mt-5">
+              <button type="button" className="btn-ghost text-sm" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>取消</button>
+              <button type="button" className="btn-primary text-sm bg-danger hover:bg-danger/90" onClick={() => void handleDeleteProject()} disabled={deleteBusy}>
+                {deleteBusy ? '删除中…' : '确认删除'}
               </button>
             </div>
           </div>

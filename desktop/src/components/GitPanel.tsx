@@ -69,8 +69,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     if (!projectId) { setStatus(null); return; }
     void loadStatus();
     const refreshTimer = window.setInterval(() => { void loadStatus(); }, 4000);
-    const unsubscribe = kyzen.onGitHubStatus((st) => { setGh(st); void loadStatus(); });
-    return () => { window.clearInterval(refreshTimer); unsubscribe?.(); };
+    return () => { window.clearInterval(refreshTimer); };
   }, [kyzen, projectId]);
 
   // 3.5 #7: while auto-commit is on, surface the committed file list when a new
@@ -91,28 +90,6 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     }, 4000);
     return () => clearInterval(timer);
   }, [kyzen, projectId, autoCommit]);
-
-  const connect = async () => {
-    setLoading(true); setError(null);
-    const result = await kyzen.connectGitHub();
-    if (!result.success) setError(result.error || '连接失败');
-    setLoading(false);
-  };
-
-  const relogin = async () => {
-    setLoading(true); setError(null);
-    const result = await kyzen.startGithubLogin();
-    if (!result.success) setError(result.error || '重新连接失败');
-    setLoading(false);
-  };
-
-  const disconnect = async () => {
-    setLoading(true); setError(null);
-    await kyzen.disconnectGitHub();
-    setSuccess('已断开 GitHub 连接');
-    await loadStatus();
-    setLoading(false);
-  };
 
   const initRepo = async () => {
     setLoading(true); setError(null); setFailure(null);
@@ -174,42 +151,6 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     <div className="flex flex-col overflow-y-auto border-t border-line p-4" data-testid="git-panel">
       <h3 className="font-display text-lg text-ink mb-3">GitHub / Git</h3>
       {!projectId && <div className="text-xs text-ink-faint">选择项目后管理仓库</div>}
-
-      {/* 3.5 #2: account card with avatar / login / scope / status */}
-      <div className="mb-4 p-3 panel space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">GitHub 账号</span>
-          {gh?.connected
-            ? <span className={`text-xs px-2 py-0.5 rounded-sm ${gh.expired ? 'bg-warning-soft text-warning' : 'bg-success-soft text-success'}`}>{gh.expired ? '已过期' : '已连接'}</span>
-            : <span className="text-xs px-2 py-0.5 rounded-sm bg-paper-edge text-ink-faint">未连接</span>}
-        </div>
-        {gh?.connected && (
-          <div className="flex items-center gap-2">
-            {gh.avatarUrl && <img src={gh.avatarUrl} alt={gh.login || ''} className="w-8 h-8 rounded-full bg-paper-sink" />}
-            <div className="text-sm">
-              <div className="text-ink">{gh.login || '未知用户'}</div>
-              {gh.scope && <div className="text-xs text-ink-faint">scope: {gh.scope}</div>}
-            </div>
-          </div>
-        )}
-        {!gh?.connected && (
-          <button type="button" onClick={connect} disabled={loading} className="btn-primary w-full text-sm py-1.5">
-            {loading ? '处理中…' : '授权 GitHub'}
-          </button>
-        )}
-        {gh?.connected && (
-          <button type="button" onClick={disconnect} disabled={loading} className="btn-ghost w-full text-sm py-1.5">
-            断开连接
-          </button>
-        )}
-        {/* 3.5 #1: expiry -> re-login guidance */}
-        {gh?.connected && gh.expired && (
-          <div className="border-l-2 border-l-warning bg-warning-soft p-2 text-xs text-ink-soft">
-            GitHub 授权已过期或已撤销。请重新连接以继续推送。
-            <button type="button" onClick={relogin} disabled={loading} className="btn-primary w-full text-sm py-1 mt-2">重新连接 GitHub</button>
-          </div>
-        )}
-      </div>
 
       {/* P0-12 修复：创建 GitHub 仓库的条件是"无远程 origin"，不是"非仓库"。
 +           本地初始化后仍应能创建远程并推送。 */}

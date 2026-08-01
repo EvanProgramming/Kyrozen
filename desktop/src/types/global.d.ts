@@ -182,8 +182,11 @@ export interface KyrozenAPI {
   setCurrentProject: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
   pickWorkspace: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
   getWorkspaceRoot: (projectId: string) => Promise<{ workspaceRoot: string | null }>;
-  getProjects: () => Promise<Array<{ id: string; name: string; current_stage: string; description?: string }>>;
+  getProjects: () => Promise<Array<{ id: string; name: string; current_stage: string; description?: string; local_only?: boolean }>>;
   createProject: (name: string, description?: string, goal?: string) => Promise<{ success: boolean; project?: { id: string; name: string; current_stage: string }; error?: string }>;
+  renameProject: (projectId: string, name: string) => Promise<{ success: boolean; project?: { id: string; name: string }; error?: string }>;
+  openProjectInFinder: (projectId: string) => Promise<{ success: boolean; workspaceRoot?: string; error?: string }>;
+  deleteProject: (projectId: string) => Promise<{ success: boolean; projectId?: string; localWorkspacePreserved?: boolean; error?: string }>;
   getProjectState: (projectId: string) => Promise<{ project_id: string; stage: string; progress: number; blocked_reason: string | null; next_action: { action: string; reason: string; target_mode: string } | null } | null>;
   getProjectWorkspace: (projectId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
   createDecision: (projectId: string, decision: string, reason: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;

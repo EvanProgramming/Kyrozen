@@ -969,6 +969,15 @@ class DesktopAgentRuntime:
         root_path = Path(workspace_root).resolve()
         try:
             store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=project_id)
+            # A newly opened workspace has no persisted lifecycle stage yet.
+            # Seed it from the desktop's current stage snapshot so an initial
+            # refresh is meaningful (and does not silently jump back to the
+            # first stage).  Once persisted, the local gate remains the source
+            # of truth and stale renderer snapshots are ignored.
+            requested_stage = str(params.get("stage", ""))
+            if not store.path.exists() and requested_stage in STAGES:
+                store.current_stage = requested_stage
+                store.save()
             # The persisted local gate is the lifecycle source of truth. The
             # renderer's ``stage`` value is only a display snapshot and can be
             # stale in either direction, so it must never overwrite the store.

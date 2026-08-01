@@ -629,41 +629,37 @@ async function handleProtocolUrl(url: string) {
         });
       }
     } else if (parsed.hostname === 'auth' && parsed.pathname === '/login') {
-      // GitHub OAuth login callback: kyrozen://auth/login?kyrozen_token=...&github_token=...
-      const kyrozenToken = parsed.searchParams.get('kyrozen_token');
-      const refreshTok = parsed.searchParams.get('refresh_token');
-      const ghToken = parsed.searchParams.get('github_token');
-      const scope = parsed.searchParams.get('scope') || '';
-      if (kyrozenToken && ghToken) {
+      // GitHub OAuth callback: only a short-lived opaque code is allowed in
+      // the custom URL. Exchange it over HTTPS; never accept credential query
+      // parameters from a browser or a second application.
+      const exchangeCode = parsed.searchParams.get('code');
+      if (!exchangeCode) throw new Error('登录回调缺少一次性授权码');
+      try {
+        const exchanged = await apiPost('/api/auth/github/desktop-exchange', { code: exchangeCode });
+        const kyrozenToken = String(exchanged.access_token || '');
+        const refreshTok = String(exchanged.refresh_token || '');
+        const ghToken = String(exchanged.github_token || '');
+        const scope = String(exchanged.scope || '');
+        if (!kyrozenToken || !ghToken) throw new Error('服务器返回的登录凭据不完整');
         accessToken = kyrozenToken;
         githubAccessToken = ghToken;
         githubTokenScope = scope;
-        void storeGitHubToken(ghToken, scope);
+        await storeGitHubToken(ghToken, scope);
         sendGitHubStatus();
         setUpdateApiBaseUrl(serverUrl);
         wsUrl = getWebSocketUrlFromHttp(serverUrl);
-        // Exchange the Kyrozen JWT for a WS token and connect.
-        try {
-          const verify = await apiPost('/api/desktop/verify-token', {
-            access_token: kyrozenToken,
-            device_name: os.hostname(),
-          });
-          if (verify.ws_token) {
-            // Keep the server-verifiable JWT. The generated desktop API token
-            // is process-local and cannot restore a session after an API restart.
-            accessToken = kyrozenToken;
-            await saveCredentials(
-              verify.ws_token,
-              refreshTok || undefined,
-              accessToken || undefined,
-            );
-            connectWebSocket(verify.ws_token);
-            mainWindow?.webContents.send('kyrozen:session-resumed', verify.ws_token, serverUrl);
-            logInfo('GitHub login completed successfully');
-          }
-        } catch (err: any) {
-          logError(`GitHub login verify-token failed: ${err.message || err}`);
-        }
+        const verify = await apiPost('/api/desktop/verify-token', {
+          access_token: kyrozenToken,
+          device_name: os.hostname(),
+        });
+        if (!verify.ws_token) throw new Error('服务器未返回桌面连接凭据');
+        await saveCredentials(verify.ws_token, refreshTok || undefined, kyrozenToken);
+        connectWebSocket(verify.ws_token);
+        mainWindow?.webContents.send('kyrozen:session-resumed', verify.ws_token, serverUrl);
+        logInfo('GitHub login completed successfully');
+      } catch (err: any) {
+        logError(`GitHub login exchange failed: ${err.message || err}`);
+        updateConnection('error', 'GitHub 登录失败，请重新授权');
       }
     } else if (parsed.hostname === 'auth' && parsed.pathname === '/github') {
       const token = parsed.searchParams.get('token');
@@ -1491,7 +1487,7 @@ ipcMain.handle('kyrozen:read-workspace-plan', async (_event, workspaceRoot: stri
     const planPath = path.join(workspaceRoot, '.kyrozen', 'PLAN.json');
     try {
       await fs.access(planPath);
-    } catch (_err) {
+    } catch {
       return { success: true, plan: null };
     }
     const raw = await fs.readFile(planPath, 'utf-8');

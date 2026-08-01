@@ -803,8 +803,13 @@ function useMediaAttachments(
     setAttachments([]);
     setUploadError(null);
     pendingUploadCountRef.current = 0;
-    const unsubStatus = window.kyrozen.onStatusUpdated((s) => setStatus(s));
+    const unsubStatus = window.kyrozen.onStatusUpdated((s) => {
+      const eventProjectId = String((s as InteractionStatus & { project_id?: string }).project_id || '');
+      if (!eventProjectId || eventProjectId === projectId) setStatus(s);
+    });
     const unsubInt = window.kyrozen.onInteraction((payload) => {
+      const eventProjectId = String(payload.project_id || '');
+      if (eventProjectId && eventProjectId !== projectId) return;
       const action = String(payload.action || '');
       if (action === 'attach') {
         if (payload.error) {

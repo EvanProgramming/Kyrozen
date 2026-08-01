@@ -160,6 +160,7 @@ export interface OperationLogEntry {
 }
 
 export interface InteractionStatus {
+  project_id?: string;
   state: string | null;
   detail: string | null;
   since: number | null;

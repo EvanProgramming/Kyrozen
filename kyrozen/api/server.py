@@ -9,6 +9,7 @@ import hmac
 import os
 import re
 import shutil
+import secrets
 from contextlib import asynccontextmanager
 import traceback
 import uuid
@@ -521,6 +522,10 @@ class DesktopPollPairingRequest(BaseModel):
 
 class DesktopConfirmPairingRequest(BaseModel):
     code: str = Field(..., min_length=1)
+
+
+class GithubDesktopExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=16, max_length=256)
 
 
 class ToolExecuteRequest(BaseModel):
@@ -1310,12 +1315,19 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # GitHub Login (no prior Kyrozen account required)
     # ------------------------------------------------------------------
     _github_login_states: dict[str, dict[str, Any]] = {}
+    # OAuth credentials never travel through a custom-scheme URL. The browser
+    # callback receives a one-time opaque code and the desktop exchanges it
+    # over HTTPS; entries expire quickly and are deleted on first use.
+    _github_desktop_exchange_codes: dict[str, dict[str, Any]] = {}
 
     def _cleanup_github_login_states() -> None:
         now = datetime.now(timezone.utc).timestamp()
         expired = [k for k, v in _github_login_states.items() if v.get("expires_at", 0) < now]
         for k in expired:
             _github_login_states.pop(k, None)
+        expired_exchange = [k for k, v in _github_desktop_exchange_codes.items() if v.get("expires_at", 0) < now]
+        for k in expired_exchange:
+            _github_desktop_exchange_codes.pop(k, None)
 
     @app.get("/api/auth/github/login")
     async def api_github_login(request: Request):
@@ -1480,17 +1492,27 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         kyrozen_token = session.session.access_token
         refresh_token = session.session.refresh_token
 
-        # 5. Redirect desktop via kyrozen:// custom URL scheme.
+        # 5. Store the sensitive session only behind a short-lived, one-time
+        # exchange code. Access/refresh/GitHub tokens must never appear in a
+        # browser history, referrer, accessibility tree, or custom URL.
+        _cleanup_github_login_states()
+        exchange_code = secrets.token_urlsafe(32)
+        _github_desktop_exchange_codes[exchange_code] = {
+            "access_token": kyrozen_token,
+            "refresh_token": refresh_token,
+            "github_token": github_token,
+            "scope": scope,
+            "user_id": user_id,
+            "expires_at": datetime.now(timezone.utc).timestamp() + 120,
+        }
+
+        # 6. Redirect desktop via kyrozen:// custom URL scheme with only the
+        # opaque one-time code.
         #    Serve an HTML page that auto-redirects but also shows a
         #    manual "Open Kyrozen" button if the browser blocks the
         #    custom protocol handler.
         redirect_url = (
-            f"kyrozen://auth/login?"
-            f"kyrozen_token={kyrozen_token}&"
-            f"refresh_token={refresh_token}&"
-            f"github_token={github_token}&"
-            f"scope={scope}&"
-            f"user_id={user_id}"
+            f"kyrozen://auth/login?code={exchange_code}"
         )
         return HTMLResponse(
             status_code=200,
@@ -1562,6 +1584,21 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 </body>
 </html>""",
         )
+
+    @app.post("/api/auth/github/desktop-exchange")
+    async def api_github_desktop_exchange(request: GithubDesktopExchangeRequest):
+        """Consume a one-time desktop OAuth code over the authenticated TLS API."""
+        _cleanup_github_login_states()
+        payload = _github_desktop_exchange_codes.pop(request.code, None)
+        if not payload or payload.get("expires_at", 0) < datetime.now(timezone.utc).timestamp():
+            raise HTTPException(status_code=400, detail="Invalid or expired desktop OAuth code")
+        return {
+            "access_token": payload["access_token"],
+            "refresh_token": payload["refresh_token"],
+            "github_token": payload["github_token"],
+            "scope": payload.get("scope", ""),
+            "user_id": payload.get("user_id", ""),
+        }
 
     # ------------------------------------------------------------------
     # Desktop update signatures

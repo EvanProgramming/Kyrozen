@@ -223,12 +223,10 @@ class PlanDetectingModelProvider:
 
     def chat(self, messages, model=None):
         response = self._inner.chat(messages, model=model)
-        self._maybe_emit_plan(response.content)
         return response
 
     def chat_stream(self, messages, model=None):
         chunks = list(self._inner.chat_stream(messages, model=model))
-        self._maybe_emit_plan("".join(chunks))
         return iter(chunks)
 
     def __getattr__(self, name: str):
@@ -297,6 +295,97 @@ class PlanDetectingModelProvider:
         if numbered >= 2:
             return steps[:10]
         return None
+
+
+_STAGE_PLAN_TEMPLATES: dict[str, tuple[str, str, list[tuple[str, str]]]] = {
+    "problem_discovery": (
+        "问题探索计划",
+        "确认真实用户问题、场景和当前解决方式，形成可验证的问题简报",
+        [
+            ("梳理现有信息", "整理用户目标、已知事实和仍缺失的关键维度"),
+            ("确认真实场景", "了解问题发生的具体场景、频率和影响"),
+            ("了解当前做法", "记录用户现在如何处理，以及现有方式的不足"),
+            ("沉淀问题简报", "保存结构化问题简报并评估是否可以进入下一阶段"),
+        ],
+    ),
+    "market_research": (
+        "市场调研计划",
+        "用外部证据验证目标用户、现有方案和市场机会",
+        [
+            ("明确研究问题", "确定需要验证的用户需求、现有方案和市场假设"),
+            ("收集外部证据", "搜索并记录与研究问题直接相关的可靠来源"),
+            ("比较现有方案", "整理竞品或替代方案的能力、限制和适用场景"),
+            ("形成研究结论", "保存市场研究报告并标注结论、风险和未验证假设"),
+        ],
+    ),
+    "product_definition": (
+        "产品规划计划",
+        "把已确认的问题转化为清晰、可控范围的产品方向和 MVP 需求",
+        [
+            ("确认产品目标", "对齐问题简报、目标用户和核心价值"),
+            ("设计用户旅程", "描述用户从遇到问题到获得结果的关键步骤"),
+            ("收敛 MVP 范围", "区分必须具备、后续再做和明确不做的内容"),
+            ("形成产品需求", "保存 Product Brief 和 PRD，等待用户确认关键决策"),
+        ],
+    ),
+    "solution_design": (
+        "方案设计计划",
+        "把确认的产品需求转化为简单、可实现的技术方案",
+        [
+            ("确认实现边界", "检查 PRD、MVP 范围和技术约束"),
+            ("比较实现方案", "比较候选技术方案并说明取舍理由"),
+            ("设计系统结构", "明确模块、数据流、数据模型和外部集成"),
+            ("保存技术方案", "写入技术设计文档并等待进入开发阶段"),
+        ],
+    ),
+    "development": (
+        "开发执行计划",
+        "按确认的产品需求和技术方案实现可运行的 MVP",
+        [
+            ("检查开发输入", "确认 PRD、技术方案和工作区状态"),
+            ("搭建核心结构", "创建应用入口、基础模块和必要配置"),
+            ("实现核心流程", "完成 MVP 的关键用户路径和功能"),
+            ("运行基础验证", "启动或测试应用，记录结果并整理交付说明"),
+        ],
+    ),
+    "testing": (
+        "测试验收计划",
+        "通过实际运行和验证确认当前实现是否满足目标",
+        [
+            ("准备验收范围", "根据需求和当前实现确定需要验证的行为"),
+            ("执行自动化测试", "运行项目已有测试并记录真实输出"),
+            ("检查关键流程", "验证核心用户路径、错误处理和恢复行为"),
+            ("整理验收结论", "保存测试结果、失败项和后续修复建议"),
+        ],
+    ),
+    "iteration": (
+        "迭代改进计划",
+        "根据测试反馈和用户反馈确定下一轮最有价值的改进",
+        [
+            ("汇总反馈", "整理失败项、用户意见和已知限制"),
+            ("分析根因", "区分产品问题、实现问题和环境问题"),
+            ("实施优先修复", "完成本轮范围内的改进并保留变更记录"),
+            ("回归验证", "重新运行受影响流程并记录迭代结果"),
+        ],
+    ),
+}
+
+
+def build_stage_plan(stage: str, task_id: str) -> dict[str, object]:
+    """Build the initial structured plan shown before an agent starts work."""
+    key = stage if stage in _STAGE_PLAN_TEMPLATES else "problem_discovery"
+    title, goal, raw_steps = _STAGE_PLAN_TEMPLATES[key]
+    return {
+        "stage": key,
+        "title": title,
+        "goal": goal,
+        "task_id": task_id,
+        "steps": [
+            {"id": f"{key}-{index + 1}", "title": step_title, "detail": detail,
+             "status": "in_progress" if index == 0 else "pending"}
+            for index, (step_title, detail) in enumerate(raw_steps)
+        ],
+    }
 
 
 class DesktopAgentRuntime:
@@ -388,11 +477,8 @@ class DesktopAgentRuntime:
             self._send_response(req_id, error=str(exc))
 
     def _emit_execution_plan(self, steps: list[str]) -> None:
-        """Send a detected execution plan to Electron so it can show the banner."""
-        self._notify("execution_plan", {
-            "task_id": self.current_task_id,
-            "steps": steps,
-        })
+        """Deprecated compatibility hook; plans come only from PLAN.json now."""
+        return None
 
     # Question blocks may arrive in several malformed shapes from the model:
     # fenced without a newline, an XML-style <kyrozen-question> tag, multiple
@@ -605,6 +691,21 @@ class DesktopAgentRuntime:
         # to the desktop UI so the panel always reflects real progress.
         self._sync_and_push_stage(root_path, stage, project_id)
 
+        # P0-R6: every task starts with a real, stage-specific execution plan.
+        # The renderer must never derive a plan from ordinary model prose.
+        initial_plan = build_stage_plan(stage, self.current_task_id or "")
+        try:
+            plan_path = state_dir / "PLAN.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(json.dumps(initial_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._notify("plan_updated", {
+                "task_id": self.current_task_id,
+                "plan": initial_plan,
+                "source": "task_started",
+            })
+        except Exception:
+            self.logger.warning("Failed to create initial execution plan", exc_info=True)
+
         # Feature 3.4 (#5): re-show any confirmations that were pending when the
         # app last shut down. They are NOT auto-executed.
         self._restore_confirmations(root_path)
@@ -766,6 +867,17 @@ class DesktopAgentRuntime:
                 self._cancel_task_timeout_timer()
                 traceback_str = traceback.format_exc()
                 if not self._task_timed_out.is_set() and not self._task_cancelled.is_set():
+                    limit_error = "会员额度已触发安全收尾" in str(exc) or "Credit" in str(exc) or "额度" in str(exc)
+                    if limit_error:
+                        task = self.current_task
+                        if task is not None and task.status in {"running", "waiting_confirmation"}:
+                            task.complete_with_limit(result={"answer": "已达到当前会员额度，Kyrozen 已保存状态并完成安全收尾。"})
+                        self._notify("task_result", {
+                            "task_id": self.current_task_id,
+                            "status": "completed_with_limit",
+                            "result": {"answer": "已达到当前会员额度，Kyrozen 已保存状态并完成安全收尾。"},
+                        })
+                        return
                     self._notify("task_result", {
                         "task_id": self.current_task_id,
                         "status": "failed",

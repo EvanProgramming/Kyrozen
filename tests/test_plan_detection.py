@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from desktop.python_agent.main import PlanDetectingModelProvider
+from desktop.python_agent.main import PlanDetectingModelProvider, build_stage_plan
 
 
 class _StubInner:
@@ -154,3 +154,15 @@ def test_emit_only_once_per_task() -> None:
 def test_empty_or_plain_text_returns_none(text: str) -> None:
     p = _make()
     assert p._extract_plan_steps(text) is None
+
+
+def test_stage_plan_is_structured_and_not_model_prose() -> None:
+    plan = build_stage_plan("product_definition", "task-123")
+    assert plan["title"] == "产品规划计划"
+    assert plan["task_id"] == "task-123"
+    steps = plan["steps"]
+    assert isinstance(steps, list)
+    assert len(steps) == 4
+    assert steps[0]["status"] == "in_progress"
+    assert all(step["title"] for step in steps)
+    assert all("content" not in step for step in steps)

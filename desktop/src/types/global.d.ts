@@ -186,7 +186,7 @@ export interface KyrozenAPI {
   createProject: (name: string, description?: string, goal?: string) => Promise<{ success: boolean; project?: { id: string; name: string; current_stage: string }; error?: string }>;
   renameProject: (projectId: string, name: string) => Promise<{ success: boolean; project?: { id: string; name: string }; error?: string }>;
   openProjectInFinder: (projectId: string) => Promise<{ success: boolean; workspaceRoot?: string; error?: string }>;
-  deleteProject: (projectId: string) => Promise<{ success: boolean; projectId?: string; localWorkspacePreserved?: boolean; error?: string }>;
+  deleteProject: (projectId: string) => Promise<{ success: boolean; projectId?: string; localWorkspaceDeleted?: boolean; error?: string }>;
   getProjectState: (projectId: string) => Promise<{ project_id: string; stage: string; progress: number; blocked_reason: string | null; next_action: { action: string; reason: string; target_mode: string } | null } | null>;
   getProjectWorkspace: (projectId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
   createDecision: (projectId: string, decision: string, reason: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>;
@@ -200,8 +200,18 @@ export interface KyrozenAPI {
     used: number;
     limit: number;
     remaining: number;
-    plan?: 'free' | 'developer';
+    plan?: 'free' | 'lite' | 'pro' | 'ultimate' | 'enterprise' | 'developer';
     project_limit?: number;
+    weekly_credit_limit?: number;
+    rolling_credits?: number;
+    rolling_limit?: number;
+    monthly_cost_rmb?: number;
+    monthly_cost_limit_rmb?: number;
+    conversations?: number;
+    conversation_limit?: number;
+    weekly_reset_at?: string;
+    rolling_reset_at?: string;
+    period_end?: string;
   }>;
   getServerUrl: () => Promise<string>;
   setServerUrl: (url: string) => Promise<{ success: boolean; serverUrl?: string; error?: string }>;
@@ -321,6 +331,7 @@ export interface KyrozenAPI {
     recovery?: string;
     error?: string;
   }>;
+  generateCommitMessage: (projectId?: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   onGitHubStatus: (callback: (status: { connected: boolean; scope?: string; login?: string; avatarUrl?: string; expired?: boolean }) => void) => () => void;
   onFullTrustChange: (callback: (status: { enabled: boolean }) => void) => () => void;
 

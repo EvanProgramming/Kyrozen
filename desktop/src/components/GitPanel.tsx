@@ -31,6 +31,7 @@ interface GitStatus {
 }
 
 interface PushFailure {
+  committed?: boolean;
   failureKind?: string;
   reason?: string;
   recovery?: string;
@@ -46,6 +47,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [generatingMessage, setGeneratingMessage] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [failure, setFailure] = useState<PushFailure | null>(null);
@@ -99,7 +101,7 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     const before = status ? [...(status.modified || []), ...(status.untracked || []), ...(status.staged || [])] : [];
     const result = await kyzen.commitAndPush(commitMessage);
     if (!result.success) {
-      setFailure({ failureKind: result.failureKind, reason: result.reason || result.error, recovery: result.recovery });
+      setFailure({ committed: result.committed, failureKind: result.failureKind, reason: result.reason || result.error, recovery: result.recovery });
       setError(null);
     } else {
       setSuccess(gh?.connected ? '提交完成并推送至 GitHub' : '本地提交成功');
@@ -110,25 +112,17 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
     await loadStatus();
   };
 
-  const generateCommitMessage = () => {
-    const files = [
-      ...(status?.staged || []),
-      ...(status?.modified || []),
-      ...(status?.untracked || []),
-    ];
-    const uniqueFiles = [...new Set(files)];
-    if (uniqueFiles.length === 0) {
-      setCommitMessage('chore: update project');
-      return;
-    }
-    const firstName = uniqueFiles[0].split('/').pop() || uniqueFiles[0];
-    const subject = uniqueFiles.length === 1
-      ? `update ${firstName}`
-      : `update ${uniqueFiles.length} files`;
-    setCommitMessage(`chore: ${subject}`);
+  const generateCommitMessage = async () => {
+    if (!projectId || changedCount === 0 || generatingMessage) return;
+    setGeneratingMessage(true); setError(null); setFailure(null);
+    const result = await kyzen.generateCommitMessage(projectId);
+    if (result.success && result.message) setCommitMessage(result.message);
+    else setError(result.error || 'LLM 暂时无法生成提交信息');
+    setGeneratingMessage(false);
   };
 
   const changedCount = (status?.modified?.length || 0) + (status?.untracked?.length || 0) + (status?.staged?.length || 0);
+  const canRetryPush = Boolean(failure);
   const statusBadge = (s: GitStatus | null) => {
     if (!s?.isRepo) return <span className="text-xs px-2 py-0.5 rounded-sm bg-paper-edge text-ink-faint">未初始化</span>;
     return <span className="text-xs px-2 py-0.5 rounded-sm bg-success-soft text-success">已初始化</span>;
@@ -223,17 +217,17 @@ export function GitPanel({ projectId }: { projectId: string | null }) {
             <input type="text" value={commitMessage} onChange={(e) => setCommitMessage(e.target.value)} placeholder="提交信息" className="input min-w-0 flex-1" />
             <button
               type="button"
-              onClick={generateCommitMessage}
-              disabled={loading || changedCount === 0}
+              onClick={() => void generateCommitMessage()}
+              disabled={loading || generatingMessage || changedCount === 0}
               className="btn-secondary shrink-0 px-2 py-1.5 text-sm"
-              title="自动生成提交信息"
-              aria-label="自动生成提交信息"
+              title="让 Kyrozen 使用 LLM 生成提交信息"
+              aria-label="让 Kyrozen 使用 LLM 生成提交信息"
             >
-              ✨
+              {generatingMessage ? '…' : '✨'}
             </button>
           </div>
-          <button type="button" onClick={commit} disabled={loading || changedCount === 0} className="btn-primary w-full text-sm py-1.5">
-            {gh?.connected ? '提交并推送' : '本地提交'}
+          <button type="button" onClick={commit} disabled={loading || (changedCount === 0 && !canRetryPush)} className="btn-primary w-full text-sm py-1.5">
+            {canRetryPush ? '重试推送' : (gh?.connected ? '提交并推送' : '本地提交')}
           </button>
           {failure && (
             <div className="border-l-2 border-l-danger bg-danger-soft p-2 space-y-1">

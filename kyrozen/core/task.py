@@ -13,13 +13,13 @@ from typing import Any
 from kyrozen.logs import get_logger
 
 
-TASK_STATUSES = {"pending", "running", "waiting_confirmation", "completed", "failed", "cancelled"}
+TASK_STATUSES = {"pending", "running", "waiting_confirmation", "completed", "completed_with_limit", "failed", "cancelled"}
 
 # Valid status transitions. Terminal states cannot change unless forced.
 VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"running", "completed", "failed", "cancelled"},
-    "running": {"waiting_confirmation", "completed", "failed", "cancelled"},
-    "waiting_confirmation": {"running", "completed", "failed", "cancelled"},
+    "pending": {"running", "completed", "completed_with_limit", "failed", "cancelled"},
+    "running": {"waiting_confirmation", "completed", "completed_with_limit", "failed", "cancelled"},
+    "waiting_confirmation": {"running", "completed", "completed_with_limit", "failed", "cancelled"},
     "completed": set(),
     "failed": set(),
     "cancelled": set(),
@@ -95,6 +95,11 @@ class Task:
     def complete(self, result: Any = None) -> None:
         self.result = result
         self.update_status("completed")
+
+    def complete_with_limit(self, result: Any = None) -> None:
+        """Finish a task after a membership budget boundary and preserve state."""
+        self.result = result
+        self.update_status("completed_with_limit")
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -70,6 +70,11 @@ def _build_gemini_provider(config: KyrozenConfig) -> ModelInterface | None:
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         return None
+    try:
+        import google.generativeai  # noqa: F401
+    except ImportError:
+        _logger.log("warning", "Gemini unavailable: google-generativeai is not installed")
+        return None
     from dataclasses import replace
     cfg = replace(config, provider="google", api_key=api_key,
                   model_simple=_DEFAULT_MODELS["gemini"])

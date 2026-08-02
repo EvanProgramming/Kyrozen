@@ -50,6 +50,8 @@ class ProblemDiscoveryAgent(BaseAgent):
             "- A useful Problem Brief should cover at least six key dimensions, including either deep_need or impact, not only surface facts.\n"
             "- If the user's message already provides at least six key dimensions, save the brief immediately instead of asking redundant questions.\n"
             "- AFTER EVERY USER ANSWER, you MUST call save_problem_brief to update the fields you just learned. Do NOT wait until the end.\n"
+            "- Treat every user answer, including a clicked option, as answered immediately. Never say you are still waiting for the previous question.\n"
+            "- When asking the next question, introduce it as the next question (for example, '接下来想了解……'), never as the previous question.\n"
             "- Before asking your next question, check [Current Problem Brief] and [Recent Discovery Q&A]. Never ask about a dimension that is already filled.\n"
             "- If [Discovery Policy] says 'Enough information collected' or 'Do NOT ask any more questions', you MUST stop asking and call save_problem_brief.\n"
             "- When you ask a follow-up question, provide 2-4 suggested answer options using a ```kyrozen-question JSON block.\n"

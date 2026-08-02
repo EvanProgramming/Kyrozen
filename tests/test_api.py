@@ -81,6 +81,16 @@ def test_chat_direct_answer(client, test_config):
         assert task["result"]["answer"] == "Final answer from API."
 
 
+def test_generate_commit_message_uses_model_without_creating_chat_task(test_config):
+    app = make_authenticated_app(test_config, MockModel(["fix: handle empty commit message"]))
+    with TestClient(app) as c:
+        response = c.post("/api/git/commit-message", json={
+            "changed_files": ["desktop/src/components/GitPanel.tsx"],
+        })
+        assert response.status_code == 200
+        assert response.json() == {"message": "fix: handle empty commit message"}
+
+
 def test_chat_waiting_confirmation(client, test_config):
     test_config.permission_mode = "strict"
     tool_call = '{"tool": "file_write", "action": "write", "parameters": {"path": "x.txt", "content": "x"}}'

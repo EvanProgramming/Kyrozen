@@ -109,24 +109,37 @@ function splitQuestionBlock(content: string): { markdown: string; question: Ques
 }
 
 /**
- * When restoring history, a user message that is simply the answer to the
- * preceding question card (matching an option label or value) should not
- * appear as a chat bubble — instead the picked option is highlighted on the
- * question card itself. Mutates and returns the given array.
+ * Find the answer belonging to a question card. The answer is the first user
+ * message after the card, unless another assistant message appears first (in
+ * which case the card is still unanswered). This tolerates system messages,
+ * persisted history ordering, and custom text answers.
+ */
+function answerForQuestion(messages: Message[], questionIndex: number): string | undefined {
+  const question = splitQuestionBlock(messages[questionIndex]?.content || '').question;
+  if (!question) return undefined;
+  for (let i = questionIndex + 1; i < messages.length; i++) {
+    const message = messages[i];
+    if (message.role === 'assistant') return undefined;
+    if (message.role === 'user' && message.content.trim()) return message.content.trim();
+  }
+  return undefined;
+}
+
+/**
+ * When restoring history, answer messages should not appear as chat bubbles —
+ * instead the picked option or custom answer is shown on the question card.
+ * Mutates and returns the given array.
  */
 function reconcileQuestionAnswers(messages: Message[]): Message[] {
-  for (let i = 1; i < messages.length; i++) {
-    const current = messages[i];
-    const previous = messages[i - 1];
-    if (current.role !== 'user' || previous.role !== 'assistant') continue;
-    const question = splitQuestionBlock(previous.content).question;
-    if (!question) continue;
-    const answer = current.content.trim();
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role !== 'assistant' || !splitQuestionBlock(messages[i].content).question) continue;
+    const answer = answerForQuestion(messages, i);
+    if (!answer) continue;
+    const question = splitQuestionBlock(messages[i].content).question!;
     const match = question.options.find((option) => option.label === answer || option.value === answer);
-    if (match) {
-      previous.selectedOption = match.value;
-      current.hidden = true;
-    }
+    messages[i].selectedOption = match?.value || answer;
+    const answerIndex = messages.findIndex((message, index) => index > i && message.role === 'user' && message.content.trim() === answer);
+    if (answerIndex >= 0) messages[answerIndex].hidden = true;
   }
   return messages;
 }
@@ -154,6 +167,9 @@ function friendlyChatError(raw?: string): { summary: string; raw: string } {
   }
   if (/401|unauthorized|未登录|not logged|no longer logged/i.test(detail)) {
     return { summary: '登录已失效，请重新登录后重试。', raw: text };
+  }
+  if (/Credit|额度|订阅月|订阅周|5小时|会员/i.test(detail)) {
+    return { summary: `${detail}。请查看左下角“购买会员”或等待额度重置后再试。`, raw: text };
   }
   const short = detail.length > 80 ? `${detail.slice(0, 80)}…` : detail;
   return { summary: `发送失败：${short}`, raw: text };
@@ -940,16 +956,6 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
         }
       }
     });
-    const unsubPlan = window.kyrozen.onExecutionPlan((incoming) => {
-      // Legacy path: model-output plan detection. Use it as a lightweight
-      // fallback; the file-based plan (onPlanUpdated) overrides when
-      // available.
-      setPlan((current) => current ? current : {
-        task_id: incoming.task_id,
-        steps: incoming.steps.map((label) => ({ label, status: 'pending' })),
-      });
-      setPlanExpanded(true);
-    });
     const unsubPlanFile = window.kyrozen.onPlanUpdated((incoming) => {
       // P0-R6: real planning. The plan comes from .kyrozen/PLAN.json, not from
       // guessing model output bullets. Includes stage/title/goal/steps with
@@ -1025,7 +1031,6 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
     });
     return () => {
       unsubChat();
-      unsubPlan();
       unsubPlanFile();
       unsubActivity();
       unsubConfirmation();
@@ -1277,7 +1282,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
           if (message.hidden) return null;
           const parsed = questionByMessage[index];
           const expanded = expandedOperations.has(index);
-          const answered = message.selectedOption !== undefined;
+          const persistedAnswer = answerForQuestion(messages, index);
+          const selectedAnswer = message.selectedOption ?? persistedAnswer;
+          const answered = selectedAnswer !== undefined;
           return (
             <div key={index} data-testid={`chat-message-${message.role}`} className={`max-w-[84%] rounded-sm px-4 py-3 text-sm ${
               message.role === 'user' ? 'bg-accent text-white ml-auto' : message.role === 'system' ? 'bg-warning-soft border border-line text-warning' : 'bg-surface border border-line text-ink'
@@ -1288,7 +1295,7 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
                   <div className="font-medium text-ink mb-2">{parsed.question.question}</div>
                   <div className="flex flex-wrap gap-2">
                     {(parsed.question.options || []).map((option) => {
-                      const isSelected = message.selectedOption === option.value;
+                      const isSelected = selectedAnswer === option.value;
                       return (
                         <button
                           key={option.value}
@@ -1355,9 +1362,9 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
                     </div>
                   )}
                   {answered
-                    && message.selectedOption !== undefined
-                    && !(parsed.question.options || []).some((option) => option.value === message.selectedOption) && (
-                      <div className="mt-2 text-xs text-ink-faint">已回答：{message.selectedOption}</div>
+                    && selectedAnswer !== undefined
+                    && !(parsed.question.options || []).some((option) => option.value === selectedAnswer) && (
+                      <div className="mt-2 text-xs text-ink-faint">已回答：{selectedAnswer}</div>
                     )}
                 </div>
               )}

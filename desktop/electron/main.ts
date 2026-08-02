@@ -45,6 +45,7 @@ import {
   maybeAutoCommit,
   classifyCreateRepoError,
 } from './gitOperations';
+import { deleteWorkspace } from './workspaceDeletion';
 
 interface WorkspaceMap {
   [projectId: string]: string;
@@ -1887,6 +1888,7 @@ ipcMain.handle('kyrozen:open-project-in-finder', async (_event, projectId: strin
 
 ipcMain.handle('kyrozen:delete-project', async (_event, projectId: string) => {
   try {
+    const workspaceRoot = workspaceMap[projectId];
     if (!projectId.startsWith('local_')) {
       await apiDelete(`/api/projects/${encodeURIComponent(projectId)}`);
     }
@@ -1894,11 +1896,19 @@ ipcMain.handle('kyrozen:delete-project', async (_event, projectId: string) => {
       stopWatchingProjectFiles(projectId);
       currentProjectId = null;
     }
+    if (workspaceRoot) {
+      await deleteWorkspace(workspaceRoot, [
+        app.getPath('home'),
+        app.getPath('userData'),
+        app.getAppPath(),
+      ]);
+      logInfo(`Deleted local workspace for project ${projectId}: ${workspaceRoot}`);
+    }
     delete workspaceMap[projectId];
     delete workspaceNames[projectId];
     await Promise.all([saveWorkspaceMap(), saveWorkspaceNames()]);
-    logInfo(`Deleted project ${projectId}; local workspace was preserved`);
-    return { success: true, projectId, localWorkspacePreserved: true };
+    logInfo(`Deleted project ${projectId}; local workspace was removed`);
+    return { success: true, projectId, localWorkspaceDeleted: Boolean(workspaceRoot) };
   } catch (err: any) {
     return { success: false, error: err.message || '删除项目失败' };
   }
@@ -2252,6 +2262,25 @@ ipcMain.handle('kyrozen:commit-and-push', async (_event, message: string) => {
     return { success: false, error: '未选择项目工作区' };
   }
   return commitAndPush(root, githubAccessToken, message);
+});
+
+ipcMain.handle('kyrozen:generate-commit-message', async (_event, projectId?: string) => {
+  const root = projectId ? await getWorkspaceRoot(projectId) : getCurrentWorkspaceRoot();
+  if (!root) return { success: false, error: '未选择项目工作区' };
+  if (!accessToken) return { success: false, error: '未登录，无法请求 LLM' };
+  try {
+    const git = await getGitStatus(root);
+    const changedFiles = [...new Set([...(git.staged || []), ...(git.modified || []), ...(git.untracked || [])])];
+    if (changedFiles.length === 0) return { success: false, error: '当前没有文件变更' };
+    const result = await apiPost('/api/git/commit-message', {
+      project_id: projectId || currentProjectId,
+      changed_files: changedFiles,
+    }, true);
+    return { success: true, message: String(result.message || '') };
+  } catch (err: any) {
+    logWarn(`Failed to generate commit message with LLM: ${err.message || err}`);
+    return { success: false, error: err.message || 'LLM 暂时无法生成提交信息' };
+  }
 });
 
 ipcMain.handle('kyrozen:create-github-repo', async (_event, owner: string, name: string, description?: string, isPrivate?: boolean) => {

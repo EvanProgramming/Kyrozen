@@ -75,7 +75,9 @@ PROVIDER_BASE_URLS: dict[str, str] = {
 # Approximate cost per 1M tokens (input, output) in USD.
 # These defaults are estimates; override via KYROZEN_PROVIDER_COSTS env var.
 DEFAULT_PROVIDER_COSTS: dict[str, tuple[float, float]] = {
-    "deepseek": (0.27, 1.10),
+    # DeepSeek V4 Pro list price: uncached input/output USD per 1M tokens.
+    # Cache-hit input is handled separately by MembershipService.
+    "deepseek": (0.435, 0.87),
     "openai": (2.50, 10.00),
     "anthropic": (3.00, 15.00),
     "google": (0.15, 0.60),
@@ -141,6 +143,7 @@ class KyrozenConfig:
     github_oauth_redirect_uri: str = ""
     cors_origins: list[str] = field(default_factory=list)
     provider_costs: dict[str, tuple[float, float]] = field(default_factory=dict)
+    membership_usd_to_rmb: float = 7.3
     desktop_quota_default_limit: int = 0  # 0 means unlimited; positive value enforces token quota
     free_project_limit: int = 1
     developer_user_ids: list[str] = field(default_factory=list)
@@ -270,6 +273,11 @@ def get_config(
         github_oauth_client_secret=os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "") or file_data.get("github_oauth_client_secret", ""),
         github_oauth_redirect_uri=os.environ.get("GITHUB_OAUTH_REDIRECT_URI", "") or file_data.get("github_oauth_redirect_uri", ""),
         cors_origins=[o.strip() for o in (os.environ.get("KYROZEN_CORS_ORIGINS", "") or file_data.get("cors_origins", "")).split(",") if o.strip()],
+        membership_usd_to_rmb=float(
+            os.environ.get("KYROZEN_MEMBERSHIP_USD_TO_RMB", "")
+            or file_data.get("membership_usd_to_rmb", 7.3)
+            or 7.3
+        ),
         desktop_quota_default_limit=int(
             os.environ.get("KYROZEN_DESKTOP_QUOTA_DEFAULT_LIMIT", "")
             or file_data.get("desktop_quota_default_limit", 0)

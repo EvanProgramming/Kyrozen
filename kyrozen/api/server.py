@@ -42,6 +42,7 @@ from kyrozen.discovery import ProblemDiscoveryAgent
 from kyrozen.hardware.agent import HardwareDevelopmentAgent
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
+from kyrozen.membership import MembershipService
 from kyrozen.models import ModelInterface, get_model_provider
 from kyrozen.planning.agent import ProductPlanningAgent
 from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager, SupabaseDatabase, create_database
@@ -104,6 +105,7 @@ _context_builder: ProjectContextBuilder | None = None
 _learning_repository: LearningRepository | None = None
 _desktop_manager: DesktopClientManager | None = None
 _quota_manager: QuotaManager | None = None
+_membership_service: MembershipService | None = None
 _waitlist_store: WaitlistStore | None = None
 
 
@@ -479,6 +481,11 @@ class ChatRequest(BaseModel):
     stream: bool = Field(False, description="Stream task progress via Server-Sent Events")
 
 
+class CommitMessageRequest(BaseModel):
+    project_id: str | None = Field(None, description="Project ID for authorization and context")
+    changed_files: list[str] = Field(default_factory=list, max_length=200)
+
+
 class SignupRequest(BaseModel):
     email: str = Field(..., min_length=1)
     password: str = Field(..., min_length=6)
@@ -534,6 +541,14 @@ class CreateProjectRequest(BaseModel):
     description: str = ""
     goal: str = ""
     initial_idea: str = ""
+
+
+class MembershipPlanRequest(BaseModel):
+    plan: str = Field(..., pattern="^(free|lite|pro|ultimate|enterprise)$")
+
+
+class MembershipSeatRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
 
 
 class UpdateProjectRequest(BaseModel):
@@ -666,6 +681,12 @@ def _get_quota_manager() -> QuotaManager:
     return _quota_manager
 
 
+def _get_membership_service() -> MembershipService:
+    if _membership_service is None:
+        raise RuntimeError("Membership service not initialized")
+    return _membership_service
+
+
 def _get_project_manager() -> ProjectManager:
     if _project_manager is None:
         raise RuntimeError("Project manager not initialized")
@@ -721,6 +742,11 @@ def _is_developer_account(current_user: CurrentUser) -> bool:
         or ""
     ).casefold()
     return github_user in {name.casefold() for name in config.developer_github_users}
+
+
+def _is_developer_user_id(user_id: str) -> bool:
+    config = _config
+    return bool(config and (config.provider == "mock" or user_id in config.developer_user_ids))
 
 
 def _utc_now_iso() -> str:
@@ -803,10 +829,6 @@ async def _handle_model_request(
     messages = message.get("messages", [])
     stream = message.get("stream", True)
 
-    # Membership limits project count, not how far a user can progress inside
-    # an existing project. Token usage is still recorded for observability but
-    # never interrupts discovery, development, testing, or iteration.
-
     factory = _get_agent_factory()
     model = factory.model
     if model is None:
@@ -821,12 +843,32 @@ async def _handle_model_request(
         """Rough token estimator for usage tracking when the provider does not report tokens."""
         return max(1, len(text) // 4)
 
+    membership = _get_membership_service()
+    estimate = membership.estimate(
+        prompt_tokens=_estimate_tokens("".join(str(m.get("content", "")) for m in messages)),
+        completion_tokens=0,
+        provider=getattr(model, "provider_name", ""),
+        model=getattr(model, "model", ""),
+    )
+    if not _is_developer_user_id(user_id):
+        decision = membership.check(user_id, estimate)
+        if not decision["allowed"]:
+            await websocket.send_json({
+                "type": "model_error",
+                "request_id": request_id,
+                "error": decision["reason"],
+                "quota": decision,
+                "graceful_closing": bool(decision.get("graceful")),
+            })
+            return
+
     try:
         if not stream:
             response = await asyncio.to_thread(model.chat, messages)
             prompt_tokens = response.usage.prompt_tokens if response.usage else _estimate_tokens("".join(m.get("content", "") for m in messages))
             completion_tokens = response.usage.completion_tokens if response.usage else _estimate_tokens(response.content)
-            _get_quota_manager().record_usage(user_id, prompt_tokens, completion_tokens)
+            usage = membership.estimate(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, provider=getattr(model, "provider_name", ""), model=getattr(model, "model", ""))
+            membership.record_usage(user_id, usage, kind="model", provider=getattr(model, "provider_name", ""), model=getattr(model, "model", ""))
             await websocket.send_json({
                 "type": "model_stream_chunk",
                 "request_id": request_id,
@@ -853,7 +895,8 @@ async def _handle_model_request(
         full_content = "".join(full_content_parts)
         prompt_tokens = _estimate_tokens("".join(m.get("content", "") for m in messages))
         completion_tokens = _estimate_tokens(full_content)
-        _get_quota_manager().record_usage(user_id, prompt_tokens, completion_tokens)
+        usage = membership.estimate(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, provider=getattr(model, "provider_name", ""), model=getattr(model, "model", ""))
+        membership.record_usage(user_id, usage, kind="model", provider=getattr(model, "provider_name", ""), model=getattr(model, "model", ""))
         await websocket.send_json({
             "type": "model_stream_chunk",
             "request_id": request_id,
@@ -919,7 +962,7 @@ def _recommend_next_action(project: Any) -> dict[str, str] | None:
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository, _desktop_manager, _quota_manager, _waitlist_store
+        global _agent_factory, _config, _db, _project_manager, _context_builder, _learning_repository, _desktop_manager, _quota_manager, _membership_service, _waitlist_store
         _config = config or get_config()
         logger = get_logger(_config.log_level)
         issues = _config.validate()
@@ -967,6 +1010,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         )
         _desktop_manager = DesktopClientManager()
         _quota_manager = QuotaManager(default_limit=_config.desktop_quota_default_limit)
+        _membership_service = MembershipService(_db, _config)
         logger.agent("Kyrozen Core API started")
         yield
         logger.agent("Kyrozen Core API shutting down")
@@ -1739,6 +1783,23 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         request: ChatRequest,
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        if not _is_developer_account(current_user):
+            estimate = _get_membership_service().estimate(
+                prompt_tokens=max(1, len(request.message) // 4),
+                completion_tokens=0,
+            )
+            decision = _get_membership_service().check(current_user.user_id, estimate, conversation=True)
+            if not decision["allowed"]:
+                raise HTTPException(429, decision["reason"])
+            # Count the user-initiated conversation separately from model usage;
+            # this keeps the monthly conversation limit from double-counting
+            # the Desktop model proxy call while still making the reservation
+            # durable before the agent starts.
+            _get_membership_service().record_usage(
+                current_user.user_id,
+                _get_membership_service().estimate(prompt_tokens=0),
+                kind="conversation",
+            )
         if request.mode == "discovery":
             agent = _get_discovery_agent()
         elif request.mode == "market_research":
@@ -1919,6 +1980,52 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 )
             raise HTTPException(500, f"Agent error: {e}") from e
 
+    @app.post("/api/git/commit-message")
+    async def api_generate_commit_message(
+        request: CommitMessageRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Ask the configured LLM for a concise commit subject line.
+
+        This endpoint deliberately does not create a chat message or perform
+        any Git operation. The desktop only uses the returned text to populate
+        the commit input for the user's review.
+        """
+        if request.project_id:
+            _get_owned_project(request.project_id, current_user)
+        agent = _get_agent()
+        if agent.model is None:
+            raise HTTPException(503, "Model provider not configured")
+
+        files = [str(item).strip() for item in request.changed_files if str(item).strip()]
+        if not files:
+            raise HTTPException(400, "没有检测到文件变更")
+        files_text = "\n".join(f"- {item[:240]}" for item in files[:200])
+        response = await asyncio.to_thread(
+            agent.model.chat,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 Git 提交信息助手。根据变更文件列表生成一条简洁的 Conventional Commit subject。"
+                        "只能返回一行英文提交信息，格式为 type: description；不要返回引号、Markdown、解释、换行或正文。"
+                        "type 只能使用 feat、fix、refactor、docs、test、chore、style、perf。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"请为以下变更生成提交信息：\n{files_text}",
+                },
+            ],
+        )
+        message = str(response.content or "").strip()
+        message = re.sub(r"^```(?:text|bash|git)?\s*|\s*```$", "", message, flags=re.IGNORECASE).strip()
+        message = re.sub(r"^(?:提交信息|commit message)\s*[:：]\s*", "", message, flags=re.IGNORECASE)
+        message = message.splitlines()[0].strip().strip("`\"'")
+        if not message:
+            raise HTTPException(502, "模型没有生成有效的提交信息")
+        return {"message": message[:120]}
+
     @app.get("/api/tasks/{task_id}")
     async def api_get_task(
         task_id: str,
@@ -2026,13 +2133,11 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         current_user: CurrentUser = Depends(get_current_user),
     ):
         pm = _get_project_manager()
-        if _config is not None and not _is_developer_account(current_user):
+        if not _is_developer_account(current_user):
             existing = pm.list(user_id=current_user.user_id)
-            if len(existing) >= _config.free_project_limit:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"免费账户最多创建 {_config.free_project_limit} 个项目；已有项目可完整使用全部阶段。",
-                )
+            allowed, reason = _get_membership_service().project_decision(current_user.user_id, len(existing))
+            if not allowed:
+                raise HTTPException(status_code=403, detail=reason)
         project = pm.create(
             name=request.name,
             description=request.description,
@@ -2044,6 +2149,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if _config is not None:
             os.makedirs(_config.project_dir(project.id), exist_ok=True)
             _project_memory(project.id)
+        if not _is_developer_account(current_user):
+            _get_membership_service().record_project_creation(current_user.user_id, project.id)
         return project.to_dict()
 
     @app.get("/api/projects")
@@ -3281,18 +3388,74 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         current_user: CurrentUser = Depends(get_current_user),
     ):
         """Return membership information without blocking project stages."""
-        manager = _get_quota_manager()
-        status = manager.check_quota(current_user.user_id)
         developer = _is_developer_account(current_user)
+        if developer:
+            return {
+                "allowed": True,
+                "reason": "Developer unlimited",
+                "used": 0,
+                "limit": 0,
+                "remaining": -1,
+                "plan": "developer",
+                "project_limit": 0,
+                "weekly_credit_limit": 0,
+                "conversation_limit": 0,
+            }
+        status = _get_membership_service().status(current_user.user_id)
+        project_limit = {"free": 1, "lite": 5, "pro": 20, "ultimate": 0, "enterprise": 0}.get(status["plan"], 1)
         return {
-            "allowed": True,
-            "reason": "Developer unlimited" if developer else "Free plan: one complete project",
-            "used": status.used,
-            "limit": 0,
-            "remaining": -1,
-            "plan": "developer" if developer else "free",
-            "project_limit": 0 if developer else (_config.free_project_limit if _config else 1),
+            **status,
+            "used": status["used_credits"],
+            "limit": status["weekly_limit"],
+            "remaining": max(0, status["weekly_limit"] - status["used_credits"]) if status["weekly_limit"] else -1,
+            "project_limit": project_limit,
+            "weekly_credit_limit": status["weekly_limit"],
         }
+
+    @app.get("/api/membership")
+    async def api_membership(current_user: CurrentUser = Depends(get_current_user)):
+        if _is_developer_account(current_user):
+            return {"plan": "developer", "status": "active", "seats": [], "unlimited": True}
+        service = _get_membership_service()
+        return {**service.status(current_user.user_id), "seats": service.seats(current_user.user_id)}
+
+    @app.get("/api/usage")
+    async def api_usage(current_user: CurrentUser = Depends(get_current_user)):
+        if _is_developer_account(current_user):
+            return {"plan": "developer", "unlimited": True}
+        return _get_membership_service().status(current_user.user_id)
+
+    @app.post("/api/membership/seats")
+    async def api_add_membership_seat(
+        request: MembershipSeatRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        if _is_developer_account(current_user):
+            raise HTTPException(400, "开发者账户不需要家庭成员")
+        try:
+            return _get_membership_service().add_seat(current_user.user_id, request.user_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.delete("/api/membership/seats/{member_user_id}")
+    async def api_remove_membership_seat(
+        member_user_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        if not _get_membership_service().remove_seat(current_user.user_id, member_user_id):
+            raise HTTPException(404, "家庭成员不存在")
+        return {"status": "removed", "user_id": member_user_id}
+
+    @app.post("/api/admin/memberships/{user_id}")
+    async def api_set_membership_plan(
+        user_id: str,
+        request: MembershipPlanRequest,
+        admin: CurrentUser = Depends(require_admin),
+    ):
+        try:
+            return _get_membership_service().set_plan(user_id, request.plan)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.post("/api/desktop/pairing-code")
     async def api_create_pairing_code():
@@ -3426,7 +3589,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                         task = _db.get_task(task_id)
                         if task is not None:
                             task.result = result
-                            if status in {"completed", "failed", "cancelled"}:
+                            if status in {"completed", "completed_with_limit", "failed", "cancelled"}:
                                 task.update_status(status)
                             _db.save_task(task)
                             if (

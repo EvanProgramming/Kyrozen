@@ -106,7 +106,8 @@ class CloudProxyModelProvider(ModelInterface):
         if message.get("type") == "model_error" or "error" in message:
             with self._lock:
                 self._pending_chunks.pop(request_id, None)
-            error = RuntimeError(message.get("error", "Unknown model error"))
+            prefix = "会员额度已触发安全收尾：" if message.get("graceful_closing") else ""
+            error = RuntimeError(prefix + message.get("error", "Unknown model error"))
             loop.call_soon_threadsafe(future.set_exception, error)
             return
 

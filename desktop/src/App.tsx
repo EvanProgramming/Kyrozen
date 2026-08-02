@@ -9,6 +9,7 @@ import { ProgressPanel } from './components/ProgressPanel';
 import { PreviewPanel } from './components/PreviewPanel';
 import { SearchPanel } from './components/SearchPanel';
 import { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel';
+import { MembershipModal } from './components/MembershipModal';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -38,8 +39,18 @@ interface QuotaInfo {
   used: number;
   limit: number;
   remaining: number;
-  plan?: 'free' | 'developer';
+  plan?: 'free' | 'lite' | 'pro' | 'ultimate' | 'enterprise' | 'developer';
   project_limit?: number;
+  weekly_credit_limit?: number;
+  rolling_credits?: number;
+  rolling_limit?: number;
+  monthly_cost_rmb?: number;
+  monthly_cost_limit_rmb?: number;
+  conversations?: number;
+  conversation_limit?: number;
+  weekly_reset_at?: string;
+  rolling_reset_at?: string;
+  period_end?: string;
 }
 
 interface UserProfile {
@@ -51,7 +62,9 @@ interface UserProfile {
 
 function formatQuota(quota: QuotaInfo) {
   if (quota.plan === 'developer') return '开发者账户 · 无限制';
-  return `免费账户 · 可完整使用 ${quota.project_limit || 1} 个项目`;
+  const labels: Record<string, string> = { free: '免费', lite: 'Lite', pro: 'Pro', ultimate: 'Ultimate', enterprise: '企业' };
+  const projectText = quota.project_limit ? `同时 ${quota.project_limit} 个项目` : '项目不限';
+  return `${labels[quota.plan || 'free'] || '免费'}会员 · ${projectText}`;
 }
 
 const PROJECT_STAGE_LABELS: Record<string, string> = {
@@ -105,6 +118,7 @@ function App() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [projectActionNotice, setProjectActionNotice] = useState<string | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [showMembership, setShowMembership] = useState(false);
 
   const loadProjects = useCallback(async () => {
     if (!window.kyrozen) return;
@@ -127,6 +141,7 @@ function App() {
         await handleSelectProject(result.project.id);
       } else {
         setCreateProjectError(result.error || '项目创建失败');
+        await loadQuota();
       }
     } catch (err: any) {
       setCreateProjectError(err.message || '项目创建失败');
@@ -143,6 +158,17 @@ function App() {
       // quota display is non-critical
     }
   };
+
+  useEffect(() => {
+    if (!token) return undefined;
+    const refresh = () => { void loadQuota(); };
+    const timer = window.setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [token]);
 
   const loadFullTrust = async () => {
     if (!window.kyrozen) return;
@@ -555,6 +581,14 @@ function App() {
   const lastProjectId = localStorage.getItem('kyrozen:last-project-id');
   const lastProject = projects.find((project) => project.id === lastProjectId);
   const canCreateProject = quota?.plan === 'developer' || projects.length < (quota?.project_limit || 1);
+  const quotaNotice = quota && quota.plan !== 'developer' ? (() => {
+    if (quota.reason && quota.reason !== 'ok') return quota.reason;
+    if (quota.rolling_limit && (quota.rolling_credits || 0) >= quota.rolling_limit * 0.8) return '5小时内 Credit 使用较快，接近频率上限。';
+    if (quota.weekly_credit_limit && quota.used >= quota.weekly_credit_limit * 0.8) return '本周 Credit 已使用80%，请留意重置时间。';
+    if (quota.conversation_limit && (quota.conversations || 0) >= quota.conversation_limit * 0.8) return '本月对话次数已使用80%，达到上限后将于下个订阅月恢复。';
+    return null;
+  })() : null;
+  const quotaResetText = quota?.weekly_reset_at ? new Date(quota.weekly_reset_at).toLocaleString('zh-CN') : (quota?.period_end ? new Date(quota.period_end).toLocaleDateString('zh-CN') : '');
 
   return (
     <div className="h-screen w-screen flex flex-col bg-paper text-ink">
@@ -757,6 +791,14 @@ function App() {
           {/* UI cleanup: 本地文件 / 硬件工具链 moved into 设置; 会员权益 sits at the
               bottom-left corner of the sidebar. */}
           <div className="p-3 border-t border-line space-y-3 text-xs">
+            <button
+              type="button"
+              onClick={() => setShowMembership(true)}
+              className="w-full btn-primary text-sm py-2"
+              data-testid="buy-membership"
+            >
+              购买会员
+            </button>
             <label className="flex items-center justify-between cursor-pointer group">
               <span className={`${fullTrust ? 'text-warning font-medium' : 'text-ink-soft'}`}>
                 完全信任模式
@@ -785,6 +827,26 @@ function App() {
               <div className="text-ink-soft border-t border-line pt-3" title={quota.reason}>
                 <div className="font-medium mb-1">会员权益</div>
                 <div className="text-ink-faint">{formatQuota(quota)}</div>
+                {quota.weekly_credit_limit ? (
+                  <div className="text-ink-faint text-xs mt-1">本周 Credit：{quota.used}/{quota.weekly_credit_limit}</div>
+                ) : null}
+                {quota.rolling_limit ? (
+                  <div className="text-ink-faint text-xs">5小时窗口：{quota.rolling_credits || 0}/{quota.rolling_limit}（约{quota.rolling_reset_at ? new Date(quota.rolling_reset_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '稍后'}恢复）</div>
+                ) : null}
+                {quota.conversation_limit ? (
+                  <div className="text-ink-faint text-xs">本月对话：{quota.conversations || 0}/{quota.conversation_limit}</div>
+                ) : null}
+                {quota.monthly_cost_limit_rmb ? (
+                  <div className="text-ink-faint text-xs">本月成本：¥{quota.monthly_cost_rmb || 0}/{quota.monthly_cost_limit_rmb}</div>
+                ) : null}
+              </div>
+            )}
+            {quotaNotice && (
+              <div role="alert" aria-live="assertive" className="border-l-2 border-l-warning bg-warning-soft px-2 py-2 text-warning">
+                <div className="font-medium">额度提醒</div>
+                <div className="mt-0.5">{quotaNotice}</div>
+                {quotaResetText && <div className="mt-1 text-[11px]">订阅周期重置：{quotaResetText}</div>}
+                <button type="button" onClick={() => setShowMembership(true)} className="text-accent underline mt-1">查看会员方案</button>
               </div>
             )}
           </div>
@@ -897,7 +959,14 @@ function App() {
               </div>
             </div>
             {createProjectError && (
-              <div role="alert" className="mt-3 text-sm text-danger">{createProjectError}</div>
+              <div role="alert" className="mt-3 border-l-2 border-l-danger bg-danger-soft px-3 py-2 text-sm text-danger">
+                <div>{createProjectError}</div>
+                {/会员|额度|创建/.test(createProjectError) && (
+                  <button type="button" onClick={() => setShowMembership(true)} className="text-accent underline mt-1">
+                    查看会员方案与重置时间
+                  </button>
+                )}
+              </div>
             )}
             <div className="flex justify-end gap-2 mt-5">
               <button
@@ -950,7 +1019,7 @@ function App() {
             <p className="text-sm text-ink-soft mt-3">
               确定要删除“<span className="font-medium text-ink">{deleteTarget.name}</span>”吗？云端项目、聊天记录和阶段数据将被删除。
             </p>
-            <p className="text-xs text-ink-faint mt-2">本地工作区文件会保留，不会被删除。</p>
+            <p className="text-xs text-danger mt-2">本地工作区及其中的所有文件也会被永久删除，且无法恢复。</p>
             {projectActionNotice && <div role="alert" className="mt-3 text-sm text-danger">{projectActionNotice}</div>}
             <div className="flex justify-end gap-2 mt-5">
               <button type="button" className="btn-ghost text-sm" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>取消</button>
@@ -990,6 +1059,9 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+      {showMembership && (
+        <MembershipModal currentPlan={quota?.plan} onClose={() => setShowMembership(false)} />
       )}
     </div>
   );

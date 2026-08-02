@@ -1,5 +1,7 @@
 # Kyrozen
 
+https://afdian.com/a/Kyrozen
+
 Kyrozen is a product creation and management system. Its design goal is to help a user move from a fuzzy idea to a concrete project, then continue through research, product definition, solution design, implementation, testing, delivery, and recovery in one continuous workflow.
 
 The product is centered on a few principles:

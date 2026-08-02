@@ -6,9 +6,9 @@
 kyrozen.chat {
 	encode gzip
 
-	# Self-signed certificate for now; replace with Let's Encrypt once DNS
-	# filtering / domain registration issues are resolved.
-	tls internal
+# Use Caddy's publicly trusted certificate for OAuth and Afdian Webhook
+# callbacks. DNS for kyrozen.chat must point to this server and ports 80/443
+# must be reachable so Caddy can complete ACME validation.
 
 	# WebSocket upgrade support
 	@websockets {

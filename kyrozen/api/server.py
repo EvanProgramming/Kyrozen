@@ -9,6 +9,7 @@ import hmac
 import os
 import re
 import shutil
+import secrets
 from contextlib import asynccontextmanager
 import traceback
 import uuid
@@ -43,11 +44,14 @@ from kyrozen.hardware.agent import HardwareDevelopmentAgent
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
 from kyrozen.membership import MembershipService
+from kyrozen.membership.afdian import AfdianClient, AfdianError
 from kyrozen.models import ModelInterface, get_model_provider
 from kyrozen.planning.agent import ProductPlanningAgent
 from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager, SupabaseDatabase, create_database
 from kyrozen.project.project import PROJECT_STAGES
 from kyrozen.research.agent import MarketResearchAgent
+from kyrozen.discovery.evidence import Evidence
+from kyrozen.phase2 import build_workbench_snapshot
 
 
 def _encode_github_oauth_state(
@@ -551,6 +555,15 @@ class MembershipSeatRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
 
 
+class AfdianCheckoutRequest(BaseModel):
+    plan: str = Field(..., pattern="^(lite|pro|ultimate)$")
+
+
+class MembershipPaymentReviewRequest(BaseModel):
+    status: str = Field(..., pattern="^(open|resolved|rejected)$")
+    reason: str = ""
+
+
 class UpdateProjectRequest(BaseModel):
     name: str | None = None
     description: str | None = None
@@ -578,6 +591,32 @@ class CreateArtifactRequest(BaseModel):
     title: str = Field(..., min_length=1)
     content: str = ""
     change_reason: str = ""
+
+
+class CreateEvidenceRequest(BaseModel):
+    claim: str = Field(..., min_length=1)
+    source: str = Field("user_statement", pattern="^(user_statement|ai_inference|external_evidence)$")
+    evidence_type: str = Field("interview", pattern="^(interview|observation|survey|screenshot|video|public_source|user_statement|ai_inference|external_evidence)$")
+    verified: bool = False
+    confidence: str = Field("medium", pattern="^(low|medium|high)$")
+    notes: str = ""
+    source_url: str = ""
+    observed_at: str = ""
+    target_audience: str = ""
+    related_question: str = ""
+    counter_evidence: list[str] = Field(default_factory=list)
+
+
+class UpdateEvidenceRequest(BaseModel):
+    claim: str | None = Field(default=None, min_length=1)
+    verified: bool | None = None
+    confidence: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    notes: str | None = None
+    source_url: str | None = None
+    target_audience: str | None = None
+    related_question: str | None = None
+    counter_evidence: list[str] | None = None
+    status: str | None = Field(default=None, pattern="^(active|invalid|merged)$")
 
 
 class CreateFileSummaryRequest(BaseModel):
@@ -2245,6 +2284,91 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "next_action": next_action,
         }
 
+    # ------------------------------------------------------------------
+    # Phase 2 workbench: durable evidence and a single refreshable projection
+    # ------------------------------------------------------------------
+    @app.get("/api/projects/{project_id}/phase2/workbench")
+    async def api_phase2_workbench(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        project = _get_owned_project(project_id, current_user)
+        return build_workbench_snapshot(project, _get_project_manager())
+
+    @app.get("/api/projects/{project_id}/evidence")
+    async def api_list_evidence(
+        project_id: str,
+        include_invalid: bool = False,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        items = build_workbench_snapshot(_get_owned_project(project_id, current_user), _get_project_manager())["evidence"]["items"]
+        if not include_invalid:
+            items = [item for item in items if item.get("status", "active") == "active"]
+        return items
+
+    @app.post("/api/projects/{project_id}/evidence")
+    async def api_create_evidence(
+        project_id: str,
+        request: CreateEvidenceRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        evidence = Evidence(**request.model_dump())
+        artifact = _get_project_manager().save_artifact(
+            project_id=project_id,
+            type="discovery_evidence",
+            title=f"Evidence: {evidence.claim[:40]}",
+            content=json.dumps(evidence.to_dict(), ensure_ascii=False, indent=2),
+            change_reason="Evidence recorded from Phase 2 workbench",
+        )
+        data = evidence.to_dict()
+        data.update({"artifact_id": artifact.id, "version": artifact.version, "title": artifact.title})
+        return data
+
+    @app.patch("/api/projects/{project_id}/evidence/{artifact_id}")
+    async def api_update_evidence(
+        project_id: str,
+        artifact_id: str,
+        request: UpdateEvidenceRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        pm = _get_project_manager()
+        artifact = pm.get_artifact(project_id, artifact_id)
+        if artifact is None or artifact.type != "discovery_evidence":
+            raise HTTPException(404, "Evidence not found")
+        try:
+            evidence = Evidence.from_dict(json.loads(artifact.content))
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(422, f"Stored evidence is invalid: {exc}") from exc
+        for key, value in request.model_dump(exclude_none=True).items():
+            setattr(evidence, key, value)
+        evidence.__post_init__()
+        updated = pm.save_artifact(
+            project_id=project_id,
+            type=artifact.type,
+            title=artifact.title,
+            content=json.dumps(evidence.to_dict(), ensure_ascii=False, indent=2),
+            change_reason="Evidence updated in Phase 2 workbench",
+        )
+        data = evidence.to_dict()
+        data.update({"artifact_id": updated.id, "version": updated.version, "title": updated.title})
+        return data
+
+    @app.post("/api/projects/{project_id}/evidence/{artifact_id}/restore")
+    async def api_restore_evidence(
+        project_id: str,
+        artifact_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        return await api_update_evidence(
+            project_id,
+            artifact_id,
+            UpdateEvidenceRequest(status="active"),
+            current_user,
+        )
+
     @app.get("/api/projects/{project_id}/chat")
     async def api_get_project_chat(
         project_id: str,
@@ -3424,6 +3548,102 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if _is_developer_account(current_user):
             return {"plan": "developer", "unlimited": True}
         return _get_membership_service().status(current_user.user_id)
+
+    @app.get("/api/membership/afdian/connect")
+    async def api_afdian_connect(current_user: CurrentUser = Depends(get_current_user)):
+        config = _config
+        if config is None or not config.afdian_client_id or not config.afdian_client_secret:
+            raise HTTPException(503, "爱发电 OAuth 尚未配置")
+        service = _get_membership_service()
+        state = secrets.token_urlsafe(32)
+        redirect_uri = config.afdian_oauth_redirect_uri or f"{config.afdian_webhook_public_url.rstrip('/')}/api/membership/afdian/oauth/callback"
+        if not redirect_uri.startswith("https://"):
+            raise HTTPException(503, "爱发电 OAuth 回调地址必须使用 HTTPS")
+        state_info = service.create_afdian_oauth_state(current_user.user_id, state, redirect_uri)
+        return {"authorize_url": AfdianClient(config).oauth_url(state, redirect_uri), **state_info}
+
+    @app.get("/api/membership/afdian/oauth/callback")
+    async def api_afdian_oauth_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+        service = _get_membership_service()
+        if not state:
+            return RedirectResponse("kyrozen://billing/afdian/callback?success=0&reason=missing_state")
+        state_row = service.consume_afdian_oauth_state(state)
+        if not state_row:
+            return RedirectResponse("kyrozen://billing/afdian/callback?success=0&reason=invalid_state")
+        if error or not code or _config is None:
+            return RedirectResponse("kyrozen://billing/afdian/callback?success=0&reason=authorization_failed")
+        try:
+            account = AfdianClient(_config).exchange_code(code, state_row["redirect_uri"])
+            if not account.user_id or not account.user_private_id:
+                raise AfdianError("OAuth 未返回完整用户信息")
+            service.bind_afdian_account(state_row["user_id"], account.user_id, account.user_private_id)
+        except (AfdianError, ValueError):
+            return RedirectResponse("kyrozen://billing/afdian/callback?success=0&reason=binding_failed")
+        return RedirectResponse("kyrozen://billing/afdian/callback?success=1")
+
+    @app.post("/api/membership/afdian/checkout")
+    async def api_afdian_checkout(request: AfdianCheckoutRequest, current_user: CurrentUser = Depends(get_current_user)):
+        if _config is None:
+            raise HTTPException(503, "支付服务未配置")
+        client = AfdianClient(_config)
+        plan_id = client.plan_ids().get(request.plan, "")
+        if not plan_id:
+            raise HTTPException(503, "该会员方案尚未配置爱发电方案 ID")
+        try:
+            return _get_membership_service().create_afdian_checkout(current_user.user_id, request.plan, plan_id, client.checkout_url(plan_id))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/membership/afdian/payment-status/{checkout_id}")
+    async def api_afdian_payment_status(checkout_id: str, current_user: CurrentUser = Depends(get_current_user)):
+        session = _get_membership_service().afdian_checkout(current_user.user_id, checkout_id)
+        if not session:
+            raise HTTPException(404, "付款会话不存在")
+        return session
+
+    @app.post("/api/webhooks/afdian")
+    async def api_afdian_webhook(request: Request):
+        payload = await request.json()
+        order = payload.get("data", {}).get("order", payload.get("order", payload)) if isinstance(payload, dict) else {}
+        service = _get_membership_service()
+        trade = str(order.get("out_trade_no") or "")
+        client = AfdianClient(_config) if _config else None
+        def review(reason: str):
+            service.add_payment_review(trade or None, reason, {"order": order})
+            return {"ec": 200, "em": "ok"}
+        if not trade or int(order.get("status") or 0) != 2 or client is None:
+            return review("订单缺少订单号、未成功或支付服务未配置")
+        plan = client.plan_for_id(str(order.get("plan_id") or ""))
+        if not plan:
+            return review("未知爱发电方案 ID")
+        account = service._query("SELECT * FROM afdian_accounts WHERE afdian_user_id = ?", (str(order.get("user_id") or ""),))
+        if not account:
+            return review("爱发电用户未绑定 Kyrozen 账号")
+        try:
+            confirmed = client.query_order(trade)
+        except AfdianError:
+            return review("爱发电订单二次查询失败")
+        if int(confirmed.get("status") or 0) != 2 or str(confirmed.get("plan_id")) != str(order.get("plan_id")) or str(confirmed.get("user_id")) != str(order.get("user_id")):
+            return review("订单二次校验不匹配")
+        if not service.record_afdian_order(confirmed, user_id=account["user_id"], plan=plan):
+            return {"ec": 200, "em": "ok"}
+        service.grant_afdian_order(confirmed, user_id=account["user_id"], plan=plan)
+        return {"ec": 200, "em": "ok"}
+
+    @app.get("/api/admin/membership-payments")
+    async def api_admin_membership_payments(admin: CurrentUser = Depends(require_admin)):
+        service = _get_membership_service()
+        return {"orders": service._query("SELECT * FROM afdian_orders ORDER BY created_at DESC", all_rows=True) or [], "reviews": service._query("SELECT * FROM membership_payment_reviews ORDER BY created_at DESC", all_rows=True) or []}
+
+    @app.post("/api/admin/membership-payments/{order_id}/review")
+    async def api_admin_review_payment(order_id: str, request: MembershipPaymentReviewRequest, admin: CurrentUser = Depends(require_admin)):
+        service = _get_membership_service()
+        resolved_at = datetime.now(timezone.utc).isoformat()
+        if service._is_supabase:
+            service.db.client.table("membership_payment_reviews").update({"status": request.status, "reason": request.reason, "resolved_at": resolved_at, "resolved_by": admin.user_id}).eq("id", order_id).execute()
+        else:
+            service._execute("UPDATE membership_payment_reviews SET status = ?, reason = ?, resolved_at = ?, resolved_by = ? WHERE id = ?", (request.status, request.reason, resolved_at, admin.user_id, order_id))
+        return {"status": request.status, "id": order_id}
 
     @app.post("/api/membership/seats")
     async def api_add_membership_seat(

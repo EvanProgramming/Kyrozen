@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { CreateProjectRequest, Project, ProjectState } from '../types/api';
+import type { CreateProjectRequest, Evidence, Phase2Workbench, Project, ProjectState } from '../types/api';
 
 export async function listProjects(): Promise<Project[]> {
   const response = await apiClient.get<Project[]>('/projects');
@@ -51,5 +51,15 @@ export async function getProjectState(projectId: string): Promise<ProjectState> 
 
 export async function advanceProjectStage(projectId: string): Promise<Project> {
   const response = await apiClient.post<Project>(`/projects/${projectId}/advance`, {});
+  return response.data;
+}
+
+export async function getPhase2Workbench(projectId: string): Promise<Phase2Workbench> {
+  const response = await apiClient.get<Phase2Workbench>(`/projects/${projectId}/phase2/workbench`);
+  return response.data;
+}
+
+export async function createEvidence(projectId: string, evidence: Omit<Evidence, 'artifact_id' | 'version' | 'title' | 'observed_at' | 'status'>): Promise<Evidence> {
+  const response = await apiClient.post<Evidence>(`/projects/${projectId}/evidence`, evidence);
   return response.data;
 }

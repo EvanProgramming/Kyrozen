@@ -141,6 +141,40 @@ def test_record_evidence_tool_via_api(api_client: TestClient):
     assert res.json()["success"] is True
 
 
+def test_phase2_evidence_workbench_persists_and_restores(api_client: TestClient):
+    create = api_client.post("/api/projects", json={"name": "Evidence Workbench"})
+    pid = create.json()["id"]
+
+    created = api_client.post(f"/api/projects/{pid}/evidence", json={
+        "claim": "三名社区组织者在活动后仍需人工核对报名名单",
+        "source": "user_statement",
+        "evidence_type": "interview",
+        "target_audience": "社区组织者",
+        "related_question": "活动结束后最耗时的工作是什么？",
+        "confidence": "high",
+    })
+    assert created.status_code == 200
+    evidence = created.json()
+    assert evidence["version"] == 1
+    assert evidence["evidence_type"] == "interview"
+
+    snapshot = api_client.get(f"/api/projects/{pid}/phase2/workbench")
+    assert snapshot.status_code == 200
+    assert snapshot.json()["evidence"]["active_count"] == 1
+    assert snapshot.json()["evidence"]["by_type"] == {"interview": 1}
+
+    updated = api_client.patch(f"/api/projects/{pid}/evidence/{evidence['artifact_id']}", json={"status": "invalid"})
+    assert updated.status_code == 200
+    assert updated.json()["version"] == 2
+    assert api_client.get(f"/api/projects/{pid}/evidence").json() == []
+    assert len(api_client.get(f"/api/projects/{pid}/evidence", params={"include_invalid": "true"}).json()) == 1
+
+    restored = api_client.post(f"/api/projects/{pid}/evidence/{updated.json()['artifact_id']}/restore")
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "active"
+    assert api_client.get(f"/api/projects/{pid}/evidence").json()[0]["claim"].startswith("三名社区")
+
+
 def test_record_evidence_tool_falls_back_to_workspace_when_artifact_store_fails(tmp_path):
     from kyrozen.tools.discovery_tools import RecordEvidenceTool
 

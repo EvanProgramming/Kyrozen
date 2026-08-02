@@ -141,6 +141,20 @@ class KyrozenConfig:
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = ""
+    # Afdian payment integration. Secrets are intentionally environment-only
+    # in production; plan IDs are safe to expose in server responses.
+    afdian_client_id: str = ""
+    afdian_client_secret: str = ""
+    afdian_open_user_id: str = ""
+    afdian_open_api_token: str = ""
+    afdian_plan_id_lite: str = ""
+    afdian_plan_id_pro: str = ""
+    afdian_plan_id_ultimate: str = ""
+    afdian_webhook_public_url: str = ""
+    afdian_oauth_redirect_uri: str = ""
+    afdian_oauth_authorize_url: str = "https://afdian.net/oauth2/authorize"
+    afdian_checkout_url_template: str = "https://afdian.com/a/Kyrozen/plan?plan_id={plan_id}"
+    afdian_api_base_url: str = "https://afdian.net/api"
     cors_origins: list[str] = field(default_factory=list)
     provider_costs: dict[str, tuple[float, float]] = field(default_factory=dict)
     membership_usd_to_rmb: float = 7.3
@@ -272,6 +286,18 @@ def get_config(
         github_oauth_client_id=os.environ.get("GITHUB_OAUTH_CLIENT_ID", "") or file_data.get("github_oauth_client_id", ""),
         github_oauth_client_secret=os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "") or file_data.get("github_oauth_client_secret", ""),
         github_oauth_redirect_uri=os.environ.get("GITHUB_OAUTH_REDIRECT_URI", "") or file_data.get("github_oauth_redirect_uri", ""),
+        afdian_client_id=os.environ.get("AFDIAN_CLIENT_ID", "") or file_data.get("afdian_client_id", ""),
+        afdian_client_secret=os.environ.get("AFDIAN_CLIENT_SECRET", "") or file_data.get("afdian_client_secret", ""),
+        afdian_open_user_id=os.environ.get("AFDIAN_OPEN_USER_ID", "") or file_data.get("afdian_open_user_id", ""),
+        afdian_open_api_token=os.environ.get("AFDIAN_OPEN_API_TOKEN", "") or file_data.get("afdian_open_api_token", ""),
+        afdian_plan_id_lite=os.environ.get("AFDIAN_PLAN_ID_LITE", "") or file_data.get("afdian_plan_id_lite", ""),
+        afdian_plan_id_pro=os.environ.get("AFDIAN_PLAN_ID_PRO", "") or file_data.get("afdian_plan_id_pro", ""),
+        afdian_plan_id_ultimate=os.environ.get("AFDIAN_PLAN_ID_ULTIMATE", "") or file_data.get("afdian_plan_id_ultimate", ""),
+        afdian_webhook_public_url=os.environ.get("AFDIAN_WEBHOOK_PUBLIC_URL", "") or file_data.get("afdian_webhook_public_url", ""),
+        afdian_oauth_redirect_uri=os.environ.get("AFDIAN_OAUTH_REDIRECT_URI", "") or file_data.get("afdian_oauth_redirect_uri", ""),
+        afdian_oauth_authorize_url=os.environ.get("AFDIAN_OAUTH_AUTHORIZE_URL", "") or file_data.get("afdian_oauth_authorize_url", "https://afdian.net/oauth2/authorize"),
+        afdian_checkout_url_template=os.environ.get("AFDIAN_CHECKOUT_URL_TEMPLATE", "") or file_data.get("afdian_checkout_url_template", "https://afdian.com/a/Kyrozen/plan?plan_id={plan_id}"),
+        afdian_api_base_url=os.environ.get("AFDIAN_API_BASE_URL", "") or file_data.get("afdian_api_base_url", "https://afdian.net/api"),
         cors_origins=[o.strip() for o in (os.environ.get("KYROZEN_CORS_ORIGINS", "") or file_data.get("cors_origins", "")).split(",") if o.strip()],
         membership_usd_to_rmb=float(
             os.environ.get("KYROZEN_MEMBERSHIP_USD_TO_RMB", "")

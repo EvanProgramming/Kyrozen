@@ -2066,6 +2066,34 @@ ipcMain.handle('kyrozen:get-quota', async () => {
   }
 });
 
+ipcMain.handle('kyrozen:start-afdian-connect', async () => {
+  try {
+    const data = await apiGet('/api/membership/afdian/connect');
+    if (data.authorize_url) await shell.openExternal(data.authorize_url);
+    return data;
+  } catch (err: any) {
+    return { error: err.message || '无法打开爱发电授权' };
+  }
+});
+
+ipcMain.handle('kyrozen:start-afdian-checkout', async (_event, plan: 'lite' | 'pro' | 'ultimate') => {
+  try {
+    const data = await apiPost('/api/membership/afdian/checkout', { plan }, true);
+    if (data.checkout_url) await shell.openExternal(data.checkout_url);
+    return data;
+  } catch (err: any) {
+    return { error: err.message || '无法创建付款会话' };
+  }
+});
+
+ipcMain.handle('kyrozen:get-afdian-payment-status', async (_event, checkoutId: string) => {
+  try {
+    return await apiGet(`/api/membership/afdian/payment-status/${encodeURIComponent(checkoutId)}`);
+  } catch (err: any) {
+    return { error: err.message || '无法查询付款状态' };
+  }
+});
+
 ipcMain.handle('kyrozen:get-server-url', () => serverUrl);
 
 ipcMain.handle('kyrozen:set-server-url', async (_event, url: string) => {

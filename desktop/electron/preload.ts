@@ -47,6 +47,9 @@ contextBridge.exposeInMainWorld('kyrozen', {
   exportProject: (projectId: string) => ipcRenderer.invoke('kyrozen:export-project', projectId),
 
   getQuota: () => ipcRenderer.invoke('kyrozen:get-quota'),
+  startAfdianConnect: () => ipcRenderer.invoke('kyrozen:start-afdian-connect'),
+  startAfdianCheckout: (plan: 'lite' | 'pro' | 'ultimate') => ipcRenderer.invoke('kyrozen:start-afdian-checkout', plan),
+  getAfdianPaymentStatus: (checkoutId: string) => ipcRenderer.invoke('kyrozen:get-afdian-payment-status', checkoutId),
   getServerUrl: () => ipcRenderer.invoke('kyrozen:get-server-url'),
   setServerUrl: (url: string) => ipcRenderer.invoke('kyrozen:set-server-url', url),
   getFullTrust: () => ipcRenderer.invoke('kyrozen:get-full-trust'),

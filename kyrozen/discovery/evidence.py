@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from .brief import CONFIDENCE_LEVELS, EVIDENCE_SOURCES
@@ -17,12 +18,26 @@ class Evidence:
     verified: bool = False
     confidence: str = "medium"  # low / medium / high
     notes: str = ""
+    evidence_type: str = "user_statement"
+    source_url: str = ""
+    observed_at: str = ""
+    target_audience: str = ""
+    related_question: str = ""
+    counter_evidence: list[str] = field(default_factory=list)
+    status: str = "active"  # active / invalid / merged
 
     def __post_init__(self) -> None:
         if self.source not in EVIDENCE_SOURCES:
             raise ValueError(f"Invalid evidence source '{self.source}'")
         if self.confidence not in CONFIDENCE_LEVELS:
             raise ValueError(f"Invalid confidence '{self.confidence}'")
+        valid_types = {"interview", "observation", "survey", "screenshot", "video", "public_source", "user_statement", "ai_inference", "external_evidence"}
+        if self.evidence_type not in valid_types:
+            raise ValueError(f"Invalid evidence_type '{self.evidence_type}'")
+        if self.status not in {"active", "invalid", "merged"}:
+            raise ValueError(f"Invalid evidence status '{self.status}'")
+        if not self.observed_at:
+            self.observed_at = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +46,13 @@ class Evidence:
             "verified": self.verified,
             "confidence": self.confidence,
             "notes": self.notes,
+            "evidence_type": self.evidence_type,
+            "source_url": self.source_url,
+            "observed_at": self.observed_at,
+            "target_audience": self.target_audience,
+            "related_question": self.related_question,
+            "counter_evidence": list(self.counter_evidence),
+            "status": self.status,
         }
 
     @classmethod
@@ -41,6 +63,13 @@ class Evidence:
             verified=data.get("verified", False),
             confidence=data.get("confidence", "medium"),
             notes=data.get("notes", ""),
+            evidence_type=data.get("evidence_type", data.get("source", "user_statement")),
+            source_url=data.get("source_url", ""),
+            observed_at=data.get("observed_at", ""),
+            target_audience=data.get("target_audience", ""),
+            related_question=data.get("related_question", ""),
+            counter_evidence=list(data.get("counter_evidence") or []),
+            status=data.get("status", "active"),
         )
 
 

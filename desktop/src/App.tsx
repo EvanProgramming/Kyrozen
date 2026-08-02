@@ -119,6 +119,7 @@ function App() {
   const [projectActionNotice, setProjectActionNotice] = useState<string | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showMembership, setShowMembership] = useState(false);
+  const [afdianCallbackVersion, setAfdianCallbackVersion] = useState(0);
 
   const loadProjects = useCallback(async () => {
     if (!window.kyrozen) return;
@@ -237,7 +238,13 @@ function App() {
       });
 
     const unsubProtocolUrl = window.kyrozen.onProtocolUrl(async (url: string) => {
-      const params = new URL(url).searchParams;
+      const parsed = new URL(url);
+      if (parsed.hostname === 'billing' && parsed.pathname === '/afdian/callback') {
+        setAfdianCallbackVersion((value) => value + 1);
+        await loadQuota();
+        return;
+      }
+      const params = parsed.searchParams;
       const openToken = params.get('token');
       const projectId = params.get('project_id');
       if (openToken && window.kyrozen) {
@@ -1061,7 +1068,7 @@ function App() {
         </div>
       )}
       {showMembership && (
-        <MembershipModal currentPlan={quota?.plan} onClose={() => setShowMembership(false)} />
+        <MembershipModal currentPlan={quota?.plan} onClose={() => setShowMembership(false)} onRefresh={loadQuota} afdianCallbackVersion={afdianCallbackVersion} />
       )}
     </div>
   );

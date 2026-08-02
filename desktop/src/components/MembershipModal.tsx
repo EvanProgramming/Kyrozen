@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type PlanKey = 'free' | 'lite' | 'pro' | 'ultimate';
 
 interface MembershipModalProps {
   currentPlan?: string;
   onClose: () => void;
+  onRefresh?: () => Promise<void>;
+  afdianCallbackVersion?: number;
 }
 
 const plans: Array<{
@@ -23,12 +25,64 @@ const plans: Array<{
   { key: 'ultimate', name: 'Ultimate', price: '¥2,999/月', projects: '不限', credit: '不限制（每日频控）', conversations: '不限', frequency: '每日预算 + 4并发', note: '可添加3个家庭成员' },
 ];
 
-export function MembershipModal({ currentPlan, onClose }: MembershipModalProps) {
+export function MembershipModal({ currentPlan, onClose, onRefresh, afdianCallbackVersion = 0 }: MembershipModalProps) {
   const [notice, setNotice] = useState('');
+  const [busyPlan, setBusyPlan] = useState<PlanKey | null>(null);
+  const [checkoutId, setCheckoutId] = useState<string | null>(null);
+  const [pendingPlan, setPendingPlan] = useState<PlanKey | null>(null);
 
-  const choosePlan = (plan: PlanKey) => {
+  useEffect(() => {
+    if (!checkoutId || !window.kyrozen) return undefined;
+    const poll = async () => {
+      const result = await window.kyrozen!.getAfdianPaymentStatus(checkoutId);
+      if (result.status === 'paid') {
+        setNotice('付款已确认，会员权益已开通。');
+        setCheckoutId(null);
+        await onRefresh?.();
+      } else if (result.status === 'expired') {
+        setNotice('付款会话已超时，请重新选择方案。');
+        setCheckoutId(null);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 5000);
+    return () => window.clearInterval(timer);
+  }, [checkoutId, onRefresh]);
+
+  useEffect(() => {
+    if (afdianCallbackVersion > 0 && pendingPlan) {
+      const plan = pendingPlan;
+      setPendingPlan(null);
+      void choosePlan(plan);
+    }
+  }, [afdianCallbackVersion]);
+
+  const choosePlan = async (plan: PlanKey) => {
     if (plan === currentPlan) return;
-    setNotice('支付功能正在接入中。当前会员权益已可由管理员开通，正式购买入口上线后会在此完成支付。');
+    if (!window.kyrozen || plan === 'free') return;
+    setBusyPlan(plan);
+    setNotice('正在创建爱发电付款会话…');
+    try {
+      const checkout = await window.kyrozen.startAfdianCheckout(plan);
+      if (checkout.error) {
+        if (checkout.error.includes('绑定')) {
+          setPendingPlan(plan);
+          const connect = await window.kyrozen.startAfdianConnect();
+          setNotice(connect.error ? connect.error : '请在打开的爱发电页面完成授权，授权后回到 Kyrozen 再点击购买。');
+        } else {
+          setNotice(checkout.error);
+        }
+        return;
+      }
+      if (checkout.id) {
+        setCheckoutId(checkout.id);
+        setNotice('已打开爱发电付款页面，付款后 Kyrozen 会自动确认并刷新权益。');
+      }
+    } catch (error: any) {
+      setNotice(error?.message || '付款会话创建失败，请稍后重试。');
+    } finally {
+      setBusyPlan(null);
+    }
   };
 
   return (
@@ -85,8 +139,8 @@ export function MembershipModal({ currentPlan, onClose }: MembershipModalProps) 
 
         <div className="flex flex-wrap justify-end gap-2 mt-5">
           {plans.filter((plan) => plan.key !== 'free').map((plan) => (
-            <button key={plan.key} type="button" className={plan.key === currentPlan ? 'btn-secondary text-sm' : 'btn-primary text-sm'} onClick={() => choosePlan(plan.key)}>
-              {plan.key === currentPlan ? '当前方案' : `购买 ${plan.name}`}
+            <button key={plan.key} type="button" disabled={busyPlan !== null || checkoutId !== null} className={plan.key === currentPlan ? 'btn-secondary text-sm' : 'btn-primary text-sm'} onClick={() => void choosePlan(plan.key)}>
+              {busyPlan === plan.key ? '处理中…' : plan.key === currentPlan ? '当前方案' : `购买 ${plan.name}`}
             </button>
           ))}
           <button type="button" onClick={onClose} className="btn-ghost text-sm">稍后再说</button>

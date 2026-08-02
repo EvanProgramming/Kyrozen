@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Layout } from '../components/Layout';
-import { getProject, getProjectState } from '../api/projects';
+import { createEvidence, getPhase2Workbench, getProject, getProjectState } from '../api/projects';
 import { sendChatMessage, getTask, confirmTask, getChatHistory } from '../api/chat';
 import { handleApiError } from '../api/client';
-import type { Project, ProjectState, Task } from '../types/api';
+import type { Phase2Workbench, Project, ProjectState, Task } from '../types/api';
 import { ChatIcon, DocumentIcon, SendIcon, SparklesIcon } from '../components/Icons';
 import { QuestionModal, type QuestionData } from '../components/QuestionModal';
 
@@ -59,7 +59,9 @@ export function ProjectWorkspacePage() {
   const [projectState, setProjectState] = useState<ProjectState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<'overview' | 'chat'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'workbench' | 'chat'>('overview');
+  const [workbench, setWorkbench] = useState<Phase2Workbench | null>(null);
+  const [evidenceClaim, setEvidenceClaim] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -158,9 +160,36 @@ export function ProjectWorkspacePage() {
       ]);
       setProject(projectData);
       setProjectState(stateData);
+      if (activeTab === 'workbench') setWorkbench(await getPhase2Workbench(projectId));
     } catch (err) {
       // Non-fatal refresh error; the existing error state remains visible.
       console.error('Failed to refresh project state', err);
+    }
+  }
+
+  async function openWorkbench() {
+    if (!projectId) return;
+    setActiveTab('workbench');
+    try {
+      setWorkbench(await getPhase2Workbench(projectId));
+    } catch (err) {
+      setError(handleApiError(err));
+    }
+  }
+
+  async function submitEvidence(e: React.FormEvent) {
+    e.preventDefault();
+    if (!projectId || !evidenceClaim.trim()) return;
+    try {
+      await createEvidence(projectId, {
+        claim: evidenceClaim.trim(), source: 'user_statement', evidence_type: 'interview',
+        verified: false, confidence: 'medium', notes: '', source_url: '',
+        target_audience: '', related_question: '', counter_evidence: [],
+      });
+      setEvidenceClaim('');
+      setWorkbench(await getPhase2Workbench(projectId));
+    } catch (err) {
+      setError(handleApiError(err));
     }
   }
 
@@ -354,6 +383,9 @@ export function ProjectWorkspacePage() {
                     {stage.label}
                   </button>
                 ))}
+                <button onClick={openWorkbench} className={`w-full mt-3 px-3 py-2.5 rounded-xl text-sm text-left ${activeTab === 'workbench' ? 'bg-amber-50 text-amber-700 font-medium' : 'text-warm-600 hover:bg-warm-50'}`}>
+                  第二阶段工作台
+                </button>
               </nav>
             </div>
           </div>
@@ -417,6 +449,30 @@ export function ProjectWorkspacePage() {
                   <p className="text-sm text-warm-500 mt-2">{project.progress}% 完成</p>
                 </div>
               </>
+            ) : activeTab === 'workbench' ? (
+              <div className="space-y-6">
+                <div className="card bg-gradient-to-br from-amber-50 to-white border-amber-100">
+                  <h2 className="text-xl mb-2">第二阶段工作台</h2>
+                  <p className="text-warm-600">统一查看证据、研究、决策、硬件和验证状态；所有记录来自项目持久化数据。</p>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="card"><p className="text-sm text-warm-500">有效证据</p><p className="text-2xl font-semibold">{workbench?.evidence.active_count ?? '—'}</p></div>
+                  <div className="card"><p className="text-sm text-warm-500">研究来源</p><p className="text-2xl font-semibold">{workbench?.research.source_count ?? '—'}</p></div>
+                  <div className="card"><p className="text-sm text-warm-500">方案候选</p><p className="text-2xl font-semibold">{workbench?.solutions.count ?? '—'}</p></div>
+                  <div className="card"><p className="text-sm text-warm-500">项目风险</p><p className="text-2xl font-semibold">{workbench?.risks.length ?? '—'}</p></div>
+                </div>
+                <div className="card">
+                  <h3 className="text-lg mb-3">新增证据</h3>
+                  <form onSubmit={submitEvidence} className="flex gap-2">
+                    <input className="input flex-1" value={evidenceClaim} onChange={(e) => setEvidenceClaim(e.target.value)} placeholder="记录访谈、观察或公开资料中的事实…" />
+                    <button className="btn-primary" disabled={!evidenceClaim.trim()}>保存</button>
+                  </form>
+                </div>
+                <div className="card">
+                  <h3 className="text-lg mb-3">证据记录</h3>
+                  {workbench?.evidence.items.length ? <div className="space-y-3">{workbench.evidence.items.map((item) => <div key={`${item.artifact_id}-${item.version}`} className="border-b border-warm-100 pb-3"><p className="font-medium">{item.claim}</p><p className="text-xs text-warm-500 mt-1">{item.evidence_type} · {item.confidence} · {item.status === 'active' ? '有效' : '已标记无效'} · v{item.version}</p></div>)}</div> : <p className="text-warm-500">还没有证据记录。</p>}
+                </div>
+              </div>
             ) : (
               <div className="card min-h-[500px] lg:h-[calc(100vh-10rem)] flex flex-col">
                 <div className="flex items-center gap-3 mb-6">

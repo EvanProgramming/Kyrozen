@@ -70,6 +70,67 @@ CREATE TABLE IF NOT EXISTS task_budget_states (
     reason TEXT,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS afdian_accounts (
+    user_id TEXT PRIMARY KEY,
+    afdian_user_id TEXT UNIQUE NOT NULL,
+    afdian_user_private_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS afdian_oauth_states (
+    state TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS afdian_checkout_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    plan_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    checkout_url TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS afdian_orders (
+    out_trade_no TEXT PRIMARY KEY,
+    user_id TEXT,
+    afdian_user_id TEXT,
+    afdian_user_private_id TEXT,
+    plan TEXT,
+    plan_id TEXT,
+    month INTEGER NOT NULL DEFAULT 1,
+    total_amount REAL,
+    status INTEGER,
+    raw_payload TEXT,
+    verification_status TEXT NOT NULL DEFAULT 'pending',
+    review_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS membership_grants (
+    id TEXT PRIMARY KEY,
+    out_trade_no TEXT UNIQUE NOT NULL,
+    user_id TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS membership_payment_reviews (
+    id TEXT PRIMARY KEY,
+    out_trade_no TEXT,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    metadata TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolved_by TEXT
+);
 """
 
 
@@ -202,6 +263,27 @@ class MembershipService:
             kind = params[3] if "AND kind = ?" in sql else None
             selected = [row for row in rows if str(row.get("created_at", "")) >= start and (end is None or str(row.get("created_at", "")) < end) and (kind is None or row.get("kind") == kind)]
             return {"credits": sum(float(row.get("credits") or 0) for row in selected), "cost": sum(float(row.get("cost_rmb") or 0) for row in selected), "conversations": len(selected)}
+        if "FROM afdian_accounts" in sql:
+            filters = [("user_id", params[0])] if "user_id = ?" in sql else [("afdian_user_id", params[0])]
+            rows = self._supabase_query("afdian_accounts", filters)
+            return rows if all_rows else (rows[0] if rows else None)
+        if "FROM afdian_checkout_sessions" in sql:
+            filters = [("id", params[0])]
+            if len(params) > 1:
+                filters.append(("user_id", params[1]))
+            rows = self._supabase_query("afdian_checkout_sessions", filters)
+            return rows if all_rows else (rows[0] if rows else None)
+        if "FROM afdian_oauth_states" in sql:
+            rows = self._supabase_query("afdian_oauth_states", [("state", params[0])])
+            return rows if all_rows else (rows[0] if rows else None)
+        for table in ("afdian_orders", "membership_grants", "membership_payment_reviews"):
+            if f"FROM {table}" in sql:
+                rows = self._supabase_query(table, [])
+                if "out_trade_no = ?" in sql:
+                    rows = [r for r in rows if str(r.get("out_trade_no")) == str(params[0])]
+                if "id = ?" in sql:
+                    rows = [r for r in rows if str(r.get("id")) == str(params[0])]
+                return rows if all_rows else (rows[0] if rows else None)
         raise RuntimeError("Unsupported Supabase membership query")
 
     def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
@@ -401,3 +483,109 @@ class MembershipService:
         else:
             self._execute("DELETE FROM membership_seats WHERE owner_user_id = ? AND member_user_id = ?", (owner, member_user_id))
         return True
+
+    # Payment persistence is kept here so a grant updates the same membership
+    # row used by quota checks. SQLite/Postgres use the common SQL adapter;
+    # Supabase uses the typed client path.
+    def afdian_account(self, user_id: str) -> dict[str, Any] | None:
+        return self._query("SELECT * FROM afdian_accounts WHERE user_id = ?", (self._owner(user_id),))
+
+    def bind_afdian_account(self, user_id: str, afdian_user_id: str, user_private_id: str) -> dict[str, Any]:
+        owner = self._owner(user_id)
+        now = _iso(_now())
+        values = {"user_id": owner, "afdian_user_id": str(afdian_user_id), "afdian_user_private_id": str(user_private_id), "status": "active", "updated_at": now}
+        if self._is_supabase:
+            existing = self.db.client.table("afdian_accounts").select("*").eq("user_id", owner).execute()
+            if getattr(existing, "data", None):
+                self.db.client.table("afdian_accounts").update(values).eq("user_id", owner).execute()
+            else:
+                self.db.client.table("afdian_accounts").insert({**values, "created_at": now}).execute()
+        else:
+            self._execute("INSERT INTO afdian_accounts (user_id, afdian_user_id, afdian_user_private_id, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?) ON CONFLICT(user_id) DO UPDATE SET afdian_user_id=excluded.afdian_user_id, afdian_user_private_id=excluded.afdian_user_private_id, status='active', updated_at=excluded.updated_at", (owner, str(afdian_user_id), str(user_private_id), now, now))
+        return self.afdian_account(owner) or values
+
+    def create_afdian_oauth_state(self, user_id: str, state: str, redirect_uri: str, ttl_seconds: int = 600) -> dict[str, Any]:
+        expires = _iso(_now() + timedelta(seconds=ttl_seconds))
+        if self._is_supabase:
+            self.db.client.table("afdian_oauth_states").insert({"state": state, "user_id": self._owner(user_id), "redirect_uri": redirect_uri, "expires_at": expires}).execute()
+        else:
+            self._execute("INSERT INTO afdian_oauth_states (state, user_id, redirect_uri, expires_at) VALUES (?, ?, ?, ?)", (state, self._owner(user_id), redirect_uri, expires))
+        return {"state": state, "expires_at": expires}
+
+    def consume_afdian_oauth_state(self, state: str) -> dict[str, Any] | None:
+        row = self._query("SELECT * FROM afdian_oauth_states WHERE state = ?", (state,))
+        if not row or row.get("consumed_at") or _parse(row["expires_at"]) <= _now():
+            return None
+        now = _iso(_now())
+        if self._is_supabase:
+            self.db.client.table("afdian_oauth_states").update({"consumed_at": now}).eq("state", state).is_("consumed_at", "null").execute()
+        else:
+            self._execute("UPDATE afdian_oauth_states SET consumed_at = ? WHERE state = ? AND consumed_at IS NULL", (now, state))
+        return row
+
+    def create_afdian_checkout(self, user_id: str, plan: str, plan_id: str, checkout_url: str, ttl_seconds: int = 1800) -> dict[str, Any]:
+        if plan not in ("lite", "pro", "ultimate"):
+            raise ValueError("暂不支持购买该会员档位")
+        if not self.afdian_account(user_id):
+            raise ValueError("请先绑定爱发电账号")
+        session = {"id": str(uuid.uuid4()), "user_id": self._owner(user_id), "plan": plan, "plan_id": plan_id, "status": "pending", "checkout_url": checkout_url, "created_at": _iso(_now()), "expires_at": _iso(_now() + timedelta(seconds=ttl_seconds))}
+        if self._is_supabase:
+            self.db.client.table("afdian_checkout_sessions").insert(session).execute()
+        else:
+            self._execute("INSERT INTO afdian_checkout_sessions (id, user_id, plan, plan_id, status, checkout_url, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", tuple(session.values()))
+        return session
+
+    def afdian_checkout(self, user_id: str, checkout_id: str) -> dict[str, Any] | None:
+        row = self._query("SELECT * FROM afdian_checkout_sessions WHERE id = ? AND user_id = ?", (checkout_id, self._owner(user_id)))
+        if row and row["status"] == "pending" and _parse(row["expires_at"]) <= _now():
+            row["status"] = "expired"
+        return row
+
+    def add_payment_review(self, out_trade_no: str | None, reason: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        item = {"id": str(uuid.uuid4()), "out_trade_no": out_trade_no, "reason": reason, "status": "open", "metadata": json.dumps(metadata or {}, ensure_ascii=False), "created_at": _iso(_now())}
+        if self._is_supabase:
+            item["metadata"] = metadata or {}
+            self.db.client.table("membership_payment_reviews").insert(item).execute()
+        else:
+            self._execute("INSERT INTO membership_payment_reviews (id, out_trade_no, reason, status, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)", tuple(item.values()))
+        return item
+
+    def record_afdian_order(self, order: dict[str, Any], *, user_id: str, plan: str, verification_status: str = "verified", review_reason: str | None = None) -> bool:
+        trade = str(order.get("out_trade_no") or "")
+        if not trade:
+            raise ValueError("缺少爱发电订单号")
+        existing = self._query("SELECT * FROM afdian_orders WHERE out_trade_no = ?", (trade,))
+        if existing:
+            return False
+        now = _iso(_now())
+        values = (trade, self._owner(user_id), str(order.get("user_id") or ""), str(order.get("user_private_id") or ""), plan, str(order.get("plan_id") or ""), max(1, int(order.get("month") or 1)), float(order.get("total_amount") or 0), int(order.get("status") or 0), json.dumps(order, ensure_ascii=False), verification_status, review_reason, now, now)
+        if self._is_supabase:
+            self.db.client.table("afdian_orders").insert({"out_trade_no": values[0], "user_id": values[1], "afdian_user_id": values[2], "afdian_user_private_id": values[3], "plan": values[4], "plan_id": values[5], "month": values[6], "total_amount": values[7], "status": values[8], "raw_payload": order, "verification_status": values[10], "review_reason": values[11]}).execute()
+        else:
+            self._execute("INSERT INTO afdian_orders (out_trade_no, user_id, afdian_user_id, afdian_user_private_id, plan, plan_id, month, total_amount, status, raw_payload, verification_status, review_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+        return True
+
+    def grant_afdian_order(self, order: dict[str, Any], *, user_id: str, plan: str) -> dict[str, Any]:
+        trade = str(order["out_trade_no"])
+        existing = self._query("SELECT * FROM membership_grants WHERE out_trade_no = ?", (trade,))
+        if existing:
+            return self.membership(user_id)
+        now = _now()
+        current = self.membership(self._owner(user_id))
+        current_end = _parse(current["period_end"])
+        base = current_end if current_end > now else now
+        days = max(1, int(order.get("month") or 1)) * 31
+        new_end = base + timedelta(days=days)
+        rank = {"free": 0, "lite": 1, "pro": 2, "ultimate": 3, "enterprise": 4}
+        effective_plan = plan if rank.get(plan, 0) >= rank.get(str(current["plan"]), 0) or current_end <= now else str(current["plan"])
+        policy = POLICIES[effective_plan]
+        grant = {"id": str(uuid.uuid4()), "out_trade_no": trade, "user_id": self._owner(user_id), "plan": plan, "starts_at": _iso(now), "ends_at": _iso(new_end), "created_at": _iso(now)}
+        if self._is_supabase:
+            self.db.client.table("membership_grants").insert(grant).execute()
+            self.db.client.table("memberships").update({"plan": effective_plan, "status": "active", "period_end": _iso(new_end), "price_rmb": policy.price_rmb, "monthly_cost_limit_rmb": policy.monthly_cost_limit_rmb, "updated_at": _iso(now)}).eq("user_id", self._owner(user_id)).execute()
+            self.db.client.table("afdian_checkout_sessions").update({"status": "paid", "completed_at": _iso(now)}).eq("user_id", self._owner(user_id)).eq("plan", plan).eq("status", "pending").execute()
+        else:
+            self._execute("INSERT INTO membership_grants (id, out_trade_no, user_id, plan, starts_at, ends_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", tuple(grant.values()))
+            self._execute("UPDATE memberships SET plan = ?, status = 'active', period_end = ?, price_rmb = ?, monthly_cost_limit_rmb = ?, updated_at = ? WHERE user_id = ?", (effective_plan, _iso(new_end), policy.price_rmb, policy.monthly_cost_limit_rmb, _iso(now), self._owner(user_id)))
+            self._execute("UPDATE afdian_checkout_sessions SET status = 'paid', completed_at = ? WHERE user_id = ? AND plan = ? AND status = 'pending'", (_iso(now), self._owner(user_id), plan))
+        return self.membership(user_id)

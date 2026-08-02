@@ -207,9 +207,14 @@ class RecordEvidenceTool(Tool):
             evidence = Evidence(
                 claim=claim,
                 source=parameters.get("source", "user_statement"),
-                verified=parameters.get("verified", False),
-                notes=parameters.get("notes", ""),
-            )
+                    verified=parameters.get("verified", False),
+                    notes=parameters.get("notes", ""),
+                    evidence_type=parameters.get("evidence_type", parameters.get("source", "user_statement")),
+                    source_url=parameters.get("source_url", ""),
+                    target_audience=parameters.get("target_audience", ""),
+                    related_question=parameters.get("related_question", ""),
+                    counter_evidence=list(parameters.get("counter_evidence") or []),
+                )
             # Store evidence as a lightweight artifact for persistence
             content = json.dumps(evidence.to_dict(), ensure_ascii=False, indent=2)
             try:

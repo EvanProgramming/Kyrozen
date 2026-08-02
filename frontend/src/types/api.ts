@@ -40,6 +40,37 @@ export interface ProjectState {
   } | null;
 }
 
+export interface Evidence {
+  artifact_id?: string;
+  version?: number;
+  title?: string;
+  claim: string;
+  source: string;
+  evidence_type: string;
+  verified: boolean;
+  confidence: 'low' | 'medium' | 'high';
+  notes: string;
+  source_url: string;
+  observed_at: string;
+  target_audience: string;
+  related_question: string;
+  counter_evidence: string[];
+  status: 'active' | 'invalid' | 'merged';
+}
+
+export interface Phase2Workbench {
+  project: Project;
+  next_action: { label: string; stage: string; blocked_reason: string | null };
+  evidence: { items: Evidence[]; active_count: number; by_type: Record<string, number> };
+  research: { sources: Array<Record<string, unknown>>; source_coverage: Record<string, number>; source_count: number };
+  decisions: Array<Record<string, unknown>>;
+  solutions: { candidates: Array<Record<string, unknown>>; count: number };
+  hardware: Record<string, unknown>;
+  testing: Record<string, unknown>;
+  risks: string[];
+  artifact_count: number;
+}
+
 export interface LoginCredentials {
   email: string;
   password: string;

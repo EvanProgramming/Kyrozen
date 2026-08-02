@@ -234,6 +234,9 @@ export interface KyrozenAPI {
   getUserProfile: () => Promise<{ name: string; email: string; githubUsername: string; avatarUrl: string }>;
   onConnectionChange: (callback: (state: ConnectionState, message: string) => void) => () => void;
   onProtocolUrl: (callback: (url: string) => void) => () => void;
+  startAfdianConnect: () => Promise<{ authorize_url?: string; state?: string; error?: string }>;
+  startAfdianCheckout: (plan: 'lite' | 'pro' | 'ultimate') => Promise<{ id?: string; checkout_url?: string; status?: string; error?: string }>;
+  getAfdianPaymentStatus: (checkoutId: string) => Promise<{ status?: string; error?: string }>;
   onSessionResumed: (callback: (token: string, serverUrl: string) => void) => () => void;
   onSessionEnded: (callback: () => void) => () => void;
   onSessionExpired: (callback: (message: string) => void) => () => void;

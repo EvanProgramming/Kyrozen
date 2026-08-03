@@ -118,3 +118,11 @@
 | 2026-08-03 | 生产后端同步重建 | 服务器已快进到提交 `605833b`，但 `docker compose up -d --build --remove-orphans` 因 Docker socket `permission denied` 失败；仅有 compose `version` 弃用警告，无服务变更确认 | FAIL | 记录部署失败，改用服务器授权的 sudo Docker 入口后核对健康状态 |
 | 2026-08-03 | 生产后端 sudo 重建 | sudo compose 成功构建并启动新版 backend，健康检查通过；随后 frontend 因宿主机 `0.0.0.0:80` 已被占用而启动失败，compose 命令整体返回 1 | FAIL | 核对 backend 与公网健康状态；不把前端端口冲突误判为串口探针动作通过 |
 | 2026-08-03 | 新 DMG 本地 Agent 根因定位 | `Unsupported hardware action: prepare_serial_probe` 实际来自桌面包内 `desktop/python_agent/main.py`，该本地分支遗漏了新增动作；后端健康但无法修复本地 Agent | FIXING | 补齐本地 Agent 分支并重新打包安装，保留原生重试证据 |
+| 2026-08-03 | 本地 Agent 修复版登录首次点击 | 新安装启动页的登录元素在点击前失效，Computer Use 返回 `-10005: The element ID is no longer valid`，未执行登录 | RETRY | 重新读取启动页后再点击 GitHub 登录 |
+| 2026-08-03 | 修复版项目恢复与类型门禁 | 登录和项目资料恢复，但项目类型按钮显示为 disabled，类型确认没有从当前项目恢复；打开项目选择菜单时 Computer Use 返回 `Cannot read properties of null (reading 'url')`，未改变数据 | FAIL | 记录重启恢复门禁问题，取消原生菜单后从项目列表选择已有已确认硬件项目 |
+| 2026-08-03 | 关闭失效项目菜单 | 项目原生菜单已失去可访问引用，Computer Use 取消操作返回 `AXError.failure`；未改变项目数据 | RETRY | 重新读取主窗口，不复用旧菜单索引 |
+| 2026-08-03 | 修复版项目切换恢复 | 通过键盘切换到“桌面硬件灵感助手”后，项目工作区准备阶段最终显示 `请求失败（/api/desktop/quota）：fetch failed`，主界面出现额度请求失败且工作台入口消失 | FAIL | 记录重启/切换恢复失败，先检查当前项目是否可独立恢复 |
+| 2026-08-03 | 切换项目状态读取脚本 | Computer Use 输出包装器误写 `type` 未定义，返回 `ReferenceError: type is not defined`；点击动作结果未作判断 | RETRY | 重新读取当前窗口后继续 |
+| 2026-08-03 | 第二次切换项目状态读取脚本 | Computer Use 输出包装器再次误写 `type` 未定义，返回 `ReferenceError: type is not defined`；未依据该次脚本判断项目状态 | RETRY | 只用正确回调重新读取一次 |
+| 2026-08-03 | 修复版已有项目工作台恢复 | 打开“桌面硬件灵感助手”项目画布后显示 `请求失败（/api/projects/proj_91b90df1/artifacts/art_29e2356c）：fetch failed`，并停在“正在整理项目资料…”；未进入硬件操作 | FAIL | 通过界面“重试：刷新项目工作台”做一次有限重试 |
+| 2026-08-03 | 已有项目工作台有限重试 | 重试后仍显示 `请求失败（/api/projects/proj_91b90df1/artifacts/art_a268f1c9）：fetch failed`，且继续停在“正在整理项目资料…”；未进入硬件操作 | FAIL | 记录第二次失败，进行一次只读公网健康核对后停止重复点击 |

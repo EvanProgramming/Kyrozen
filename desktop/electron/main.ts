@@ -54,7 +54,7 @@ interface WorkspaceMap {
 const isDev = process.env.NODE_ENV === 'development';
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
-const LOG_DIR = path.join(app.getPath('userData'), 'logs');
+const LOG_DIR = process.env.KYROZEN_LOG_DIR || path.join(app.getPath('userData'), 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'main.log');
 
 async function writeLog(level: string, message: string): Promise<void> {
@@ -143,6 +143,16 @@ function clearDispatchWatchdog(taskId?: string) {
   }
   dispatchWatchdogTaskId = null;
 }
+
+async function waitForWebSocketOpen(timeoutMs = 15_000): Promise<boolean> {
+  if (wsClient?.readyState === WebSocket.OPEN) return true;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if ((wsClient?.readyState as number | undefined) === WebSocket.OPEN) return true;
+  }
+  return false;
+}
 let previewWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let pythonAgentRestartCount = 0;
@@ -155,6 +165,8 @@ let githubTokenScope: string | null = null;
 const taskOperations = new Map<string, Array<{ description: string; status: string; timestamp: string }>>();
 const pendingConfirmations = new Map<string, Record<string, unknown>>();
 const trustedOperationTypes = new Set<string>();
+const pendingProtocolUrls: string[] = [];
+let processingProtocolUrls = false;
 
 // Ensure only one instance of the desktop client is running. On Windows/Linux,
 // opening a kyrozen:// URL while the app is already running will be forwarded
@@ -167,17 +179,14 @@ if (!gotTheLock) {
 
 app.on('second-instance', (_event, argv) => {
   const url = argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
-  if (url && mainWindow) {
+  if (url) {
     logInfo(`Received protocol URL from second instance: ${redactProtocolUrl(url)}`);
-    if (mainWindow.webContents.isLoading()) {
-      mainWindow.webContents.once('did-finish-load', () => {
-        void handleProtocolUrl(url);
-      });
-    } else {
-      void handleProtocolUrl(url);
+    enqueueProtocolUrl(url);
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
     }
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
   }
 });
 let pendingCloudMessages: string[] = [];
@@ -668,11 +677,26 @@ async function handleProtocolUrl(url: string) {
         });
       }
     } else if (parsed.hostname === 'auth' && parsed.pathname === '/login') {
-      // GitHub OAuth login callback: kyrozen://auth/login?kyrozen_token=...&github_token=...
-      const kyrozenToken = parsed.searchParams.get('kyrozen_token');
-      const refreshTok = parsed.searchParams.get('refresh_token');
-      const ghToken = parsed.searchParams.get('github_token');
-      const scope = parsed.searchParams.get('scope') || '';
+      // GitHub OAuth login callback uses a short-lived one-time code. The
+      // server keeps credentials off browser history and the custom URL.
+      const exchangeCode = parsed.searchParams.get('code');
+      let kyrozenToken = parsed.searchParams.get('kyrozen_token');
+      let refreshTok = parsed.searchParams.get('refresh_token');
+      let ghToken = parsed.searchParams.get('github_token');
+      let scope = parsed.searchParams.get('scope') || '';
+      if (exchangeCode) {
+        try {
+          const exchanged = await apiPost('/api/auth/github/desktop-exchange', { code: exchangeCode });
+          kyrozenToken = exchanged.access_token;
+          refreshTok = exchanged.refresh_token;
+          ghToken = exchanged.github_token;
+          scope = exchanged.scope || '';
+          logInfo('Exchanged one-time GitHub login code successfully');
+        } catch (err: any) {
+          logError(`GitHub login code exchange failed: ${err.message || err}`);
+          return;
+        }
+      }
       if (kyrozenToken && ghToken) {
         accessToken = kyrozenToken;
         githubAccessToken = ghToken;
@@ -700,10 +724,12 @@ async function handleProtocolUrl(url: string) {
             scheduleSessionRefresh();
             connectWebSocket(verify.ws_token);
             mainWindow?.webContents.send('kyrozen:session-resumed', verify.ws_token, serverUrl);
+            mainWindow?.webContents.send('kyrozen:login-completed');
             logInfo('GitHub login completed successfully');
           }
         } catch (err: any) {
           logError(`GitHub login verify-token failed: ${err.message || err}`);
+          mainWindow?.webContents.send('kyrozen:login-failed', err.message || String(err));
         }
       }
     } else if (parsed.hostname === 'auth' && parsed.pathname === '/github') {
@@ -719,6 +745,31 @@ async function handleProtocolUrl(url: string) {
     }
   } catch (err: any) {
     logError(`Failed to handle protocol URL: ${err.message || err}`);
+    mainWindow?.webContents.send('kyrozen:login-failed', err.message || String(err));
+  }
+}
+
+function enqueueProtocolUrl(url: string): void {
+  pendingProtocolUrls.push(url);
+  void flushProtocolUrls();
+}
+
+async function flushProtocolUrls(): Promise<void> {
+  if (processingProtocolUrls || !mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      void flushProtocolUrls();
+    });
+    return;
+  }
+  processingProtocolUrls = true;
+  try {
+    while (pendingProtocolUrls.length && mainWindow && !mainWindow.isDestroyed()) {
+      const url = pendingProtocolUrls.shift();
+      if (url) await handleProtocolUrl(url);
+    }
+  } finally {
+    processingProtocolUrls = false;
   }
 }
 
@@ -816,11 +867,10 @@ app.whenReady().then(async () => {
 
   const protocolUrl = getProtocolUrl();
   logInfo(`Protocol URL: ${protocolUrl ? redactProtocolUrl(protocolUrl) : 'none'}`);
-  if (protocolUrl && mainWindow) {
-    mainWindow.webContents.once('did-finish-load', () => {
-      void handleProtocolUrl(protocolUrl);
-    });
-  } else if (onboardingConfig.completed) {
+  if (protocolUrl) {
+    enqueueProtocolUrl(protocolUrl);
+  }
+  if (!protocolUrl && onboardingConfig.completed) {
     // Onboarding already completed: try to resume the previous session from encrypted storage.
     const credentials = await loadCredentials();
     if (credentials) {
@@ -936,12 +986,12 @@ app.whenReady().then(async () => {
 });
 
 app.on('open-url', (_event, url) => {
-  if (mainWindow?.webContents.isLoading()) {
-    mainWindow.webContents.once('did-finish-load', () => {
-      void handleProtocolUrl(url);
-    });
-  } else {
-    void handleProtocolUrl(url);
+  logInfo(`Received macOS protocol URL: ${redactProtocolUrl(url)}`);
+  enqueueProtocolUrl(url);
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   }
 });
 
@@ -1935,6 +1985,27 @@ const PROJECT_WORKSPACE_SECTIONS = {
   improvement: 'improvement',
 } as const;
 
+const pendingPythonRequests = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>();
+let nextPythonRequestId = 1;
+
+function requestPythonAgent(method: string, params: Record<string, unknown>): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const id = nextPythonRequestId++;
+    pendingPythonRequests.set(id, { resolve, reject });
+    void startPythonAgent().then(() => {
+      if (!pythonAgent) {
+        pendingPythonRequests.delete(id);
+        reject(new Error('本地 Agent 尚未启动'));
+        return;
+      }
+      sendToPythonAgent({ jsonrpc: '2.0', id, method, params });
+    }).catch((error) => {
+      pendingPythonRequests.delete(id);
+      reject(error);
+    });
+  });
+}
+
 async function loadLocalProjectSummary(projectId: string): Promise<Record<string, unknown>> {
   const root = workspaceMap[projectId];
   if (!root) return { files: [], deliverables: [], software: null, stagegate: null };
@@ -1949,6 +2020,7 @@ async function loadLocalProjectSummary(projectId: string): Promise<Record<string
     deliverables: await readJson('.kyrozen/deliverables.json') || [],
     software: await readJson('.kyrozen/software_feature.json'),
     stagegate: await readJson('.kyrozen/stagegate.json'),
+    hardware_runs: await readJson('.kyrozen/hardware_runs.json'),
   };
 }
 
@@ -1983,14 +2055,171 @@ async function loadProjectWorkspace(projectId: string): Promise<Record<string, u
       apiGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
     ),
   );
-  const local = await loadLocalProjectSummary(projectId);
-  return { project, state, decisions, artifacts, tasks, sections, local };
+  const [local, phase2] = await Promise.all([
+    loadLocalProjectSummary(projectId),
+    apiGet(`/api/projects/${projectId}/phase2/workbench`),
+  ]);
+  return { project, state, decisions, artifacts, tasks, sections, phase2, local };
 }
 
 ipcMain.handle('kyrozen:get-project-workspace', async (_event, projectId: string) => {
   if (!accessToken) return { success: false, error: '未登录' };
   try {
     return { success: true, data: await loadProjectWorkspace(projectId) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:create-artifact', async (_event, projectId: string, type: string, title: string, content: string, changeReason: string) => {
+  try {
+    const data = await apiPost(`/api/projects/${projectId}/artifacts`, {
+      type,
+      title,
+      content,
+      change_reason: changeReason || '桌面端 Phase 2 工作台保存',
+    }, true);
+    return { success: true, data };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:create-evidence', async (_event, projectId: string, evidence: Record<string, unknown>) => {
+  try {
+    return { success: true, data: await apiPost(`/api/projects/${projectId}/evidence`, evidence, true) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:run-research', async (_event, projectId: string, query: string, limit: number) => {
+  try {
+    return { success: true, data: await apiPost(`/api/projects/${projectId}/research/runs`, { query, limit }, true) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:evidence-impact', async (_event, projectId: string, artifactId: string) => {
+  try {
+    return { success: true, data: await apiGet(`/api/projects/${projectId}/evidence/${artifactId}/impact`) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:delete-evidence', async (_event, projectId: string, artifactId: string, expectedVersion?: number) => {
+  try {
+    return { success: true, data: await apiDelete(`/api/projects/${projectId}/evidence/${artifactId}?expected_version=${expectedVersion || ''}&confirm_impact=true`) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:edit-evidence', async (_event, projectId: string, artifactId: string, evidence: Record<string, unknown>, expectedVersion?: number) => {
+  try {
+    return { success: true, data: await apiPatch(`/api/projects/${projectId}/evidence/${artifactId}`, { ...evidence, expected_version: expectedVersion }) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:update-evidence', async (_event, projectId: string, artifactId: string, status: 'active' | 'invalid' | 'deleted', expectedVersion?: number) => {
+  try {
+    return { success: true, data: await apiPatch(`/api/projects/${projectId}/evidence/${artifactId}`, { status, expected_version: expectedVersion }) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:merge-evidence', async (_event, projectId: string, artifactId: string, targetEvidenceId: string, expectedSourceVersion?: number, expectedTargetVersion?: number) => {
+  try {
+    return { success: true, data: await apiPost(`/api/projects/${projectId}/evidence/${artifactId}/merge`, { target_evidence_id: targetEvidenceId, expected_source_version: expectedSourceVersion, expected_target_version: expectedTargetVersion }, true) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:get-solutions', async (_event, projectId: string) => {
+  try {
+    return { success: true, data: await apiGet(`/api/projects/${projectId}/solutions`) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:save-solution', async (_event, projectId: string, comparison: Record<string, unknown>, action: string, affectedTasks: string[]) => {
+  try {
+    return { success: true, data: await apiPost(`/api/projects/${projectId}/solutions`, {
+      comparison,
+      action,
+      affected_tasks: affectedTasks,
+    }, true) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:confirm-protocol', async (_event, projectId: string, protocol: Record<string, unknown>, confirmed: boolean, affectedFiles: string[], affectedTasks: string[]) => {
+  try {
+    return { success: true, data: await apiPost(`/api/projects/${projectId}/protocol/confirm`, {
+      protocol,
+      confirmed,
+      affected_files: affectedFiles,
+      affected_tasks: affectedTasks,
+    }, true) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:confirm-workflow', async (_event, projectId: string, projectType: 'software' | 'embedded' | 'hybrid') => {
+  try {
+    const data = await apiPost(`/api/projects/${projectId}/workflow-confirm`, { project_type: projectType }, true);
+    return { success: true, data };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:advance-hybrid-track', async (_event, projectId: string, track: string, expectedVersion?: number) => {
+  try {
+    return { success: true, data: await apiPost(`/api/projects/${projectId}/phase2/tracks/${encodeURIComponent(track)}/advance`, {
+      expected_version: expectedVersion,
+    }, true) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:run-local-hardware', async (_event, projectId: string, workspaceRoot: string, action: string, options: Record<string, unknown>) => {
+  try {
+    const result = await requestPythonAgent('hardware_action', { project_id: projectId, workspace_root: workspaceRoot, action, ...options });
+    if (result && projectId) {
+      try {
+        await apiPost(`/api/projects/${projectId}/artifacts`, {
+          type: 'hardware_run',
+          title: `Hardware Run: ${action}`,
+          content: JSON.stringify(result),
+          change_reason: 'Desktop hardware workbench operation',
+        }, true);
+        result.persisted = true;
+      } catch (persistError: any) {
+        result.persisted = false;
+        result.persistence_error = persistError.message || String(persistError);
+      }
+    }
+    const blocked = result?.status === 'BLOCKED' || Boolean(result?.block_reason);
+    return { success: !result?.error && (result?.success !== false) && !blocked, data: result, error: result?.error || (blocked ? result?.block_reason : undefined) };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('kyrozen:run-protocol-scenarios', async (_event, projectId: string) => {
+  try {
+    return { success: true, data: await apiPost(`/api/projects/${projectId}/protocol/scenarios`, {}, true) };
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
   }
@@ -2005,9 +2234,9 @@ ipcMain.handle('kyrozen:create-decision', async (_event, projectId: string, deci
   }
 });
 
-ipcMain.handle('kyrozen:create-feedback', async (_event, projectId: string, description: string, type: string, priority: string) => {
+ipcMain.handle('kyrozen:create-feedback', async (_event, projectId: string, description: string, type: string, priority: string, validation: Record<string, unknown> = {}) => {
   try {
-    const data = await apiPost('/api/feedback', { project_id: projectId, description, type, priority }, true);
+    const data = await apiPost('/api/feedback', { project_id: projectId, description, type, priority, ...validation }, true);
     return { success: true, data };
   } catch (err: any) {
     return { success: false, error: err.message || String(err) };
@@ -2591,9 +2820,32 @@ ipcMain.handle('kyrozen:get-user-profile', async () => {
 });
 
 ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
+  logInfo(`Chat send requested: project=${currentProjectId || '<none>'}, ws=${wsClient?.readyState ?? 'none'}`);
   if (!accessToken) return { success: false, error: '未登录' };
   if (!currentProjectId) return { success: false, error: '请先选择项目' };
-  if (wsClient?.readyState !== WebSocket.OPEN) return { success: false, error: '桌面客户端尚未连接云端' };
+  // Project creation and WebSocket authentication happen concurrently during
+  // the ordinary first-use journey.  Waiting briefly here avoids dropping a
+  // valid user message into a transient "connecting" window.
+  if (!(await waitForWebSocketOpen())) {
+    // The API remains a supported compatibility path.  If the local channel
+    // cannot become ready, do not silently discard the user's message; let
+    // the server answer it and surface the result.  Local file generation and
+    // hardware actions still use their explicit desktop Agent paths.
+    try {
+      const fallback = await apiPost('/api/chat', {
+        message,
+        project_id: currentProjectId,
+        mode: 'discovery',
+        stream: false,
+      }, true);
+      if (fallback?.content) {
+        return { success: true, taskId: fallback.task_id, dispatched: false, content: String(fallback.content), operations: [] };
+      }
+      return { success: false, error: '桌面客户端尚未连接云端，且兼容回复为空' };
+    } catch (err: any) {
+      return { success: false, error: err.message || '桌面客户端尚未连接云端' };
+    }
+  }
   try {
     const projectState = await apiGet(`/api/projects/${currentProjectId}/state`);
     const modeByStage: Record<string, string> = {
@@ -2960,8 +3212,11 @@ async function handleServerMessage(message: Record<string, unknown>) {
     try {
       const project = await apiGet(`/api/projects/${String(message.project_id || currentProjectId)}`);
       const haystack = `${String(project?.name || '')} ${String(project?.description || '')} ${String(project?.goal || '')}`;
-      if (/arduino|esp32|esp8266|stm32|raspberry|单片机|开发板|固件|电路|传感器|pcb|硬件/i.test(haystack)) {
-        projectType = 'hardware';
+      const persistedType = String(project?.project_type || '');
+      if (persistedType === 'software' || persistedType === 'embedded' || persistedType === 'hybrid') {
+        projectType = persistedType;
+      } else if (/arduino|esp32|esp8266|stm32|raspberry|单片机|开发板|固件|电路|传感器|pcb|硬件/i.test(haystack)) {
+        projectType = 'embedded';
       } else {
         projectType = 'software';
       }
@@ -3267,6 +3522,13 @@ function flushPendingCloudMessages() {
 function handlePythonAgentLine(line: string) {
   try {
     const message = JSON.parse(line);
+    if (message.id != null && pendingPythonRequests.has(Number(message.id))) {
+      const pending = pendingPythonRequests.get(Number(message.id));
+      pendingPythonRequests.delete(Number(message.id));
+      if (message.error) pending?.reject(new Error(String(message.error.message || message.error)));
+      else pending?.resolve(message.result || {});
+      return;
+    }
     if (message.type === 'model_request') {
       logInfo(`Forwarding model request ${String(message.request_id || 'unknown')} to cloud`);
       sendToCloud(message);
@@ -3318,10 +3580,11 @@ function handlePythonAgentLine(line: string) {
       mainWindow?.webContents.send('kyrozen:stage-updated', message.params);
       const stageProjectId = String(message.params?.project_id || currentProjectId || '');
       if (stageProjectId && accessToken) {
-        void apiPut(`/api/projects/${encodeURIComponent(stageProjectId)}`, {
-          current_stage: String(message.params?.stage || 'problem_discovery'),
+        void apiPost(`/api/projects/${encodeURIComponent(stageProjectId)}/stage-sync`, {
+          stage: String(message.params?.stage || 'problem_discovery'),
           progress: Number(message.params?.progress || 0),
-        }).then(() => {
+          gate: message.params?.gate || {},
+        }, true).then(() => {
           // P0-06: only re-dispatch if the user is still on the same project.
           if (currentProjectId && currentProjectId !== stageProjectId) return;
           mainWindow?.webContents.send('kyrozen:stage-updated', message.params);

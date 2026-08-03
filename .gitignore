@@ -42,6 +42,9 @@ kyrozen_tasks.json
 # Local-only design and planning documents stay under docs/ and are not
 # published unless explicitly allow-listed below.
 docs/*
+!docs/PHASE2_ESP32_SERIAL_PROBE_ACCEPTANCE_2026-08-03.md
+!docs/PHASE2_ACCEPTANCE_WAIVER_2026-08-03.md
+!docs/PHASE2_REAL_USER_TEST_2026-08-03.md
 # Public documentation and operational guides.
 !docs/README.md
 !docs/KYROZEN_MISSING_FEATURES_THREE_PHASE_PLAN.md

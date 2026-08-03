@@ -36,10 +36,38 @@ contextBridge.exposeInMainWorld('kyrozen', {
     ipcRenderer.invoke('kyrozen:delete-project', projectId),
   getProjectState: (projectId: string) => ipcRenderer.invoke('kyrozen:get-project-state', projectId),
   getProjectWorkspace: (projectId: string) => ipcRenderer.invoke('kyrozen:get-project-workspace', projectId),
+  createArtifact: (projectId: string, type: string, title: string, content: string, changeReason?: string) =>
+    ipcRenderer.invoke('kyrozen:create-artifact', projectId, type, title, content, changeReason || ''),
+  createEvidence: (projectId: string, evidence: Record<string, unknown>) =>
+    ipcRenderer.invoke('kyrozen:create-evidence', projectId, evidence),
+  runResearch: (projectId: string, query: string, limit = 5) =>
+    ipcRenderer.invoke('kyrozen:run-research', projectId, query, limit),
+  evidenceImpact: (projectId: string, artifactId: string) =>
+    ipcRenderer.invoke('kyrozen:evidence-impact', projectId, artifactId),
+  deleteEvidence: (projectId: string, artifactId: string, expectedVersion?: number) =>
+    ipcRenderer.invoke('kyrozen:delete-evidence', projectId, artifactId, expectedVersion),
+  editEvidence: (projectId: string, artifactId: string, evidence: Record<string, unknown>, expectedVersion?: number) =>
+    ipcRenderer.invoke('kyrozen:edit-evidence', projectId, artifactId, evidence, expectedVersion),
+  updateEvidence: (projectId: string, artifactId: string, status: 'active' | 'invalid' | 'deleted', expectedVersion?: number) =>
+    ipcRenderer.invoke('kyrozen:update-evidence', projectId, artifactId, status, expectedVersion),
+  mergeEvidence: (projectId: string, artifactId: string, targetEvidenceId: string, expectedSourceVersion?: number, expectedTargetVersion?: number) =>
+    ipcRenderer.invoke('kyrozen:merge-evidence', projectId, artifactId, targetEvidenceId, expectedSourceVersion, expectedTargetVersion),
+  getSolutions: (projectId: string) => ipcRenderer.invoke('kyrozen:get-solutions', projectId),
+  saveSolution: (projectId: string, comparison: Record<string, unknown>, action: string, affectedTasks: string[] = []) =>
+    ipcRenderer.invoke('kyrozen:save-solution', projectId, comparison, action, affectedTasks),
+  confirmProtocol: (projectId: string, protocol: Record<string, unknown>, confirmed = true, affectedFiles: string[] = [], affectedTasks: string[] = []) =>
+    ipcRenderer.invoke('kyrozen:confirm-protocol', projectId, protocol, confirmed, affectedFiles, affectedTasks),
+  confirmWorkflow: (projectId: string, projectType: 'software' | 'embedded' | 'hybrid') =>
+    ipcRenderer.invoke('kyrozen:confirm-workflow', projectId, projectType),
+  advanceHybridTrack: (projectId: string, track: string, expectedVersion?: number) =>
+    ipcRenderer.invoke('kyrozen:advance-hybrid-track', projectId, track, expectedVersion),
+  runLocalHardware: (projectId: string, workspaceRoot: string, action: string, options?: { board?: string; port?: string; baud?: number; transport?: string; message?: Record<string, unknown> }) =>
+    ipcRenderer.invoke('kyrozen:run-local-hardware', projectId, workspaceRoot, action, options || {}),
+  runProtocolScenarios: (projectId: string) => ipcRenderer.invoke('kyrozen:run-protocol-scenarios', projectId),
   createDecision: (projectId: string, decision: string, reason: string) =>
     ipcRenderer.invoke('kyrozen:create-decision', projectId, decision, reason),
-  createFeedback: (projectId: string, description: string, type: string, priority: string) =>
-    ipcRenderer.invoke('kyrozen:create-feedback', projectId, description, type, priority),
+  createFeedback: (projectId: string, description: string, type: string, priority: string, validation?: Record<string, unknown>) =>
+    ipcRenderer.invoke('kyrozen:create-feedback', projectId, description, type, priority, validation || {}),
   updateSuggestionStatus: (projectId: string, suggestionId: string, status: string) =>
     ipcRenderer.invoke('kyrozen:update-suggestion-status', projectId, suggestionId, status),
   deleteLearningItem: (projectId: string, kind: string, itemId: string) =>
@@ -82,6 +110,12 @@ contextBridge.exposeInMainWorld('kyrozen', {
     const handler = (_event: unknown, token: string, serverUrl: string) => callback(token, serverUrl);
     ipcRenderer.on('kyrozen:session-resumed', handler);
     return () => ipcRenderer.removeListener('kyrozen:session-resumed', handler);
+  },
+
+  onLoginFailed: (callback: (message: string) => void) => {
+    const handler = (_event: unknown, message: string) => callback(message);
+    ipcRenderer.on('kyrozen:login-failed', handler);
+    return () => ipcRenderer.removeListener('kyrozen:login-failed', handler);
   },
 
   onSessionEnded: (callback: () => void) => {

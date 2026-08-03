@@ -1,9 +1,21 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export function LoginPage({ notice }: { notice?: string | null }) {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = window.kyrozen?.onLoginFailed((message) => {
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+      setIsLoggingIn(false);
+      setError(`GitHub 登录失败：${message}`);
+    });
+    return () => {
+      unsubscribe?.();
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+    };
+  }, []);
 
   const handleGithubLogin = async () => {
     if (!window.kyrozen) return;

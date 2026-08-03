@@ -253,6 +253,10 @@ class HardwareBridge:
     def prepare_serial_probe(self) -> dict[str, Any]:
         """Create the approved, GPIO-free ESP32 serial probe sketch."""
         probe_file = self.firmware_dir / "kyrozen_serial_probe.ino"
+        # Arduino CLI treats a directory as a sketch only when it contains a
+        # main file named after the directory. Keep the descriptive probe
+        # filename for evidence and provide the CLI-compatible entrypoint.
+        main_file = self.firmware_dir / f"{self.firmware_dir.name}.ino"
         source = "\n".join([
             "// Kyrozen hardware acceptance serial probe; no GPIO or product protocol assumptions.",
             "#include <Arduino.h>",
@@ -272,11 +276,22 @@ class HardwareBridge:
             "}",
             "",
         ])
-        probe_file.write_text(source, encoding="utf-8")
+        # Arduino CLI compiles every `.ino` in the directory. Keep the
+        # descriptive probe filename as a non-compiling evidence pointer and
+        # place the single executable sketch in the directory entrypoint.
+        probe_file.write_text(
+            "// Kyrozen serial probe source is compiled from firmware.ino.\n"
+            "// This file is retained as the named evidence record.\n"
+            "// Expected output includes: KYROZEN_SERIAL_PROBE heartbeat N\n",
+            encoding="utf-8",
+        )
+        if main_file != probe_file:
+            main_file.write_text(source, encoding="utf-8")
         return {
             "success": True,
             "status": "PASSED",
             "probe_file": str(probe_file),
+            "compile_entrypoint": str(main_file),
             "probe_name": "KYROZEN_SERIAL_PROBE",
             "baud": 115200,
             "note": "GPIO-free serial heartbeat probe; it does not define BLE/GATT/OTA or product behavior.",
@@ -306,7 +321,52 @@ class HardwareBridge:
         return self.run(args)
 
     def monitor(self, port: str, baud: int = 115200) -> dict[str, Any]:
-        """Open serial monitor."""
+        """Capture a bounded serial sample instead of opening a forever monitor.
+
+        The desktop workflow needs a result it can persist and render.  Both
+        Arduino CLI and PlatformIO monitors are interactive processes, so a
+        normal ``subprocess.run`` would leave the workbench waiting until its
+        global timeout.  Capture a short sample, then terminate the monitor;
+        the probe is considered passed only when its real heartbeat is seen.
+        """
         if self._tool_path("arduino-cli"):
-            return self.run(["arduino-cli", "monitor", "--port", port, "--config", f"baudrate={baud}"])
-        return self.run(["pio", "device", "monitor", "--port", port, "--baud", str(baud)])
+            args = ["arduino-cli", "monitor", "--port", port, "--config", f"baudrate={baud}"]
+        else:
+            args = ["pio", "device", "monitor", "--port", port, "--baud", str(baud)]
+        self._validate_args(args)
+        tool_path = self._check_tool(args[0])
+        command_line = [tool_path, *args[1:]]
+        command = " ".join(args)
+        process = subprocess.Popen(
+            command_line,
+            cwd=self.firmware_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=8)
+            timed_out = False
+        except subprocess.TimeoutExpired as exc:
+            process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            stdout = (exc.stdout or "") + (stdout or "")
+            stderr = (exc.stderr or "") + (stderr or "")
+            timed_out = True
+        combined = f"{stdout}\n{stderr}"
+        probe_seen = "KYROZEN_SERIAL_PROBE" in combined
+        return {
+            "success": probe_seen,
+            "returncode": process.returncode,
+            "stdout": stdout,
+            "stderr": stderr if probe_seen else stderr or "Serial probe output was not observed",
+            "command": command,
+            "error_category": "" if probe_seen else "board_error",
+            "sample_seconds": 8,
+            "probe_seen": probe_seen,
+            "monitor_ended_by_timeout": timed_out,
+        }

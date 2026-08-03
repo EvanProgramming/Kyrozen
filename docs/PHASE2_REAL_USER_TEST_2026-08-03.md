@@ -127,3 +127,19 @@
 | 2026-08-03 | 修复版已有项目工作台恢复 | 打开“桌面硬件灵感助手”项目画布后显示 `请求失败（/api/projects/proj_91b90df1/artifacts/art_29e2356c）：fetch failed`，并停在“正在整理项目资料…”；未进入硬件操作 | FAIL | 通过界面“重试：刷新项目工作台”做一次有限重试 |
 | 2026-08-03 | 已有项目工作台有限重试 | 重试后仍显示 `请求失败（/api/projects/proj_91b90df1/artifacts/art_a268f1c9）：fetch failed`，且继续停在“正在整理项目资料…”；未进入硬件操作 | FAIL | 记录第二次失败，进行一次只读公网健康核对后停止重复点击 |
 | 2026-08-03 | 本轮测试环境清理 | 退出 Kyrozen 主进程与本地 Agent，移除安装器生成的备份到废纸篓；核对结果仅保留 `/Applications/Kyrozen.app`，无 Kyrozen 进程、无 Kyrozen DMG 挂载卷 | PASS | 未留下额外 Kyrozen 安装副本 |
+| 2026-08-03 | 续测修复版登录首次点击 | 启动页登录按钮在点击前失效，Computer Use 返回 `-10005: The element ID is no longer valid`；未执行登录 | RETRY | 重新读取当前窗口状态后再操作，不复用旧元素索引 |
+| 2026-08-03 | 续测只读发现 ESP32 | 普通用户在采购中心填写 `/dev/cu.usbserial-10` 后点击“只读发现设备”，等待约 11 秒仍无运行结果；发现、准备探针、编译、上传、串口观察按钮全部保持禁用，界面无成功/失败/重试入口 | FAIL | 记录硬件 Agent 请求未返回，停止重复点击并检查本地 Agent 的发现调用链 |
+| 2026-08-03 | 续测按真实端口重新发现 | 系统只读枚举到 `/dev/cu.usbmodem101`，使用该端口重新发现后返回 `success true`、`board detected true`、Arduino CLI 1.5.1、ESP32 core 3.3.10，状态 `PASSED` | PASS | 继续准备探针并编译 |
+| 2026-08-03 | 续测串口探针编译 | “准备串口探针”已真实写入 `kyrozen_serial_probe.ino`；随后 Arduino CLI 编译失败，持久化错误为 `Can't open sketch: main file missing from sketch: .../hardware/firmware/firmware.ino`，状态 `FAILED` | FAIL | 修复探针目录的 Arduino CLI 主文件兼容性后重新打包复测 |
+| 2026-08-03 | 新 DMG 更新提示操作 | 最新 DMG 启动后显示“正在检查更新…”，尝试点击关闭提示时 Computer Use 返回 `-10005: The element ID is no longer valid`；未改变项目数据 | RETRY | 重新读取当前窗口后继续 |
+| 2026-08-03 | 修复版 DMG 探针编译复测 | 主文件兼容性修复后，Arduino CLI 仍失败：`kyrozen_serial_probe.ino` 与 `firmware.ino` 同时被编译，产生 `heartbeat/setup/loop redefinition`；错误已从缺少主文件推进为重复草图 | FAIL | 将命名探针文件改为非编译证据指针，只保留 `firmware.ino` 作为唯一可编译草图，再重打包 |
+| 2026-08-03 | 最终修复版画布等待 | Computer Use 在等待最新安装包打开项目画布超过 30 秒时执行超时并重置控制内核，未改变项目数据 | RETRY | 重新初始化 Computer Use 状态并分段等待工作台加载 |
+| 2026-08-03 | 最终版探针准备后刷新阻塞 | 探针准备已在本地真实生成 `firmware.ino` 与命名证据文件，直接 Arduino CLI 编译通过；但桌面端动作完成后等待项目资料刷新超过约 50 秒，硬件按钮仍禁用，尚未取得桌面端编译回执 | FAIL | 重启单一安装实例读取本地硬件记录，再继续编译；不把命令行直编结果替代桌面端证据 |
+| 2026-08-03 | 容错版桌面编译回执 | 重启后通过桌面端点击“编译固件”，本地 Agent 持久化 `compile success true`、`returncode 0`，Arduino CLI 编译通过；但随后工作台刷新仍长时间禁用按钮，需重启读取成功记录后继续上传 | PASS | 保留编译成功证据，不把刷新等待误判为编译失败 |
+| 2026-08-03 | 编译成功后窗口退出 | 尝试通过 Computer Use 关闭窗口读取持久化编译状态时返回 `timeoutReached`；未改变硬件记录 | RETRY | 用定向进程退出并重新启动唯一安装版本 |
+| 2026-08-03 | 最终版上传调用脚本 | Computer Use 上传调用的 Node 脚本出现 `SyntaxError: Unexpected identifier 'c'`，未确认点击是否执行 | RETRY | 重新读取页面并用最小调用脚本重试上传 |
+| 2026-08-03 | 最终版真实上传 | 桌面端上传已执行并持久化失败，错误分类 `board_error`：`A fatal error occurred: This chip is ESP32-S3, not ESP32. Wrong chip argument?`；串口 `/dev/cu.usbmodem101` 已连接，未写入固件 | FAIL | 根据上传器明确返回改用 ESP32-S3 FQBN，重新编译再上传 |
+| 2026-08-03 | ESP32-S3 编译复测 | 将采购中心 FQBN 改为 `esp32:esp32:esp32s3` 后桌面端编译动作持久化 `success true`、`returncode 0`；工作区重启后仍需重新登录，未上传 | PASS | 登录恢复后继续上传 |
+| 2026-08-03 | S3 编译后登录首次点击 | 重启后登录按钮元素再次失效，Computer Use 返回 `-10005: The element ID is no longer valid`，未执行登录 | RETRY | 重新读取页面后继续 |
+| 2026-08-03 | 串口观察首次执行 | 真实桌面操作点击“串口观察”后，15 秒仍处于执行中且没有结果；读取硬件运行记录确认没有新增 monitor 记录。原因是交互式串口监视器没有自动结束。 | BLOCKED | 修复为有限时长采样后重新打包测试 |
+| 2026-08-03 | 有限串口观察重新测试 | DMG 重装并恢复项目后，使用真实 FQBN `esp32:esp32:esp32s3` 和 `/dev/cu.usbmodem101` 执行“串口观察”；界面持久化 `success false`、`probe_seen false`、`monitor_ended_by_timeout true`，没有捕获 `KYROZEN_SERIAL_PROBE`。随后只读检查发现 `/dev/cu.usbmodem101` 已不再枚举。 | BLOCKED | 需要用户重新插拔/确认设备重新枚举后再继续物理证据测试 |

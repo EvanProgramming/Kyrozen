@@ -2046,17 +2046,25 @@ async function loadLocalProjectSummary(projectId: string): Promise<Record<string
 }
 
 async function loadProjectWorkspace(projectId: string): Promise<Record<string, unknown>> {
+  const optionalGet = async (endpoint: string): Promise<unknown> => {
+    try {
+      return await apiGet(endpoint);
+    } catch (error: any) {
+      logWarn(`Optional workspace data unavailable: ${endpoint}: ${error?.message || String(error)}`);
+      return null;
+    }
+  };
   const entries = await Promise.all(
     Object.entries(PROJECT_WORKSPACE_SECTIONS).map(async ([key, endpoint]) => [
       key,
-      await apiGet(`/api/projects/${projectId}/${endpoint}/state`),
+      await optionalGet(`/api/projects/${projectId}/${endpoint}/state`),
     ]),
   );
   const sections = Object.fromEntries(entries) as Record<string, Record<string, unknown>>;
   const [learningRecords, failureKnowledge, successKnowledge] = await Promise.all([
-    apiGet(`/api/projects/${projectId}/learning/records`),
-    apiGet(`/api/projects/${projectId}/learning/failures`),
-    apiGet(`/api/projects/${projectId}/learning/successes`),
+    optionalGet(`/api/projects/${projectId}/learning/records`),
+    optionalGet(`/api/projects/${projectId}/learning/failures`),
+    optionalGet(`/api/projects/${projectId}/learning/successes`),
   ]);
   sections.learning = {
     ...(sections.learning || {}),
@@ -2073,12 +2081,12 @@ async function loadProjectWorkspace(projectId: string): Promise<Record<string, u
   ]);
   const artifacts = await Promise.all(
     (artifactSummaries as Array<Record<string, unknown>>).map((artifact) =>
-      apiGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
+      optionalGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
     ),
   );
   const [local, phase2] = await Promise.all([
     loadLocalProjectSummary(projectId),
-    apiGet(`/api/projects/${projectId}/phase2/workbench`),
+    optionalGet(`/api/projects/${projectId}/phase2/workbench`),
   ]);
   return { project, state, decisions, artifacts, tasks, sections, phase2, local };
 }

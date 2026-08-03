@@ -51,6 +51,7 @@ class DesktopTokenManager:
         user_id: str,
         project_id: str | None = None,
         access_token: str | None = None,
+        developer: bool = False,
     ) -> str:
         """Create a short-lived single-use token for launching the desktop app."""
         _purge_expired(_OPEN_TOKENS)
@@ -59,6 +60,7 @@ class DesktopTokenManager:
             "user_id": user_id,
             "project_id": project_id,
             "access_token": access_token,
+            "developer": developer,
             "exp": _now() + _OPEN_TOKEN_TTL_SECONDS,
             "used": False,
         }
@@ -72,14 +74,19 @@ class DesktopTokenManager:
         if data is None or data.get("used"):
             return None
         data["used"] = True
-        return {
+        context = {
             "user_id": data["user_id"],
             "project_id": data.get("project_id"),
             "access_token": data.get("access_token"),
         }
+        # Keep the legacy launch-context shape for ordinary users while
+        # carrying the new entitlement only when it is actually granted.
+        if data.get("developer"):
+            context["developer"] = True
+        return context
 
     @staticmethod
-    def create_credentials(user_id: str) -> dict[str, str]:
+    def create_credentials(user_id: str, *, developer: bool = False) -> dict[str, str]:
         """Create refresh token and WebSocket token for a verified desktop client."""
         _purge_expired(_REFRESH_TOKENS)
         _purge_expired(_WS_TOKENS)
@@ -94,6 +101,7 @@ class DesktopTokenManager:
         ws_token = secrets.token_urlsafe(32)
         _WS_TOKENS[ws_token] = {
             "user_id": user_id,
+            "developer": developer,
             "exp": _now() + _WS_TOKEN_TTL_SECONDS,
         }
 
@@ -122,6 +130,13 @@ class DesktopTokenManager:
         _purge_expired(_WS_TOKENS)
         data = _WS_TOKENS.get(token)
         return data["user_id"] if data else None
+
+    @staticmethod
+    def is_developer_ws_token(token: str) -> bool:
+        """Return the entitlement captured when the desktop token was issued."""
+        _purge_expired(_WS_TOKENS)
+        data = _WS_TOKENS.get(token)
+        return bool(data and data.get("developer"))
 
     @staticmethod
     def verify_api_token(token: str) -> str | None:

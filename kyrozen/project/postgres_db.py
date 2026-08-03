@@ -25,15 +25,31 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     description TEXT,
     goal TEXT,
+    budget TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     current_stage TEXT NOT NULL DEFAULT 'problem_discovery',
     next_steps TEXT,
     blocked_reason TEXT,
     progress INTEGER NOT NULL DEFAULT 0,
     risks TEXT,
+    project_type TEXT NOT NULL DEFAULT 'software',
+    workflow_version TEXT NOT NULL DEFAULT 'phase2.v1',
+    type_source TEXT NOT NULL DEFAULT 'default',
+    type_confidence TEXT NOT NULL DEFAULT 'low',
+    type_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Existing PostgreSQL deployments may have been initialized before Phase 2.
+-- Keep startup/schema refresh idempotent and make their next project write
+-- compatible with the new workflow fields.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS budget TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_type TEXT NOT NULL DEFAULT 'software';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS workflow_version TEXT NOT NULL DEFAULT 'phase2.v1';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS type_source TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS type_confidence TEXT NOT NULL DEFAULT 'low';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS type_confirmed BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -322,20 +338,28 @@ class PostgresDatabase:
         with self._lock:
             self._execute(
                 """
-                INSERT INTO projects (id, user_id, name, description, goal, status, current_stage,
-                                      next_steps, blocked_reason, progress, risks, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO projects (id, user_id, name, description, goal, budget, status, current_stage,
+                                      next_steps, blocked_reason, progress, risks, project_type,
+                                      workflow_version, type_source, type_confidence, type_confirmed,
+                                      created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id=EXCLUDED.user_id,
                     name=EXCLUDED.name,
                     description=EXCLUDED.description,
                     goal=EXCLUDED.goal,
+                    budget=EXCLUDED.budget,
                     status=EXCLUDED.status,
                     current_stage=EXCLUDED.current_stage,
                     next_steps=EXCLUDED.next_steps,
                     blocked_reason=EXCLUDED.blocked_reason,
                     progress=EXCLUDED.progress,
                     risks=EXCLUDED.risks,
+                    project_type=EXCLUDED.project_type,
+                    workflow_version=EXCLUDED.workflow_version,
+                    type_source=EXCLUDED.type_source,
+                    type_confidence=EXCLUDED.type_confidence,
+                    type_confirmed=EXCLUDED.type_confirmed,
                     updated_at=EXCLUDED.updated_at
                 """,
                 (
@@ -344,12 +368,18 @@ class PostgresDatabase:
                     project.name,
                     project.description,
                     project.goal,
+                    project.budget,
                     project.status,
                     project.current_stage,
                     project.next_steps,
                     getattr(project, "blocked_reason", None),
                     getattr(project, "progress", 0),
                     json.dumps(project.risks, ensure_ascii=False),
+                    project.project_type,
+                    project.workflow_version,
+                    project.type_source,
+                    project.type_confidence,
+                    project.type_confirmed,
                     project.created_at,
                     project.updated_at,
                 ),
@@ -390,12 +420,18 @@ class PostgresDatabase:
             "name": row["name"],
             "description": row["description"] or "",
             "goal": row["goal"] or "",
+            "budget": row.get("budget") or "",
             "status": row["status"],
             "current_stage": row["current_stage"],
             "next_steps": row["next_steps"] or "",
             "blocked_reason": row["blocked_reason"] or "",
             "progress": row["progress"] or 0,
             "risks": json.loads(row["risks"] or "[]"),
+            "project_type": row.get("project_type") or "software",
+            "workflow_version": row.get("workflow_version") or "phase2.v1",
+            "type_source": row.get("type_source") or "default",
+            "type_confidence": row.get("type_confidence") or "low",
+            "type_confirmed": bool(row.get("type_confirmed", False)),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         })

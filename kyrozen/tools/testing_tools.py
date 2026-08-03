@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from kyrozen.hardware.bridge import HardwareBridge
 from kyrozen.testing.models import (
+    Defect,
     IterationPlan,
     TestCase,
     TestPlan,
@@ -201,9 +202,82 @@ class SaveTestResultTool(Tool):
                 content=content,
                 change_reason="Test result recorded",
             )
-            return ToolResult(success=True, data={"artifact_id": artifact.id, "version": artifact.version})
+            data = {"artifact_id": artifact.id, "version": artifact.version}
+            if result.regression_of:
+                for existing in self.project_manager.list_artifacts(project_id):
+                    if existing.type != "defect":
+                        continue
+                    try:
+                        defect = Defect.from_dict(json.loads(existing.content))
+                    except (ValueError, json.JSONDecodeError):
+                        continue
+                    if defect.defect_id == result.regression_of:
+                        defect.regression_result_id = artifact.id
+                        defect.status = "resolved" if result.result == "passed" else "open"
+                        self.project_manager.save_artifact(
+                            project_id=project_id,
+                            type="defect",
+                            title=existing.title,
+                            content=json.dumps(defect.to_dict(), ensure_ascii=False, indent=2),
+                            change_reason="Regression result linked to defect",
+                        )
+                        data["regression_defect_id"] = defect.defect_id
+                        break
+            if result.result in {"failed", "error"}:
+                defect = Defect(
+                    defect_id=f"DEF-{result.test_case_id or 'UNSPECIFIED'}-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+                    title=f"测试失败：{result.test_case_name or result.test_case_id}",
+                    severity="high" if result.result == "failed" else "critical",
+                    actual=result.actual,
+                    expected="测试用例预期结果",
+                    test_case_id=result.test_case_id,
+                )
+                defect_artifact = self.project_manager.save_artifact(
+                    project_id=project_id,
+                    type="defect",
+                    title=f"Defect: {defect.defect_id}",
+                    content=json.dumps(defect.to_dict(), ensure_ascii=False, indent=2),
+                    change_reason="Failed test automatically created a defect",
+                )
+                data["defect_id"] = defect.defect_id
+                data["defect_artifact_id"] = defect_artifact.id
+            return ToolResult(success=True, data=data)
         except ValueError as e:
             return ToolResult(success=False, data=None, error=str(e))
+
+
+class SaveDefectTool(Tool):
+    """Create or update a defect and link it to the originating test."""
+
+    def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
+        self.project_manager = project_manager
+        self.name = "save_defect"
+        self.description = "Save a test defect with reproduction and regression linkage."
+        self.schema = ToolSchema(name=self.name, description=self.description, actions={"save": [
+            ToolParameter(name="project_id", param_type="string", description="Project ID"),
+            ToolParameter(name="defect", param_type="object", description="Defect fields as JSON object"),
+        ]})
+
+    def _execute(self, action: str, parameters: dict[str, Any]) -> ToolResult:
+        if self.project_manager is None:
+            return ToolResult(success=False, data=None, error="Project manager not available")
+        project_id = parameters.get("project_id")
+        if not project_id:
+            return ToolResult(success=False, data=None, error="Missing project_id")
+        try:
+            defect = Defect.from_dict(parameters.get("defect") or {})
+            if not defect.defect_id:
+                defect.defect_id = f"DEF-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+            artifact = self.project_manager.save_artifact(
+                project_id=project_id,
+                type="defect",
+                title=f"Defect: {defect.defect_id}",
+                content=json.dumps(defect.to_dict(), ensure_ascii=False, indent=2),
+                change_reason="Defect updated",
+            )
+            return ToolResult(success=True, data={"artifact_id": artifact.id, "version": artifact.version, "defect": defect.to_dict()})
+        except ValueError as exc:
+            return ToolResult(success=False, data=None, error=str(exc))
 
 
 class RecordUserFeedbackTool(Tool):
@@ -212,7 +286,7 @@ class RecordUserFeedbackTool(Tool):
     def __init__(self, project_manager: "ProjectManager | None" = None) -> None:
         self.project_manager = project_manager
         self.name = "record_user_feedback"
-        self.description = "Record user validation feedback (interview, trial, survey, comparison)."
+        self.description = "Record user validation feedback, including task completion, blockers and satisfaction."
         self.schema = ToolSchema(
             name=self.name,
             description=self.description,
@@ -275,6 +349,9 @@ class SaveValidationReportTool(Tool):
             return ToolResult(success=False, data=None, error="Missing project_id")
         try:
             report = ValidationReport.from_dict(report_data)
+            validation_errors = report.phase2_validation_errors()
+            if validation_errors:
+                return ToolResult(success=False, data={"validation_errors": validation_errors}, error=validation_errors[0])
             content = json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
             if self.project_manager is None:
                 return _save_local_artifact(self.config, "validation_report.json", content)
@@ -455,6 +532,7 @@ class RunHardwareTestTool(Tool):
                 result = bridge.monitor(port=port, baud=int(parameters.get("baud") or 115200))
             else:
                 return ToolResult(success=False, data=None, error=f"Unsupported hardware test action '{action}'")
-            return ToolResult(success=result.get("success", False), data=result, error=result.get("stderr", ""))
+            accepted = bool(result.get("success", False)) and result.get("status") != "BLOCKED"
+            return ToolResult(success=accepted, data=result, error=result.get("stderr", "") or result.get("block_reason", ""))
         except Exception as e:
             return ToolResult(success=False, data=None, error=f"{type(e).__name__}: {e}")

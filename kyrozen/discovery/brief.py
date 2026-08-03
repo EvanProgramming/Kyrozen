@@ -82,6 +82,9 @@ class ProblemBrief:
     confidence_reason: str = ""
     decision: str = "need_more_information"
     decision_reason: str = ""
+    evidence_ids: list[str] = field(default_factory=list)
+    counter_evidence_ids: list[str] = field(default_factory=list)
+    unresolved_questions: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.confidence not in CONFIDENCE_LEVELS:
@@ -106,6 +109,9 @@ class ProblemBrief:
             "confidence_reason": self.confidence_reason,
             "decision": self.decision,
             "decision_reason": self.decision_reason,
+            "evidence_ids": list(self.evidence_ids),
+            "counter_evidence_ids": list(self.counter_evidence_ids),
+            "unresolved_questions": list(self.unresolved_questions),
         }
 
     @classmethod
@@ -154,6 +160,9 @@ class ProblemBrief:
             confidence_reason=data.get("confidence_reason", ""),
             decision=decision,
             decision_reason=data.get("decision_reason", ""),
+            evidence_ids=list(data.get("evidence_ids") or []),
+            counter_evidence_ids=list(data.get("counter_evidence_ids") or []),
+            unresolved_questions=list(data.get("unresolved_questions") or []),
         )
 
     def to_markdown(self) -> str:
@@ -207,6 +216,22 @@ class ProblemBrief:
                 lines.append(f"> {self.decision_reason}")
             lines.append("")
 
+        if self.evidence_ids:
+            lines.append("## 支持证据")
+            lines.append("")
+            lines.extend(f"- `{evidence_id}`" for evidence_id in self.evidence_ids)
+            lines.append("")
+        if self.counter_evidence_ids:
+            lines.append("## 反对证据")
+            lines.append("")
+            lines.extend(f"- `{evidence_id}`" for evidence_id in self.counter_evidence_ids)
+            lines.append("")
+        if self.unresolved_questions:
+            lines.append("## 未解决问题")
+            lines.append("")
+            lines.extend(f"- {question}" for question in self.unresolved_questions)
+            lines.append("")
+
         return "\n".join(lines).rstrip() + "\n"
 
     def merge(self, other: "ProblemBrief") -> "ProblemBrief":
@@ -242,4 +267,7 @@ class ProblemBrief:
             confidence_reason=pick(self.confidence_reason, other.confidence_reason),
             decision=pick(self.decision, other.decision),
             decision_reason=pick(self.decision_reason, other.decision_reason),
+            evidence_ids=list(dict.fromkeys(self.evidence_ids + other.evidence_ids)),
+            counter_evidence_ids=list(dict.fromkeys(self.counter_evidence_ids + other.counter_evidence_ids)),
+            unresolved_questions=list(dict.fromkeys(self.unresolved_questions + other.unresolved_questions)),
         )

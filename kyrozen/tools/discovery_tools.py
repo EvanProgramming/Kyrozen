@@ -110,6 +110,19 @@ class SaveProblemBriefTool(Tool):
                     # the workspace file below is the source of truth for the gate.
                     pass
 
+            if self.project_manager is not None:
+                missing_references: list[str] = []
+                for evidence_id in dict.fromkeys(brief.evidence_ids + brief.counter_evidence_ids):
+                    evidence_artifact = self.project_manager.get_artifact(project_id, evidence_id)
+                    if evidence_artifact is None or evidence_artifact.type != "discovery_evidence":
+                        missing_references.append(evidence_id)
+                if missing_references:
+                    return ToolResult(
+                        success=False,
+                        data={"missing_evidence_ids": missing_references},
+                        error="Problem Brief 引用了不存在或非证据 Artifact：" + ", ".join(missing_references),
+                    )
+
             # Persist the artifact to the cloud/local project store when possible.
             artifact_id = None
             artifact_version = None
@@ -192,6 +205,15 @@ class RecordEvidenceTool(Tool):
                     ToolParameter(name="source", param_type="string", description="Source: user_statement, ai_inference, external_evidence"),
                     ToolParameter(name="verified", param_type="boolean", description="Whether the claim is verified", required=False),
                     ToolParameter(name="notes", param_type="string", description="Optional notes", required=False),
+                    ToolParameter(name="original_text", param_type="string", description="Original source text or transcript excerpt", required=False),
+                    ToolParameter(name="summary", param_type="string", description="Short evidence summary", required=False),
+                    ToolParameter(name="source_name", param_type="string", description="Human-readable source name", required=False),
+                    ToolParameter(name="evidence_type", param_type="string", description="Evidence category", required=False),
+                    ToolParameter(name="claim_type", param_type="string", description="fact, opinion, inference, or unknown", required=False),
+                    ToolParameter(name="source_url", param_type="string", description="Source URL when applicable", required=False),
+                    ToolParameter(name="target_audience", param_type="string", description="Affected audience", required=False),
+                    ToolParameter(name="related_question", param_type="string", description="Related discovery question", required=False),
+                    ToolParameter(name="counter_evidence", param_type="array", description="Counter-evidence references", required=False),
                 ]
             },
         )
@@ -206,15 +228,19 @@ class RecordEvidenceTool(Tool):
         try:
             evidence = Evidence(
                 claim=claim,
+                original_text=parameters.get("original_text", ""),
+                summary=parameters.get("summary", ""),
                 source=parameters.get("source", "user_statement"),
-                    verified=parameters.get("verified", False),
-                    notes=parameters.get("notes", ""),
-                    evidence_type=parameters.get("evidence_type", parameters.get("source", "user_statement")),
-                    source_url=parameters.get("source_url", ""),
-                    target_audience=parameters.get("target_audience", ""),
-                    related_question=parameters.get("related_question", ""),
-                    counter_evidence=list(parameters.get("counter_evidence") or []),
-                )
+                source_name=parameters.get("source_name", ""),
+                verified=parameters.get("verified", False),
+                notes=parameters.get("notes", ""),
+                evidence_type=parameters.get("evidence_type", parameters.get("source", "user_statement")),
+                source_url=parameters.get("source_url", ""),
+                target_audience=parameters.get("target_audience", ""),
+                related_question=parameters.get("related_question", ""),
+                counter_evidence=list(parameters.get("counter_evidence") or []),
+                claim_type=parameters.get("claim_type", "unknown"),
+            )
             # Store evidence as a lightweight artifact for persistence
             content = json.dumps(evidence.to_dict(), ensure_ascii=False, indent=2)
             try:

@@ -101,7 +101,7 @@ class BaseAgent:
             "- For file paths, prefer relative paths from the current working directory.\n"
             "- When asked to analyze a project, start with list_dir or find_files.\n"
             "- DO NOT write files, execute terminal commands, run git operations, or update project state unless the user explicitly asks you to.\n"
-            "- If the user asks 'what should I do next', '下一步怎么办', or similar, give a conversational answer. Only use update_project when the user explicitly asks to update the project stage/next_steps.\n"
+            "- If the user asks 'what should I do next', '下一步怎么办', or similar, give a conversational answer. Only use update_project for metadata when explicitly asked; use advance_project_stage for any gated stage transition.\n"
         )
 
     def _extract_tool_calls(self, text: str) -> list[dict[str, Any]]:

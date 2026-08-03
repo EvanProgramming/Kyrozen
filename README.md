@@ -98,6 +98,12 @@ The exact implementation status changes over time, but at the time this README w
 - project and task-oriented domain structure
 - historical documentation and phase tracking
 
+Phase 2 implementation is present behind project-type workflow gates, but it is
+not declared fully accepted until real external research results, an ESP32
+physical compile/upload/serial/reconnect record, and three real target-user
+validation records are available. Simulator, automated, and synthetic E2E
+results remain explicitly separate from those acceptance requirements.
+
 ### 待实现
 
 - stable agent routing by project type and user intent

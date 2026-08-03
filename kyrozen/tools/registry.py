@@ -86,7 +86,7 @@ def get_default_registry(
         SaveSolutionComparisonTool,
         UpdatePlanStepTool,
     )
-    from .project_tools import RecordDecisionTool, UpdateProjectTool
+    from .project_tools import AdvanceProjectStageTool, RecordDecisionTool, UpdateProjectTool
     from .research.tools import (
         GitHubSearchTool,
         PaperSearchTool,
@@ -97,6 +97,7 @@ def get_default_registry(
     )
     from .testing_tools import (
         RecordUserFeedbackTool,
+        SaveDefectTool,
         RunHardwareTestTool,
         RunSoftwareTestTool,
         SaveIterationPlanTool,
@@ -129,6 +130,7 @@ def get_default_registry(
     registry.register(WebTestTool())
     registry.register(WebCaptureTool(project_manager))
     registry.register(UpdateProjectTool(project_manager))
+    registry.register(AdvanceProjectStageTool(project_manager))
     registry.register(RecordDecisionTool(project_manager))
     registry.register(SaveProblemBriefTool(project_manager, config=config))
     registry.register(RecordEvidenceTool(project_manager, config=config))
@@ -168,6 +170,7 @@ def get_default_registry(
     registry.register(SaveTestCaseTool(project_manager))
     registry.register(SaveTestResultTool(project_manager, config=config))
     registry.register(RecordUserFeedbackTool(project_manager))
+    registry.register(SaveDefectTool(project_manager))
     registry.register(SaveValidationReportTool(project_manager, config=config))
     registry.register(SaveIterationPlanTool(project_manager))
     registry.register(RunSoftwareTestTool(project_manager, config=config))

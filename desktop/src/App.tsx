@@ -72,9 +72,15 @@ const PROJECT_STAGE_LABELS: Record<string, string> = {
   market_research: '市场调研',
   product_definition: '产品定义',
   solution_design: '方案设计',
+  protocol_design: '协议设计',
   development: '软件开发',
-  hardware_development: '硬件开发',
+  hardware_design: '硬件方案',
+  procurement: '采购 / BOM',
+  maker: 'Maker 装配',
+  firmware: '固件开发',
   testing: '测试验证',
+  hardware_testing: '硬件测试',
+  integration_testing: '软硬件集成测试',
   iteration: '迭代改进',
 };
 
@@ -602,6 +608,7 @@ function App() {
       <header className="app-drag h-12 border-b border-line bg-surface flex items-center justify-between pl-20 pr-4 flex-shrink-0">
         <div className="flex items-center gap-3 app-no-drag">
           <span className="font-display text-2xl leading-none text-ink">Kyrozen</span>
+          <span className="rounded border border-warning/40 bg-warning-soft px-1.5 py-0.5 text-[10px] font-medium text-warning" title="当前版本仍有部分功能尚未完成">测试版 · 部分功能未完成</span>
           <button
             type="button"
             onClick={() => setSidebarVisible((visible) => !visible)}
@@ -795,16 +802,16 @@ function App() {
             </div>
           )}
 
-          {/* UI cleanup: 本地文件 / 硬件工具链 moved into 设置; 会员权益 sits at the
-              bottom-left corner of the sidebar. */}
+          {/* UI cleanup: 本地文件 / 硬件工具链 moved into 设置. Membership is
+              intentionally unavailable in the first beta release. */}
           <div className="p-3 border-t border-line space-y-3 text-xs">
             <button
               type="button"
               onClick={() => setShowMembership(true)}
-              className="w-full btn-primary text-sm py-2"
-              data-testid="buy-membership"
+              className="w-full btn-secondary text-sm py-2"
+              data-testid="membership-disabled"
             >
-              购买会员
+              会员功能暂未开放
             </button>
             <label className="flex items-center justify-between cursor-pointer group">
               <span className={`${fullTrust ? 'text-warning font-medium' : 'text-ink-soft'}`}>
@@ -853,7 +860,7 @@ function App() {
                 <div className="font-medium">额度提醒</div>
                 <div className="mt-0.5">{quotaNotice}</div>
                 {quotaResetText && <div className="mt-1 text-[11px]">订阅周期重置：{quotaResetText}</div>}
-                <button type="button" onClick={() => setShowMembership(true)} className="text-accent underline mt-1">查看会员方案</button>
+                <button type="button" onClick={() => setShowMembership(true)} className="text-accent underline mt-1">查看当前使用限制</button>
               </div>
             )}
           </div>
@@ -970,7 +977,7 @@ function App() {
                 <div>{createProjectError}</div>
                 {/会员|额度|创建/.test(createProjectError) && (
                   <button type="button" onClick={() => setShowMembership(true)} className="text-accent underline mt-1">
-                    查看会员方案与重置时间
+                    查看当前使用限制与重置时间
                   </button>
                 )}
               </div>

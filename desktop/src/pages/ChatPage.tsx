@@ -274,7 +274,7 @@ const AGENT_MODE_ICONS: Record<string, ReactNode> = {
       <line x1="13" y1="6" x2="11" y2="18" />
     </>
   ),
-  hardware_development: (
+  hardware_design: (
     <>
       <rect x="7" y="7" width="10" height="10" rx="1" />
       <path d="M10 7 V4 M14 7 V4 M10 20 V17 M14 20 V17 M7 10 H4 M7 14 H4 M20 10 H17 M20 14 H17" />
@@ -310,7 +310,7 @@ const AGENT_MODE_HINTS: Record<string, string> = {
   product_definition: '明确要做什么、为谁做、价值何在。',
   solution_design: '评估可行方案并权衡取舍。',
   development: '编写与运行软件代码。',
-  hardware_development: '固件、电路与硬件集成。',
+  hardware_design: '硬件方案、采购、装配、固件与硬件测试。',
   testing: '设计用例、执行测试并验收。',
   iteration: '在已有成果上持续打磨改进。',
   learning: '总结经验、沉淀可复用知识。',
@@ -331,6 +331,16 @@ function AgentModeIcon({ mode, className }: { mode: string; className?: string }
       {AGENT_MODE_ICONS[mode] ?? AGENT_MODE_ICONS.problem_discovery}
     </svg>
   );
+}
+
+// The router still accepts the historical agent-mode alias for old clients,
+// but the desktop must present the project workflow vocabulary consistently.
+const DISPLAY_MODE_ALIASES: Record<string, string> = {
+  hardware_development: 'hardware_design',
+};
+
+function displayAgentMode(mode: string): string {
+  return DISPLAY_MODE_ALIASES[mode] || mode;
 }
 
 // UI cleanup: the StageGatePanel that used to sit at the top of the chat is
@@ -1235,16 +1245,21 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
 
       {routedAgent && (
         <div className={`border-b border-line ${routedAgent.degraded ? 'bg-danger-soft' : 'bg-accent-soft'}`}>
+          {(() => {
+            const displayMode = displayAgentMode(routedAgent.mode);
+            const displayLabel = routedAgent.mode === 'hardware_development' ? '硬件工作中心' : routedAgent.mode_label;
+            return (
+              <>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-2 text-sm text-ink-soft">
             <AgentModeIcon
-              mode={routedAgent.mode}
+              mode={displayMode}
               className={`w-4 h-4 flex-shrink-0 ${routedAgent.degraded ? 'text-danger' : 'text-accent'}`}
             />
             <span>当前由</span>
             <span className="font-medium text-ink">{routedAgent.agent_display_name}</span>
             <span>处理</span>
             <span className="inline-flex items-center rounded-sm border border-line-strong bg-surface px-2 py-0.5 text-xs font-medium text-accent">
-              {routedAgent.mode_label}
+              {displayLabel}
             </span>
             {routedAgent.restricted_tools.length > 0 && (
               <span
@@ -1256,8 +1271,11 @@ export function ChatPage({ projectId, onOpenPreview, onProjectChanged }: ChatPag
             )}
           </div>
           <div className="px-4 pb-2 text-xs text-ink-faint">
-            {AGENT_MODE_HINTS[routedAgent.mode] ?? ''}
+            {AGENT_MODE_HINTS[displayMode] ?? ''}
           </div>
+              </>
+            );
+          })()}
         </div>
       )}
 

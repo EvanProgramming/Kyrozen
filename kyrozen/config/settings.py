@@ -130,6 +130,10 @@ class KyrozenConfig:
     serper_api_key: str = ""
     github_token: str = ""
     semantic_scholar_api_key: str = ""
+    # Deployment-configured endpoints for providers without one universally
+    # safe public API. These are URLs, not credentials.
+    patent_search_url: str = ""
+    crowdfunding_search_url: str = ""
     # Phase 10 productization
     supabase_url: str = ""
     supabase_anon_key: str = ""
@@ -160,6 +164,10 @@ class KyrozenConfig:
     membership_usd_to_rmb: float = 7.3
     desktop_quota_default_limit: int = 0  # 0 means unlimited; positive value enforces token quota
     free_project_limit: int = 1
+    # Paid membership is intentionally disabled for the first beta release.
+    # Keep the policy tables and payment integration available for a later
+    # release, but do not grant paid entitlements while this flag is false.
+    membership_enabled: bool = False
     developer_user_ids: list[str] = field(default_factory=list)
     developer_github_users: list[str] = field(default_factory=lambda: ["EvanProgramming"])
 
@@ -272,6 +280,10 @@ def get_config(
         github_token=os.environ.get("GITHUB_TOKEN", "") or file_data.get("github_token", ""),
         semantic_scholar_api_key=os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
         or file_data.get("semantic_scholar_api_key", ""),
+        patent_search_url=os.environ.get("PATENT_SEARCH_URL", "")
+        or file_data.get("patent_search_url", ""),
+        crowdfunding_search_url=os.environ.get("CROWDFUNDING_SEARCH_URL", "")
+        or file_data.get("crowdfunding_search_url", ""),
         supabase_url=os.environ.get("SUPABASE_URL", "") or file_data.get("supabase_url", ""),
         supabase_anon_key=os.environ.get("SUPABASE_ANON_KEY", "") or file_data.get("supabase_anon_key", ""),
         supabase_service_role_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -313,6 +325,10 @@ def get_config(
             os.environ.get("KYROZEN_FREE_PROJECT_LIMIT", "")
             or file_data.get("free_project_limit", 1)
             or 1
+        ),
+        membership_enabled=(
+            str(os.environ.get("KYROZEN_MEMBERSHIP_ENABLED", file_data.get("membership_enabled", False))).lower()
+            in {"1", "true", "yes", "on"}
         ),
         developer_user_ids=[
             item.strip() for item in (

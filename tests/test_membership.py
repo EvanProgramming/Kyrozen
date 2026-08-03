@@ -38,6 +38,19 @@ def test_developer_account_is_unlimited(temp_dir: str):
         assert membership["project_limit"] == 0
 
 
+def test_beta_forces_existing_paid_grant_to_free_limits(temp_dir: str):
+    db = KyrozenDatabase(f"{temp_dir}/kyrozen.db")
+    MembershipService(db).set_plan(TEST_USER.user_id, "pro")
+    with _client(temp_dir) as client:
+        membership = client.get("/api/membership").json()
+        assert membership["plan"] == "free"
+        assert membership["membership_enabled"] is False
+        assert client.post("/api/projects", json={"name": "First"}).status_code == 200
+        assert client.post("/api/projects", json={"name": "Second"}).status_code == 403
+        checkout = client.post("/api/membership/afdian/checkout", json={"plan": "pro"})
+        assert checkout.status_code == 410
+
+
 def test_free_delete_does_not_restore_monthly_creation(temp_dir: str):
     with _client(temp_dir) as client:
         first = client.post("/api/projects", json={"name": "First"})

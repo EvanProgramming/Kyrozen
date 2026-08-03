@@ -14,7 +14,9 @@ from kyrozen.core.stagegate import (
     compute_progress,
     detect_deliverables,
     refresh_gate,
+    sync_artifact_deliverables,
 )
+from kyrozen.project.workflow import WORKFLOW_STAGES
 
 
 def _store(tmp_path: Path, stage: str = "problem_discovery") -> StageGateStore:
@@ -24,11 +26,11 @@ def _store(tmp_path: Path, stage: str = "problem_discovery") -> StageGateStore:
 
 
 # ---------------------------------------------------------------------------
-# 1. Stage definitions exist for all seven lifecycle stages
+# 1. Stage definitions exist for all workflow-specific lifecycle stages
 # ---------------------------------------------------------------------------
 
-def test_all_seven_stages_defined():
-    assert STAGES == (
+def test_all_workflow_stages_defined():
+    assert tuple(WORKFLOW_STAGES["software"]) == (
         "problem_discovery",
         "market_research",
         "product_definition",
@@ -37,8 +39,10 @@ def test_all_seven_stages_defined():
         "testing",
         "iteration",
     )
-    for stage in STAGES:
-        assert stage in STAGE_DEFINITIONS
+    expected = tuple(dict.fromkeys(stage for stages in WORKFLOW_STAGES.values() for stage in stages))
+    assert STAGES == expected
+    for stage in expected:
+        assert stage in STAGE_DEFINITIONS or sg._definition(stage) is not None
 
 
 def test_prd_is_required_non_skippable_in_product_definition():
@@ -159,6 +163,38 @@ def test_advance_normal_blocked_without_prd(tmp_path: Path):
     assert "PRD" in result["error"]
 
 
+def test_artifact_deliverables_can_back_phase2_gate(tmp_path: Path):
+    store = _store(tmp_path, "embedded")
+    store.current_stage = "procurement"
+    refresh_gate(store, tmp_path)
+    assert not any(item.item_id == "procurement" for item in compute_gate(store).satisfied)
+    sync_artifact_deliverables(store, ["bom"])
+    assert any(item.item_id == "procurement" for item in compute_gate(store).satisfied)
+
+
+def test_embedded_entry_uses_artifact_prd_and_requires_confirmed_solution(tmp_path: Path):
+    """API-backed embedded projects must not bypass the shared solution gate."""
+    store = StageGateStore(tmp_path / "stagegate.json", project_id="p1", project_type="embedded")
+    store.current_stage = "product_definition"
+    sync_artifact_deliverables(store, ["product_definition"])
+    store.record_confirmation("prd_confirmed", True)
+    blocked = advance(store, "normal")
+    assert blocked["ok"] is False
+    assert "方案" in blocked["error"]
+
+    store.record_confirmation("solution_confirmed", True)
+    allowed = advance(store, "normal")
+    assert allowed["ok"] is True
+    assert allowed["stage"] == "hardware_design"
+
+
+def test_hardware_stage_artifact_requirements_do_not_accept_debug_or_missing_run_aliases():
+    from kyrozen.core.stagegate import ARTIFACT_DELIVERABLES
+
+    assert ARTIFACT_DELIVERABLES["firmware"] == frozenset({"firmware_project"})
+    assert ARTIFACT_DELIVERABLES["hardware_testing"] == frozenset({"hardware_acceptance"})
+
+
 def test_advance_normal_success_after_prd(tmp_path: Path):
     s = _store(tmp_path, "product_definition")
     (tmp_path / "PRD.md").write_text("# PRD")
@@ -168,8 +204,9 @@ def test_advance_normal_success_after_prd(tmp_path: Path):
     assert result["ok"] is True
     # product_definition -> solution_design (development is two stages later).
     assert result["stage"] == "solution_design"
-    # The next stage is not entry-blocked.
-    assert result["gate"]["blocked_entry_reason"] is None
+    # The next stage is intentionally waiting for the explicit Phase 2
+    # solution decision before any implementation stage can be entered.
+    assert "方案" in result["gate"]["blocked_entry_reason"]
 
 
 def test_next_stage_click_is_the_user_confirmation(tmp_path: Path):
@@ -215,9 +252,26 @@ def test_prd_allows_development_once_present(tmp_path: Path):
     (tmp_path / "PRD.md").write_text("# PRD")
     refresh_gate(s, tmp_path)
     s.record_confirmation("design_confirmed", True)
+    s.record_confirmation("solution_confirmed", True)
     result = advance(s, "normal")
     assert result["ok"] is True
     assert result["stage"] == "development"
+
+
+def test_solution_decision_is_required_before_implementation(tmp_path: Path):
+    s = _store(tmp_path, "solution_design")
+    (tmp_path / "PRD.md").write_text("# PRD")
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "TECH_DESIGN.md").write_text("# design")
+    refresh_gate(s, tmp_path)
+    s.record_confirmation("design_confirmed", True)
+    blocked = advance(s, "normal")
+    assert blocked["ok"] is False
+    assert "方案" in blocked["error"]
+    s.record_confirmation("solution_confirmed", True)
+    allowed = advance(s, "normal")
+    assert allowed["ok"] is True
+    assert allowed["stage"] == "development"
 
 
 def test_advance_risk_records_skip_with_four_fields(tmp_path: Path):
@@ -344,3 +398,35 @@ def test_persisted_advance_survives_reopen(tmp_path: Path):
     reopened = StageGateStore(tmp_path / "stagegate.json", project_id="p1")
     assert reopened.current_stage == "solution_design"
     assert reopened.progress == s.progress
+
+
+def test_embedded_workflow_uses_its_own_stage_sequence(tmp_path: Path):
+    s = StageGateStore(tmp_path / "stagegate.json", project_id="p1", project_type="embedded")
+    assert s.workflow_type == "embedded"
+    assert s.current_stage == "problem_discovery"
+    s.current_stage = "hardware_design"
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "HARDWARE.md").write_text("# hardware")
+    refresh_gate(s, tmp_path)
+    assert compute_gate(s).stage_label == "硬件方案"
+    s.save()
+
+    reopened = StageGateStore(tmp_path / "stagegate.json", project_id="p1")
+    assert reopened.workflow_type == "embedded"
+    assert reopened.current_stage == "hardware_design"
+
+
+def test_hybrid_protocol_confirmation_is_a_hard_gate(tmp_path: Path):
+    s = StageGateStore(tmp_path / "stagegate.json", project_id="p1", project_type="hybrid")
+    s.current_stage = "protocol_design"
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "PROTOCOL.md").write_text("# Protocol v1")
+    (tmp_path / "PRD.md").write_text("# PRD")
+    refresh_gate(s, tmp_path)
+    missing = next(item for item in compute_gate(s).missing if item.item_id == "protocol_design_confirmed")
+    assert missing.skippable is False
+    assert compute_gate(s).can_advance is False
+    assert advance(s, "risk")["ok"] is False
+    s.record_confirmation("solution_confirmed", True)
+    s.record_confirmation("protocol_design_confirmed", True)
+    assert compute_gate(s).can_advance is True

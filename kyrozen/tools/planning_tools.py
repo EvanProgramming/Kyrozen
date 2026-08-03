@@ -261,6 +261,22 @@ class SaveSolutionComparisonTool(Tool):
             return ToolResult(success=False, data=None, error="Missing project_id")
         try:
             comparison = SolutionComparison.from_dict(comparison_data)
+            missing_evidence_ids = sorted({
+                evidence_id
+                for solution in comparison.solutions
+                for evidence_id in solution.evidence_ids
+                if str(evidence_id).strip()
+                and (
+                    (artifact := self.project_manager.get_artifact(project_id, evidence_id)) is None
+                    or artifact.type != "discovery_evidence"
+                )
+            })
+            if missing_evidence_ids:
+                return ToolResult(
+                    success=False,
+                    data={"missing_evidence_ids": missing_evidence_ids},
+                    error="方案引用了不存在或不属于当前项目的证据",
+                )
             content = json.dumps(comparison.to_dict(), ensure_ascii=False, indent=2)
             artifact = self.project_manager.save_artifact(
                 project_id=project_id,

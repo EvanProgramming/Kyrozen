@@ -146,18 +146,227 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
       if (created) process.env.KYROZEN_E2E_PROJECT_ID = created.id;
       await screenshotMilestone(window, '03-project-created.png', testInfo);
 
-      // 项目画布（2026-07-30 精简后信息架构：项目主页 / 项目决策 / 用户反馈）
+      // Phase 2 项目画布：七个专用工作中心。
       await window.getByRole('button', { name: '项目画布' }).click();
       await expect(window.getByTestId('project-workspace-panel')).toBeVisible();
 
-      // 验证精简后的画布标签页都存在（与正式信息架构一致）
-      const expectedTabs = ['项目主页', '项目决策', '用户反馈'];
+      // 验证七个工作中心都可发现（与正式信息架构一致）
+      const expectedTabs = ['项目主页', '决策中心', '采购中心', 'Maker 模式', '测试中心', '改进中心', '反馈中心'];
       for (const tab of expectedTabs) {
         await expect(
-          window.getByRole('button', { name: tab }),
+          window.getByRole('tab', { name: tab }),
           `画布标签 "${tab}" 应可见`,
         ).toBeVisible();
       }
+
+      // 窄窗口 + 键盘验收：标签可滚动、具备 tab 语义，并支持方向键/Home/End。
+      await window.setViewportSize({ width: 520, height: 720 });
+      const overviewTab = window.getByRole('tab', { name: '项目主页' });
+      await overviewTab.focus();
+      await overviewTab.press('End');
+      await expect(window.getByRole('tab', { name: '反馈中心' })).toHaveAttribute('aria-selected', 'true');
+      await window.getByRole('tab', { name: '反馈中心' }).press('Home');
+      await expect(overviewTab).toHaveAttribute('aria-selected', 'true');
+      await window.setViewportSize({ width: 1280, height: 800 });
+
+      // 证据→研究入口也必须从桌面端真实写入；研究运行本身在后端
+      // 单测和独立外部探测中验证，E2E 不依赖第三方服务可用性。
+      await window.getByPlaceholder('观察到的事实或用户原话').fill('用户希望先看到设备是否在线，再决定是否开始装配');
+      await window.getByPlaceholder('原文、截图说明或记录上下文').fill('访谈记录：用户不愿凭猜测选择串口');
+      await window.getByRole('button', { name: '保存证据' }).click();
+      await expect(window.getByRole('status')).toContainText('证据已保存');
+      await window.getByRole('button', { name: '查看影响' }).first().click();
+      await expect(window.getByRole('status')).toContainText('影响预览完成');
+      await window.getByRole('button', { name: '标记无效' }).first().click();
+      await expect(window.getByRole('status')).toContainText('证据已标记无效');
+      await window.getByRole('button', { name: '恢复证据' }).first().click();
+      await expect(window.getByRole('status')).toContainText('证据已恢复');
+
+      // Problem Brief 的引用必须能从结论跳回原始证据，而不是只展示被隐藏的 ID。
+      const evidenceWorkspace = await window.evaluate(async (pid: string) => {
+        const result = await (window as any).kyrozen.getProjectWorkspace(pid);
+        const evidence = (result.data?.artifacts || []).find((artifact: Record<string, unknown>) => artifact.type === 'discovery_evidence');
+        let content: Record<string, unknown> = {};
+        try { content = evidence ? JSON.parse(String(evidence.content || '{}')) : {}; } catch { /* assertion below reports missing data */ }
+        return { evidenceId: evidence?.id, observedAt: content.observed_at, source: content.source, artifacts: result.data?.artifacts || [] };
+      }, created!.id);
+      expect(evidenceWorkspace.evidenceId).toBeTruthy();
+      expect(evidenceWorkspace.observedAt).toBeTruthy();
+      expect(evidenceWorkspace.source).toBe('user_statement');
+      if (evidenceWorkspace.evidenceId) {
+        const brief = await window.evaluate(async (args: { pid: string; evidenceId: string }) => {
+          return (window as any).kyrozen.createArtifact(
+            args.pid,
+            'problem_brief',
+            'Problem Brief',
+            JSON.stringify({
+              title: '串口目标识别问题',
+              evidence_ids: [args.evidenceId],
+              counter_evidence_ids: [],
+              unresolved_questions: ['新手是否能独立判断串口目标？'],
+            }),
+            '桌面端证据引用回归',
+          );
+        }, { pid: created!.id, evidenceId: String(evidenceWorkspace.evidenceId) });
+        expect(brief.success).toBeTruthy();
+        await window.getByRole('button', { name: '刷新' }).click();
+        await expect(window.getByTestId('problem-brief-evidence-references')).toContainText('用户希望先看到设备是否在线');
+        await window.getByTestId('problem-brief-evidence-references').getByRole('button', { name: /用户希望先看到设备是否在线/ }).click();
+        await expect(window.locator(`#evidence-${evidenceWorkspace.evidenceId}`)).toBeVisible();
+      }
+
+      // 每个专用中心至少完成一次真实写入，随后通过刷新读取验证持久化。
+      await window.getByRole('tab', { name: '决策中心' }).click();
+      await window.getByPlaceholder('做出了什么决定？').fill('先验证串口识别，再进入硬件装配');
+      await window.getByPlaceholder('为什么这样决定？依据和取舍是什么？').fill('证据显示新手无法凭猜测选择串口，先降低误接线风险。');
+      await window.getByRole('button', { name: '保存决策' }).click();
+      await expect(window.getByRole('status')).toContainText('决策已保存');
+      await window.getByRole('button', { name: '刷新' }).click();
+      await expect(window.getByText('先验证串口识别，再进入硬件装配')).toBeVisible();
+
+      await window.getByRole('tab', { name: '采购中心' }).click();
+      await window.getByRole('button', { name: '只读发现设备' }).click();
+      await expect(window.getByText('BLOCKED', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+      await expect(window.getByRole('alert')).toContainText('重试硬件操作：list_ports');
+      await expect(window.getByRole('group', { name: '硬件实际行为 Ask question' })).toBeVisible();
+      await window.getByRole('button', { name: '不符合/暂不确认' }).click();
+      await expect(window.getByRole('status')).toContainText('保持 BLOCKED');
+      await window.getByLabel('版本化协议消息').fill('{invalid');
+      await window.getByRole('button', { name: '执行协议测试' }).click();
+      await expect(window.getByRole('alert')).toContainText('执行协议测试');
+      await window.getByLabel('版本化协议消息').fill('{"protocol_version":"1.0","message_type":"telemetry","fields":{"value":1},"direction":"app_to_device"}');
+      await window.getByRole('button', { name: '重试：执行协议测试' }).click();
+      await expect(window.getByText('PASSED', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+      await window.getByRole('button', { name: '执行协议测试' }).click();
+      await expect(window.getByText('PASSED', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+      await window.getByRole('button', { name: '运行六种模拟场景' }).click();
+      await expect(window.getByRole('status')).toContainText('协议六场景已通过并持久化', { timeout: 30_000 });
+      await window.getByPlaceholder('型号、数量、供应商、采购状态或替代件').fill('ESP32-DevKitC，1 件，未购买；替代型号待确认');
+      await window.getByRole('button', { name: '保存采购记录' }).click();
+      await expect(window.getByRole('status')).toContainText('已保存');
+      await window.getByLabel('精确型号').fill('ESP32-DevKitC V4');
+      await window.getByLabel('数量').fill('1');
+      await window.getByLabel('单价').fill('12');
+      await window.getByLabel('供应商').fill('示例供应商');
+      await window.getByRole('button', { name: '保存 BOM 条目' }).click();
+      await expect(window.getByRole('status')).toContainText('BOM 条目已保存');
+      await window.getByLabel('接线设备').fill('ESP32-DevKitC V4');
+      await window.getByLabel('设备引脚').fill('GPIO 4');
+      await window.getByLabel('目标引脚').fill('传感器 DATA');
+      await window.getByLabel('接线电压').fill('3.3V');
+      await window.getByLabel('电流方向').fill('传感器 → ESP32');
+      await window.getByLabel('接线安全条件').fill('断电后接线\n禁止 5V 直接输入 GPIO');
+      await window.getByRole('button', { name: '保存接线设计' }).click();
+      await expect(window.getByRole('status')).toContainText('接线设计已保存');
+      await window.getByLabel('固件版本').fill('0.1.0');
+      await window.getByLabel('固件源码').fill('hardware/firmware/main.ino');
+      await window.getByLabel('固件文件').fill('main.ino\nprotocol.json');
+      await window.getByRole('button', { name: '保存固件定义' }).click();
+      await expect(window.getByRole('status')).toContainText('固件项目定义已保存');
+      const hardwareArtifacts = await window.evaluate(async (pid: string) => {
+        const result = await (window as any).kyrozen.getProjectWorkspace(pid);
+        return (result.data?.artifacts || []).map((artifact: Record<string, unknown>) => artifact.type);
+      }, created!.id);
+      expect(hardwareArtifacts).toEqual(expect.arrayContaining(['bom', 'wiring_design', 'firmware_project']));
+
+      await window.getByRole('tab', { name: 'Maker 模式' }).click();
+      await window.getByPlaceholder('元件、动作、预期结果、安全提示、照片说明和完成确认').fill('连接公共地；预期无短路；断电后再调整接线；未完成');
+      await window.getByRole('button', { name: '保存装配确认' }).click();
+      await expect(window.getByRole('status')).toContainText('已保存');
+      await window.getByLabel('涉及元件').fill('ESP32-DevKitC V4');
+      await window.getByLabel('装配动作').fill('连接公共地');
+      await window.getByLabel('预期结果').fill('串口可稳定输出');
+      await window.getByLabel('安全提示').fill('断电后再调整接线');
+      await window.getByLabel('照片说明').fill('尚未连接实物');
+      await window.getByLabel('我已完成并确认此步骤').check();
+      await window.getByRole('button', { name: '保存结构化步骤' }).click();
+      await expect(window.getByRole('status')).toContainText('装配步骤已保存');
+
+      await window.getByRole('tab', { name: '测试中心' }).click();
+      await window.getByLabel('用例编号').fill('TC-DESKTOP-01');
+      await window.getByLabel('用例名称').fill('工作台刷新恢复');
+      await window.getByLabel('关联需求').fill('REQ-PHASE2-WORKBENCH');
+      await window.getByLabel('测试步骤').fill('保存工作中心记录\n刷新项目画布');
+      await window.getByLabel('预期结果').fill('记录仍可见且字段完整');
+      await window.getByRole('button', { name: '保存测试用例' }).click();
+      await expect(window.getByRole('status')).toContainText('测试用例已保存并加入追踪矩阵');
+      const testArtifacts = await window.evaluate(async (pid: string) => {
+        const result = await (window as any).kyrozen.getProjectWorkspace(pid);
+        return (result.data?.artifacts || []).map((artifact: Record<string, unknown>) => artifact.type);
+      }, created!.id);
+      expect(testArtifacts).toContain('test_case');
+      await window.getByPlaceholder('实际结果；失败/错误会自动建立缺陷记录').fill('失败：串口观察未收到预期输出');
+      await window.getByRole('button', { name: '保存测试结果' }).click();
+      await expect(window.getByRole('status')).toContainText('已保存');
+      await window.getByPlaceholder('修复说明和原用例实际结果').fill('修复端口提示后，重新执行原失败用例通过');
+      await window.getByRole('button', { name: '保存原用例回归通过' }).click();
+      await expect(window.getByRole('status')).toContainText('回归已通过');
+      const regressionArtifacts = await window.evaluate(async (pid: string) => {
+        const result = await (window as any).kyrozen.getProjectWorkspace(pid);
+        const artifacts = (result.data?.artifacts || []) as Record<string, unknown>[];
+        const decode = (type: string, title?: string) => {
+          const artifact = artifacts.find((item) => item.type === type && (!title || item.title === title));
+          try { return artifact ? JSON.parse(String(artifact.content || '{}')) : {}; } catch { return {}; }
+        };
+        return { types: artifacts.map((artifact) => artifact.type), testResult: decode('test_result', 'Desktop Workbench Test Result'), defect: decode('defect') };
+      }, created!.id);
+      expect(regressionArtifacts.types).toContain('defect_fix');
+      expect(regressionArtifacts.testResult.test_case_id).toBe('TC-DESKTOP-01');
+      expect(regressionArtifacts.testResult.defect_id).toBeTruthy();
+      expect(regressionArtifacts.testResult.evidence).toEqual(expect.arrayContaining(['desktop_user_flow']));
+      expect(regressionArtifacts.defect.related_requirement).toBe('REQ-PHASE2-WORKBENCH');
+      await window.getByRole('button', { name: '保存验证报告' }).click();
+      await expect(window.getByRole('status')).toContainText('验证报告保存失败');
+
+      await window.getByRole('tab', { name: '改进中心' }).click();
+      await window.getByPlaceholder('建议、证据、预期收益、风险、工作量和接受/延期理由').fill('建议增加串口未连接时的下一步提示；证据：测试失败；收益：降低新手阻塞；风险：低；工作量：半天');
+      await window.getByRole('button', { name: '保存改进建议' }).click();
+      await expect(window.getByRole('status')).toContainText('已保存');
+      await window.getByRole('button', { name: '接受', exact: true }).click();
+      await expect(window.getByRole('status')).toContainText('改进建议已接受');
+
+      await window.getByRole('tab', { name: '反馈中心' }).click();
+      await window.getByPlaceholder('参与者编号（如 U-01，可匿名）').fill('U-01');
+      await window.getByPlaceholder('用户类型（例如 maker）').fill('maker');
+      await window.getByPlaceholder('执行任务').fill('发现设备并观察串口');
+      await window.getByRole('combobox', { name: '任务是否完成' }).selectOption('no');
+      await window.getByPlaceholder('耗时（秒）').fill('90');
+      await window.getByPlaceholder('满意度（1-5）').fill('2');
+      await window.getByPlaceholder('用户完成了什么、遇到什么问题、是否愿意继续使用？').fill('用户无法确认串口目标，未能完成任务');
+      await window.getByPlaceholder('阻塞点（每行一项）').fill('找不到串口\n不知道下一步');
+      await window.getByPlaceholder('用户原话').fill('我不知道该选哪个端口');
+      await window.getByRole('button', { name: '保存反馈' }).click();
+      await expect(window.getByRole('status')).toContainText('用户反馈已记录');
+      await expect(window.getByText('已有用户验证')).toBeVisible();
+
+      // The first feedback above intentionally demonstrates the server-side
+      // final-report gate. Complete the ordinary user flow with two additional
+      // distinct target participants, then verify that the report can be
+      // written and survives the later restart. This remains synthetic E2E
+      // evidence; it must not be presented as real-user acceptance.
+      const recordAdditionalFeedback = async (participant: string, userType: string, task: string, quote: string) => {
+        await window.getByPlaceholder('参与者编号（如 U-01，可匿名）').fill(participant);
+        await window.getByPlaceholder('用户类型（例如 maker）').fill(userType);
+        await window.getByPlaceholder('执行任务').fill(task);
+        await window.getByRole('combobox', { name: '任务是否完成' }).selectOption('yes');
+        await window.getByPlaceholder('耗时（秒）').fill('75');
+        await window.getByPlaceholder('满意度（1-5）').fill('4');
+        await window.getByPlaceholder('用户完成了什么、遇到什么问题、是否愿意继续使用？').fill(`${participant} 完成了设备发现和串口观察任务`);
+        await window.getByPlaceholder('阻塞点（每行一项）').fill('');
+        await window.getByPlaceholder('用户原话').fill(quote);
+        await window.getByRole('button', { name: '保存反馈' }).click();
+        await expect(window.getByRole('status')).toContainText('用户反馈已记录');
+      };
+      await recordAdditionalFeedback('U-02', 'embedded maker', '按步骤完成接线并确认公共地', '接线步骤现在清楚多了');
+      await recordAdditionalFeedback('U-03', '软件开发者', '查看设备状态并处理离线提示', '我能理解设备为什么暂时不可用');
+      await window.getByRole('tab', { name: '测试中心' }).click();
+      await window.getByRole('button', { name: '保存验证报告' }).click();
+      await expect(window.getByRole('status')).toContainText('验证报告已保存');
+      const feedbackArtifacts = await window.evaluate(async (pid: string) => {
+        const result = await (window as any).kyrozen.getProjectWorkspace(pid);
+        return (result.data?.artifacts || []).map((artifact: Record<string, unknown>) => artifact.type);
+      }, created!.id);
+      expect(feedbackArtifacts).toContain('iteration_task');
 
       // 画布是独立覆盖层；检查完信息架构后关闭，回到主聊天区执行真实对话。
       await window.getByRole('button', { name: '关闭', exact: true }).click();
@@ -258,10 +467,35 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
         // 确认精简后的画布标签页仍在（恢复完整性）
         for (const tab of expectedTabs) {
           await expect(
-            window2.getByRole('button', { name: tab }),
+            window2.getByRole('tab', { name: tab }),
             `恢复后画布标签 "${tab}" 应可见`,
           ).toBeVisible();
         }
+
+        const restoredWorkspace = await window2.evaluate(async (pid: string) => {
+          const result = await (window as any).kyrozen.getProjectWorkspace(pid);
+          const artifacts = (result.data?.artifacts || []) as Record<string, unknown>[];
+          return {
+            project: result.data?.project || {},
+            artifactTypes: artifacts.map((artifact) => artifact.type),
+            taskTitles: (result.data?.tasks || []).map((task: Record<string, unknown>) => task.title),
+            decisions: (result.data?.decisions || []).map((decision: Record<string, unknown>) => decision.decision),
+            hardwareRuns: result.data?.local?.hardware_runs || [],
+            testResults: result.data?.phase2?.testing?.test_results || [],
+            participantCount: result.data?.phase2?.user_validation?.participant_count || 0,
+          };
+        }, created!.id);
+        expect(restoredWorkspace.project.project_type).toBe('software');
+        expect(restoredWorkspace.artifactTypes).toEqual(expect.arrayContaining([
+          'discovery_evidence', 'bom', 'wiring_design', 'firmware_project',
+          'assembly_step', 'test_case', 'test_result', 'defect', 'defect_fix', 'user_feedback',
+        ]));
+        expect(restoredWorkspace.artifactTypes).toContain('validation_report');
+        expect(restoredWorkspace.artifactTypes).toContain('iteration_task');
+        expect(restoredWorkspace.decisions).toContain('先验证串口识别，再进入硬件装配');
+        expect(restoredWorkspace.testResults.length).toBeGreaterThan(0);
+        expect(restoredWorkspace.participantCount).toBe(3);
+        expect(restoredWorkspace.hardwareRuns).toBeTruthy();
 
         // 关闭画布回到聊天区，确认上次对话消息仍然可见
         await window2.getByRole('button', { name: '关闭', exact: true }).click();
@@ -281,6 +515,128 @@ test.describe('Kyrozen 3.6 核心旅程', () => {
       await fs.rm(profile, { recursive: true, force: true });
       delete process.env.KYROZEN_E2E_ACCOUNT;
       delete process.env.KYROZEN_E2E_PROJECT_ID;
+    }
+  });
+
+  test('混合项目确认流程 → 协议门禁 → Fake 六场景模拟', async ({ browserName: _browserName }) => {
+    test.setTimeout(120_000);
+    const userId = randomUUID();
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'kyrozen-hybrid-e2e-'));
+    const projectName = `混合项目验收-${Date.now()}`;
+    await fs.writeFile(path.join(profile, 'onboarding.json'), JSON.stringify({ completed: true, language: 'zh' }));
+    const token = await createLocalAccessToken(userId);
+    const protocolUrl = `${PROTOCOL}://auth/login?kyrozen_token=${encodeURIComponent(token)}&github_token=e2e-placeholder&scope=read%3Auser`;
+    const electronApp = await launchElectron(profile, protocolUrl);
+    try {
+      const window = await electronApp.firstWindow();
+      await expect(window.getByTestId('project-list')).toBeVisible({ timeout: 25_000 });
+      await window.getByRole('button', { name: '新建' }).click();
+      await window.getByPlaceholder('例如：AI 写作助手').fill(projectName);
+      await window.getByPlaceholder('简短描述这个项目').fill('ESP32 传感器与网页控制面板');
+      await window.getByPlaceholder('你想用这个项目达成什么目标？').fill('让用户通过网页查看 ESP32 设备状态');
+      await window.getByRole('button', { name: '创建', exact: true }).click();
+      await expect(window.getByTestId('project-list').getByText(projectName, { exact: true })).toBeVisible({ timeout: 20_000 });
+      await window.getByRole('button', { name: '项目画布' }).click();
+      await expect(window.getByTestId('project-workspace-panel')).toBeVisible();
+      await window.getByRole('button', { name: '软硬件混合' }).click();
+      await window.getByRole('button', { name: '确认流程' }).click();
+      await expect(window.getByRole('status')).toContainText('项目类型与流程已确认');
+      const hybridProjects = (await window.evaluate(async () => (window as any).kyrozen.getProjects())) as Array<{ id: string; name: string }>;
+      const hybridProject = hybridProjects.find((project) => project.name === projectName);
+      expect(hybridProject).toBeDefined();
+      if (hybridProject) {
+        const hybridState = await window.evaluate(async (pid: string) => (window as any).kyrozen.getProjectState(pid), hybridProject.id);
+        expect(hybridState.workflow_stages).toEqual(expect.arrayContaining([
+          'protocol_design', 'development', 'testing', 'hardware_design',
+          'procurement', 'maker', 'firmware', 'hardware_testing',
+          'integration_testing',
+        ]));
+        // Seed only the already-confirmed solution prerequisite, then use the
+        // ordinary workbench control to start an independent software track.
+        const dimensions = ['time', 'cost', 'user_value', 'technical_risk', 'maintenance_cost', 'data_risk', 'validation_difficulty'];
+        const evidenceSeed = await window.evaluate(async (pid: string) => (window as any).kyrozen.createEvidence(pid, {
+          claim: '用户需要同时比较设备连接和软件控制的方案风险', evidence_type: 'interview', original_text: '混合项目访谈记录',
+        }), hybridProject.id);
+        expect(evidenceSeed.success).toBeTruthy();
+        const researchSeed = await window.evaluate(async (pid: string) => (window as any).kyrozen.createArtifact(
+          pid, 'research_source', 'Research Source: Hybrid Public Material', JSON.stringify({
+            title: 'Hybrid public material', url: 'https://example.com/hybrid-research', source_type: 'web_page', summary: '真实公开资料引用', fact_type: 'fact',
+          }), '混合项目 E2E 研究来源',
+        ), hybridProject.id);
+        expect(researchSeed.success).toBeTruthy();
+        const evidenceId = String((evidenceSeed.data as Record<string, unknown>)?.artifact_id || '');
+        expect(evidenceId).toBeTruthy();
+        const solutionSeed = await window.evaluate(async (args: { pid: string; dimensions: string[] }) => (window as any).kyrozen.saveSolution(
+          args.pid,
+          {
+            solutions: ['保守方案', '平衡方案', '激进方案'].map((name) => ({ name, solution: name, evidence_ids: [args.evidenceId], dimension_scores: Object.fromEntries(args.dimensions.map((dimension) => [dimension, 3])) })),
+            comparison_dimensions: args.dimensions,
+            recommendation: '平衡方案', recommendation_reason: '先验证核心价值',
+          },
+          'select',
+        ), { pid: hybridProject.id, dimensions, evidenceId });
+        expect(solutionSeed.success).toBeTruthy();
+        await window.getByRole('tab', { name: '项目主页' }).click();
+        await expect(window.getByRole('button', { name: '推进软件轨道' })).toBeVisible();
+        await window.getByRole('button', { name: '推进软件轨道' }).click();
+        await expect(window.getByRole('status')).toContainText('软件轨道已推进并持久化');
+        await window.getByRole('button', { name: '刷新' }).click();
+        await expect(window.getByText('当前：软件开发')).toBeVisible();
+      }
+      await window.getByRole('tab', { name: '采购中心' }).click();
+      await expect(window.getByText('协议模拟器 / 串口协议测试')).toBeVisible();
+      await window.getByRole('button', { name: '确认此协议版本' }).click();
+      await expect(window.getByRole('status')).toContainText('协议版本已确认');
+      await window.getByRole('button', { name: '运行六种模拟场景' }).click();
+      await expect(window.getByRole('status')).toContainText('协议六场景已通过并持久化', { timeout: 30_000 });
+      await window.getByLabel('集成测试记录').fill('Fake 协议消息经应用层和 API 传输，错误版本被拒绝；记录仅代表模拟器集成。');
+      await window.getByRole('button', { name: '保存集成测试记录' }).click();
+      await expect(window.getByRole('status')).toContainText('集成测试记录已保存');
+    } finally {
+      await electronApp.close();
+      await fs.rm(profile, { recursive: true, force: true });
+    }
+  });
+
+  test('嵌入式项目确认流程 → 硬件阶段序列', async ({ browserName: _browserName }) => {
+    test.setTimeout(120_000);
+    const userId = randomUUID();
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'kyrozen-embedded-e2e-'));
+    const projectName = `嵌入式项目验收-${Date.now()}`;
+    await fs.writeFile(path.join(profile, 'onboarding.json'), JSON.stringify({ completed: true, language: 'zh' }));
+    const token = await createLocalAccessToken(userId);
+    const protocolUrl = `${PROTOCOL}://auth/login?kyrozen_token=${encodeURIComponent(token)}&github_token=e2e-placeholder&scope=read%3Auser`;
+    const electronApp = await launchElectron(profile, protocolUrl);
+    try {
+      const window = await electronApp.firstWindow();
+      await expect(window.getByTestId('project-list')).toBeVisible({ timeout: 25_000 });
+      await window.getByRole('button', { name: '新建' }).click();
+      await window.getByPlaceholder('例如：AI 写作助手').fill(projectName);
+      await window.getByPlaceholder('简短描述这个项目').fill('ESP32 串口传感器');
+      await window.getByPlaceholder('你想用这个项目达成什么目标？').fill('制作一个可观察温度的开发板设备');
+      await window.getByRole('button', { name: '创建', exact: true }).click();
+      await expect(window.getByTestId('project-list').getByText(projectName, { exact: true })).toBeVisible({ timeout: 20_000 });
+      await window.getByRole('button', { name: '项目画布' }).click();
+      await expect(window.getByTestId('project-workspace-panel')).toBeVisible();
+      await window.getByRole('button', { name: '嵌入式', exact: true }).click();
+      await window.getByRole('button', { name: '确认流程' }).click();
+      await expect(window.getByRole('status')).toContainText('项目类型与流程已确认');
+      const projects = (await window.evaluate(async () => (window as any).kyrozen.getProjects())) as Array<{ id: string; name: string }>;
+      const created = projects.find((project) => project.name === projectName);
+      expect(created).toBeDefined();
+      if (created) {
+        const state = await window.evaluate(async (pid: string) => (window as any).kyrozen.getProjectState(pid), created.id);
+        expect(state.project_type).toBe('embedded');
+        expect(state.workflow_stages).toEqual(expect.arrayContaining(['hardware_design', 'procurement', 'maker', 'firmware', 'hardware_testing']));
+      }
+      await window.getByRole('tab', { name: '采购中心' }).click();
+      await window.getByLabel('硬件方案').fill('ESP32 控制器、温度传感器、3.3V 供电；禁止 5V 直接输入 GPIO。');
+      await window.getByRole('button', { name: '保存硬件方案' }).click();
+      await expect(window.getByRole('status')).toContainText('硬件方案已保存');
+      await window.getByRole('button', { name: '关闭', exact: true }).click();
+    } finally {
+      await electronApp.close();
+      await fs.rm(profile, { recursive: true, force: true });
     }
   });
 });

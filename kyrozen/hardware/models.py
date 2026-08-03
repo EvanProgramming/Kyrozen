@@ -29,6 +29,10 @@ VALID_PURCHASE_STATUSES = {
     "alternative_needed",
 }
 
+VALID_PROCUREMENT_STATUSES = {
+    "not_purchased", "ordered", "in_transit", "delivered", "inspected", "installed",
+}
+
 VALID_HARDWARE_DECISIONS = {
     "continue_hardware",
     "change_component",
@@ -193,11 +197,20 @@ class BOMItem(Component):
     vendor: str = ""
     link: str = ""
     availability: str = ""
+    procurement_status: str = "not_purchased"
+    total_price: str = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.purchase_status and self.purchase_status not in VALID_PURCHASE_STATUSES:
             raise ValueError(f"Invalid purchase_status '{self.purchase_status}'")
+        if self.procurement_status not in VALID_PROCUREMENT_STATUSES:
+            raise ValueError(f"Invalid procurement_status '{self.procurement_status}'")
+        if not self.total_price and self.price:
+            try:
+                self.total_price = f"{float(self.price) * self.quantity:g}"
+            except (TypeError, ValueError):
+                pass
 
     def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
@@ -208,6 +221,8 @@ class BOMItem(Component):
             "vendor": self.vendor,
             "link": self.link,
             "availability": self.availability,
+            "procurement_status": self.procurement_status,
+            "total_price": self.total_price,
         })
         return data
 
@@ -222,6 +237,8 @@ class BOMItem(Component):
             vendor=data.get("vendor", ""),
             link=data.get("link", ""),
             availability=data.get("availability", ""),
+            procurement_status=data.get("procurement_status", "not_purchased"),
+            total_price=data.get("total_price", ""),
         )
 
 
@@ -233,6 +250,17 @@ class BOM:
     total_estimate: str = ""
     currency: str = "USD"
     notes: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.total_estimate:
+            values: list[float] = []
+            for item in self.items:
+                try:
+                    values.append(float(item.total_price or item.price) * (1 if item.total_price else item.quantity))
+                except (TypeError, ValueError):
+                    continue
+            if values:
+                self.total_estimate = f"{sum(values):g}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -261,6 +289,9 @@ class WiringConnection:
     target: str = ""              # e.g. "GPIO21"
     target_type: str = ""         # e.g. "controller", "power", "gnd"
     notes: str = ""
+    voltage: str = ""
+    current_direction: str = ""
+    safety_conditions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -269,6 +300,9 @@ class WiringConnection:
             "target": self.target,
             "target_type": self.target_type,
             "notes": self.notes,
+            "voltage": self.voltage,
+            "current_direction": self.current_direction,
+            "safety_conditions": list(self.safety_conditions),
         }
 
     @classmethod
@@ -279,6 +313,9 @@ class WiringConnection:
             target=data.get("target", ""),
             target_type=data.get("target_type", ""),
             notes=data.get("notes", ""),
+            voltage=data.get("voltage", ""),
+            current_direction=data.get("current_direction", ""),
+            safety_conditions=list(data.get("safety_conditions") or []),
         )
 
 
@@ -315,6 +352,8 @@ class FirmwareProject:
 
     platform: str = ""            # "arduino", "esp32", "platformio"
     board: str = ""               # e.g. "esp32-s3-devkitc-1"
+    version: str = ""
+    source: str = ""
     framework: str = ""           # e.g. "arduino"
     libraries: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
@@ -322,6 +361,10 @@ class FirmwareProject:
     build_output: str = ""
     upload_status: str = "pending"
     upload_output: str = ""
+    tool_versions: dict[str, str] = field(default_factory=dict)
+    port: str = ""
+    baud: int = 115200
+    upload_error_category: str = ""
 
     def __post_init__(self) -> None:
         if self.platform and self.platform not in VALID_FIRMWARE_PLATFORMS:
@@ -335,6 +378,8 @@ class FirmwareProject:
         return {
             "platform": self.platform,
             "board": self.board,
+            "version": self.version,
+            "source": self.source,
             "framework": self.framework,
             "libraries": list(self.libraries),
             "files": list(self.files),
@@ -342,6 +387,10 @@ class FirmwareProject:
             "build_output": self.build_output,
             "upload_status": self.upload_status,
             "upload_output": self.upload_output,
+            "tool_versions": dict(self.tool_versions),
+            "port": self.port,
+            "baud": self.baud,
+            "upload_error_category": self.upload_error_category,
         }
 
     @classmethod
@@ -349,6 +398,8 @@ class FirmwareProject:
         return cls(
             platform=data.get("platform", ""),
             board=data.get("board", ""),
+            version=data.get("version", ""),
+            source=data.get("source", ""),
             framework=data.get("framework", ""),
             libraries=list(data.get("libraries") or []),
             files=list(data.get("files") or []),
@@ -356,6 +407,10 @@ class FirmwareProject:
             build_output=data.get("build_output", ""),
             upload_status=data.get("upload_status", "pending"),
             upload_output=data.get("upload_output", ""),
+            tool_versions=dict(data.get("tool_versions") or {}),
+            port=data.get("port", ""),
+            baud=int(data.get("baud", 115200) or 115200),
+            upload_error_category=data.get("upload_error_category", ""),
         )
 
 
@@ -369,6 +424,10 @@ class AssemblyStep:
     components_involved: list[str] = field(default_factory=list)
     status: str = "pending"
     verification_method: str = ""
+    expected_result: str = ""
+    safety_notes: str = ""
+    photo: str = ""
+    confirmed: bool = False
 
     def __post_init__(self) -> None:
         if self.status and self.status not in VALID_ASSEMBLY_STATUSES:
@@ -382,6 +441,10 @@ class AssemblyStep:
             "components_involved": list(self.components_involved),
             "status": self.status,
             "verification_method": self.verification_method,
+            "expected_result": self.expected_result,
+            "safety_notes": self.safety_notes,
+            "photo": self.photo,
+            "confirmed": self.confirmed,
         }
 
     @classmethod
@@ -393,6 +456,10 @@ class AssemblyStep:
             components_involved=list(data.get("components_involved") or []),
             status=data.get("status", "pending"),
             verification_method=data.get("verification_method", ""),
+            expected_result=data.get("expected_result", ""),
+            safety_notes=data.get("safety_notes", ""),
+            photo=data.get("photo", ""),
+            confirmed=bool(data.get("confirmed", False)),
         )
 
 

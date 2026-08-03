@@ -208,11 +208,14 @@ export function initAutoUpdater(mainWindow: Electron.BrowserWindow): void {
   });
 
   autoUpdater.on('error', (err) => {
-    // P1-02: "No published versions on GitHub" 是正常状态（尚无发布），
-    // 不应以英文错误显示。本地化为中文当前版本提示。
+    // Beta releases are intentionally marked as prerelease. GitHub's
+    // /releases/latest endpoint returns 406 when there is no stable release;
+    // this is an expected state, not a user-facing error.
     const msg = err.message || '';
-    if (/no published versions|no releases|No published/i.test(msg)) {
-      sendUpdateStatus('not-available', '当前已是最新版本');
+    if (/no published versions|no releases|No published|Unable to find latest version|\b406\b|releases\/latest/i.test(msg)) {
+      // A prerelease-only repository has no stable feed by design. Keep the
+      // startup surface quiet; users can still download a newer beta manually.
+      sendUpdateStatus('up-to-date', '');
     } else {
       sendUpdateStatus('error', `检查更新失败: ${msg}`, { message: msg });
     }

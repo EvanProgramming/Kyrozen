@@ -90,6 +90,12 @@ class TestResolveMode:
         mode, _, _ = router.resolve_mode(stage="testing")
         assert mode == "testing"
 
+    def test_phase2_hardware_and_protocol_stages_route_to_specialists(self, router: AgentRouter) -> None:
+        assert router.resolve_mode(stage="hardware_design", project_type="embedded")[0] == "hardware_development"
+        assert router.resolve_mode(stage="firmware", project_type="embedded")[0] == "hardware_development"
+        assert router.resolve_mode(stage="protocol_design", project_type="hybrid")[0] == "solution_design"
+        assert router.resolve_mode(stage="integration_testing", project_type="hybrid")[0] == "testing"
+
     def test_stage_solution_design_refines_planning(self, router: AgentRouter) -> None:
         mode, _, _ = router.resolve_mode(requested_mode="product_definition", stage="solution_design")
         assert mode == "solution_design"

@@ -15,7 +15,7 @@ import traceback
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -37,10 +37,12 @@ from kyrozen.auth.dependencies import (
 from kyrozen.config import KyrozenConfig, get_config
 from kyrozen.core.agent import BaseAgent
 from kyrozen.core.task import TaskManager
+from kyrozen.core.stagegate import StageGateStore, advance as advance_stage, compute_gate, refresh_gate, sync_artifact_deliverables
 from kyrozen.desktop import DesktopClientManager, DesktopTokenManager, QuotaManager
 from kyrozen.development.agent import SoftwareDevelopmentAgent
 from kyrozen.discovery import ProblemDiscoveryAgent
 from kyrozen.hardware.agent import HardwareDevelopmentAgent
+from kyrozen.hardware.transport import build_connection_model
 from kyrozen.logs import get_logger
 from kyrozen.memory import InMemoryMemory, JsonFileMemory, ProjectMemory
 from kyrozen.membership import MembershipService
@@ -49,7 +51,21 @@ from kyrozen.models import ModelInterface, get_model_provider
 from kyrozen.planning.agent import ProductPlanningAgent
 from kyrozen.project import KyrozenDatabase, ProjectContextBuilder, ProjectManager, SupabaseDatabase, create_database
 from kyrozen.project.project import PROJECT_STAGES
+from kyrozen.project.workflow import PROJECT_TYPES, WORKFLOW_VERSION, classify_project_type, stages_for, tracks_for
+from kyrozen.planning.models import SolutionComparison, PHASE2_COMPARISON_DIMENSIONS
 from kyrozen.research.agent import MarketResearchAgent
+from kyrozen.research.runs import execute_research_run
+from kyrozen.tools.research.providers import (
+    CommunitySearchProvider,
+    CrowdfundingSearchProvider,
+    GitHubSearchProvider,
+    GitHubDiscussionsProvider,
+    PatentSearchProvider,
+    RedditSearchProvider,
+    SemanticScholarProvider,
+    TavilySearchProvider,
+    SerperSearchProvider,
+)
 from kyrozen.discovery.evidence import Evidence
 from kyrozen.phase2 import build_workbench_snapshot
 
@@ -530,6 +546,10 @@ class DesktopPollPairingRequest(BaseModel):
     code: str = Field(..., min_length=1)
 
 
+class GithubDesktopExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=16, max_length=256)
+
+
 class DesktopConfirmPairingRequest(BaseModel):
     code: str = Field(..., min_length=1)
 
@@ -544,7 +564,9 @@ class CreateProjectRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = ""
     goal: str = ""
+    budget: str = ""
     initial_idea: str = ""
+    project_type: str = Field("software", pattern="^(software|embedded|hybrid)$")
 
 
 class MembershipPlanRequest(BaseModel):
@@ -568,11 +590,17 @@ class UpdateProjectRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     goal: str | None = None
+    budget: str | None = None
     status: str | None = None
     current_stage: str | None = None
     next_steps: str | None = None
     risks: list[str] | None = None
     progress: int | None = Field(default=None, ge=0, le=100)
+    project_type: str | None = Field(default=None, pattern="^(software|embedded|hybrid)$")
+    workflow_version: str | None = None
+    type_source: str | None = None
+    type_confidence: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    type_confirmed: bool | None = None
 
 
 class RefreshSessionRequest(BaseModel):
@@ -591,11 +619,15 @@ class CreateArtifactRequest(BaseModel):
     title: str = Field(..., min_length=1)
     content: str = ""
     change_reason: str = ""
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class CreateEvidenceRequest(BaseModel):
     claim: str = Field(..., min_length=1)
+    original_text: str = ""
+    summary: str = ""
     source: str = Field("user_statement", pattern="^(user_statement|ai_inference|external_evidence)$")
+    source_name: str = ""
     evidence_type: str = Field("interview", pattern="^(interview|observation|survey|screenshot|video|public_source|user_statement|ai_inference|external_evidence)$")
     verified: bool = False
     confidence: str = Field("medium", pattern="^(low|medium|high)$")
@@ -605,10 +637,13 @@ class CreateEvidenceRequest(BaseModel):
     target_audience: str = ""
     related_question: str = ""
     counter_evidence: list[str] = Field(default_factory=list)
+    claim_type: str = Field("unknown", pattern="^(fact|opinion|inference|unknown)$")
 
 
 class UpdateEvidenceRequest(BaseModel):
     claim: str | None = Field(default=None, min_length=1)
+    original_text: str | None = None
+    summary: str | None = None
     verified: bool | None = None
     confidence: str | None = Field(default=None, pattern="^(low|medium|high)$")
     notes: str | None = None
@@ -616,7 +651,63 @@ class UpdateEvidenceRequest(BaseModel):
     target_audience: str | None = None
     related_question: str | None = None
     counter_evidence: list[str] | None = None
-    status: str | None = Field(default=None, pattern="^(active|invalid|merged)$")
+    claim_type: str | None = Field(default=None, pattern="^(fact|opinion|inference|unknown)$")
+    status: str | None = Field(default=None, pattern="^(active|invalid|merged|deleted)$")
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class MergeEvidenceRequest(BaseModel):
+    target_evidence_id: str = Field(..., min_length=1)
+    reason: str = ""
+    expected_source_version: int | None = Field(default=None, ge=1)
+    expected_target_version: int | None = Field(default=None, ge=1)
+
+
+class ResearchRunRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class ResearchSourceRequest(BaseModel):
+    source: dict[str, Any]
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class SolutionComparisonRequest(BaseModel):
+    comparison: dict[str, Any]
+    action: str = Field("save", pattern="^(save|select|compose|reject|regenerate|revoke)$")
+    affected_tasks: list[str] = Field(default_factory=list)
+    affected_files: list[str] = Field(default_factory=list)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class ProtocolConfirmationRequest(BaseModel):
+    protocol: dict[str, Any]
+    confirmed: bool = True
+    affected_files: list[str] = Field(default_factory=list)
+    affected_tasks: list[str] = Field(default_factory=list)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class WorkflowTrackAdvanceRequest(BaseModel):
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class UpdateDefectRequest(BaseModel):
+    status: str | None = Field(default=None, pattern="^(open|in_progress|resolved|verified|rejected)$")
+    owner: str | None = None
+    fix: str | None = None
+    regression_result_id: str | None = None
+    reproduction_steps: list[str] | None = None
+    actual: str | None = None
+    expected: str | None = None
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class StageSyncRequest(BaseModel):
+    stage: str = Field(..., min_length=1)
+    progress: int = Field(0, ge=0, le=100)
+    gate: dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateFileSummaryRequest(BaseModel):
@@ -643,6 +734,14 @@ class CreateFeedbackRequest(BaseModel):
     description: str = Field(..., min_length=1)
     project_id: str | None = None
     priority: str = Field("medium", pattern="^(low|medium|high|critical)$")
+    participant_id: str = Field("", max_length=120)
+    user_type: str = ""
+    task: str = ""
+    completed: bool | None = None
+    duration_seconds: int | None = Field(default=None, ge=0)
+    blockers: list[str] = Field(default_factory=list)
+    quote: str = ""
+    satisfaction: int | None = Field(default=None, ge=1, le=5)
 
 
 class CreateEventRequest(BaseModel):
@@ -788,9 +887,23 @@ def _is_developer_user_id(user_id: str) -> bool:
     return bool(config and (config.provider == "mock" or user_id in config.developer_user_ids))
 
 
+def _membership_plan_override(current_user: CurrentUser) -> str | None:
+    """Return the plan usable in this release for an ordinary account."""
+    if _is_developer_account(current_user):
+        return None
+    if _config is not None and not _config.membership_enabled:
+        return "free"
+    return None
+
+
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_openable_external_url(value: str) -> bool:
+    parsed = urlparse(value.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 #: Modes preferring local (desktop) execution. Phase 1 acceptance: when a
@@ -858,6 +971,7 @@ async def _handle_model_request(
     message: dict[str, Any],
     user_id: str,
     logger: Any,
+    developer: bool = False,
 ) -> None:
     """Proxy a model request from a desktop client to the configured cloud model.
 
@@ -889,8 +1003,8 @@ async def _handle_model_request(
         provider=getattr(model, "provider_name", ""),
         model=getattr(model, "model", ""),
     )
-    if not _is_developer_user_id(user_id):
-        decision = membership.check(user_id, estimate)
+    if not developer:
+        decision = membership.check(user_id, estimate, plan_override="free" if _config is not None and not _config.membership_enabled else None)
         if not decision["allowed"]:
             await websocket.send_json({
                 "type": "model_error",
@@ -956,8 +1070,8 @@ async def _handle_model_request(
         })
 
 
-def _recommend_next_action(project: Any) -> dict[str, str] | None:
-    """Recommend the next action based on the project's current stage."""
+def _recommend_next_action(project: Any, stage: str | None = None) -> dict[str, str] | None:
+    """Recommend the next action for a project's current or supplied stage."""
     mapping = {
         "problem_discovery": {
             "action": "和 AI 一起澄清问题",
@@ -979,6 +1093,41 @@ def _recommend_next_action(project: Any) -> dict[str, str] | None:
             "reason": "需要确定实现方案",
             "target_mode": "planning",
         },
+        "protocol_design": {
+            "action": "确认软硬件协议",
+            "reason": "混合项目必须先确认版本化消息和兼容边界",
+            "target_mode": "planning",
+        },
+        "hardware_design": {
+            "action": "设计硬件方案",
+            "reason": "明确板卡、接线、电源和安全约束",
+            "target_mode": "hardware_development",
+        },
+        "procurement": {
+            "action": "整理 BOM 并记录采购状态",
+            "reason": "硬件装配前需要确认型号、数量和替代件",
+            "target_mode": "hardware_development",
+        },
+        "maker": {
+            "action": "按 Maker 步骤装配",
+            "reason": "逐步确认元件、动作、预期结果和安全提示",
+            "target_mode": "hardware_development",
+        },
+        "firmware": {
+            "action": "编译并准备上传固件",
+            "reason": "固件必须在真实板卡测试前完成编译记录",
+            "target_mode": "hardware_development",
+        },
+        "hardware_testing": {
+            "action": "发现设备并进行硬件测试",
+            "reason": "记录供电、串口、输入输出和恢复证据",
+            "target_mode": "hardware_development",
+        },
+        "integration_testing": {
+            "action": "运行软硬件集成测试",
+            "reason": "验证协议、离线、重连、重复消息和版本兼容",
+            "target_mode": "testing",
+        },
         "development": {
             "action": "开始软件开发",
             "reason": "进入实现阶段",
@@ -995,7 +1144,7 @@ def _recommend_next_action(project: Any) -> dict[str, str] | None:
             "target_mode": "learning",
         },
     }
-    return mapping.get(project.current_stage)
+    return mapping.get(stage or project.current_stage)
 
 
 def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None = None) -> FastAPI:
@@ -1393,12 +1542,18 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     # GitHub Login (no prior Kyrozen account required)
     # ------------------------------------------------------------------
     _github_login_states: dict[str, dict[str, Any]] = {}
+    # OAuth credentials never travel through a custom-scheme URL. The browser
+    # receives only this short-lived, one-time opaque code.
+    _github_desktop_exchange_codes: dict[str, dict[str, Any]] = {}
 
     def _cleanup_github_login_states() -> None:
         now = datetime.now(timezone.utc).timestamp()
         expired = [k for k, v in _github_login_states.items() if v.get("expires_at", 0) < now]
         for k in expired:
             _github_login_states.pop(k, None)
+        expired_exchange = [k for k, v in _github_desktop_exchange_codes.items() if v.get("expires_at", 0) < now]
+        for k in expired_exchange:
+            _github_desktop_exchange_codes.pop(k, None)
 
     @app.get("/api/auth/github/login")
     async def api_github_login(request: Request):
@@ -1563,18 +1718,23 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         kyrozen_token = session.session.access_token
         refresh_token = session.session.refresh_token
 
-        # 5. Redirect desktop via kyrozen:// custom URL scheme.
+        # 5. Store sensitive credentials behind a short-lived one-time code.
+        _cleanup_github_login_states()
+        exchange_code = secrets.token_urlsafe(32)
+        _github_desktop_exchange_codes[exchange_code] = {
+            "access_token": kyrozen_token,
+            "refresh_token": refresh_token,
+            "github_token": github_token,
+            "scope": scope,
+            "user_id": user_id,
+            "expires_at": datetime.now(timezone.utc).timestamp() + 120,
+        }
+
+        # 6. Redirect desktop via kyrozen:// with only the opaque code.
         #    Serve an HTML page that auto-redirects but also shows a
         #    manual "Open Kyrozen" button if the browser blocks the
         #    custom protocol handler.
-        redirect_url = (
-            f"kyrozen://auth/login?"
-            f"kyrozen_token={kyrozen_token}&"
-            f"refresh_token={refresh_token}&"
-            f"github_token={github_token}&"
-            f"scope={scope}&"
-            f"user_id={user_id}"
-        )
+        redirect_url = f"kyrozen://auth/login?code={exchange_code}"
         return HTMLResponse(
             status_code=200,
             content=f"""<!DOCTYPE html>
@@ -1645,6 +1805,21 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 </body>
 </html>""",
         )
+
+    @app.post("/api/auth/github/desktop-exchange")
+    async def api_github_desktop_exchange(request: GithubDesktopExchangeRequest):
+        """Consume a one-time desktop OAuth code over HTTPS."""
+        _cleanup_github_login_states()
+        payload = _github_desktop_exchange_codes.pop(request.code, None)
+        if not payload or payload.get("expires_at", 0) < datetime.now(timezone.utc).timestamp():
+            raise HTTPException(status_code=400, detail="Invalid or expired desktop OAuth code")
+        return {
+            "access_token": payload["access_token"],
+            "refresh_token": payload["refresh_token"],
+            "github_token": payload["github_token"],
+            "scope": payload.get("scope", ""),
+            "user_id": payload.get("user_id", ""),
+        }
 
     # ------------------------------------------------------------------
     # Desktop update signatures
@@ -1827,7 +2002,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 prompt_tokens=max(1, len(request.message) // 4),
                 completion_tokens=0,
             )
-            decision = _get_membership_service().check(current_user.user_id, estimate, conversation=True)
+            decision = _get_membership_service().check(
+                current_user.user_id,
+                estimate,
+                conversation=True,
+                plan_override=_membership_plan_override(current_user),
+            )
             if not decision["allowed"]:
                 raise HTTPException(429, decision["reason"])
             # Count the user-initiated conversation separately from model usage;
@@ -2174,15 +2354,21 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         pm = _get_project_manager()
         if not _is_developer_account(current_user):
             existing = pm.list(user_id=current_user.user_id)
-            allowed, reason = _get_membership_service().project_decision(current_user.user_id, len(existing))
+            allowed, reason = _get_membership_service().project_decision(
+                current_user.user_id,
+                len(existing),
+                plan_override=_membership_plan_override(current_user),
+            )
             if not allowed:
                 raise HTTPException(status_code=403, detail=reason)
         project = pm.create(
             name=request.name,
             description=request.description,
             goal=request.goal,
+            budget=request.budget,
             initial_idea=request.initial_idea,
             user_id=current_user.user_id,
+            project_type=request.project_type,
         )
         # Ensure project directory and memory file exist
         if _config is not None:
@@ -2217,12 +2403,155 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         current_user: CurrentUser = Depends(get_current_user),
     ):
         pm = _get_project_manager()
-        _get_owned_project(project_id, current_user)
+        project = _get_owned_project(project_id, current_user)
         updates = {k: v for k, v in request.model_dump().items() if v is not None}
+        if "current_stage" in updates and updates["current_stage"] != project.current_stage:
+            raise HTTPException(409, "阶段不能通过普通项目更新跳转，请使用统一阶段门禁")
+        if "project_type" in updates:
+            raise HTTPException(409, "项目类型必须通过 workflow-confirm 确认，不能通过普通项目更新修改")
+        if updates.get("status") == "completed":
+            readiness = build_workbench_snapshot(project, pm).get("phase2_completion", {})
+            if not readiness.get("ready"):
+                raise HTTPException(
+                    409,
+                    detail={"message": "第二阶段验收条件尚未全部满足，不能标记项目完成", "phase2_completion": readiness},
+                )
         project = pm.update(project_id, **updates)
         if project is None:
             raise HTTPException(404, "Project not found")
         return project.to_dict()
+
+    @app.post("/api/projects/{project_id}/stage-sync")
+    async def api_sync_project_stage(
+        project_id: str,
+        request: StageSyncRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Persist a stage already advanced by the local StageGateStore.
+
+        The desktop Agent remains the gate authority for the user's selected
+        workspace. The server only accepts one adjacent stage and a gate
+        snapshot, so this endpoint cannot be used as an arbitrary index jump.
+        """
+        project = _get_owned_project(project_id, current_user)
+        stages = list(stages_for(project.project_type))
+        if request.stage not in stages:
+            raise HTTPException(422, "阶段不属于当前项目流程")
+        current_index = stages.index(project.current_stage)
+        target_index = stages.index(request.stage)
+        if target_index < current_index or target_index > current_index + 1:
+            raise HTTPException(409, "阶段只能由统一门禁逐步推进")
+        if target_index == current_index + 1:
+            gate = request.gate
+            missing = gate.get("missing") if isinstance(gate.get("missing"), list) else None
+            gate_stage = gate.get("stage")
+            gate_index = gate.get("index")
+            if (
+                gate_stage != request.stage
+                or gate_index != target_index
+                or gate.get("can_advance") is not True
+                or missing is None
+                or any(
+                    isinstance(item, dict)
+                    and item.get("kind") not in {"confirmation"}
+                    and item.get("required", True)
+                    and not item.get("satisfied", False)
+                    for item in missing
+                )
+            ):
+                raise HTTPException(409, "缺少完整且自洽的本地阶段门禁证据")
+            # Do not treat the client snapshot as the authority. Rebuild the
+            # gate from the server's project workspace and persisted records so
+            # a caller cannot advance with {can_advance: true, missing: []}.
+            workflow_root = Path(_config.project_dir(project_id) if _config is not None else f".kyrozen/projects/{project_id}")
+            server_store = StageGateStore(
+                workflow_root / ".kyrozen" / "stagegate.json",
+                project_id=project_id,
+                project_type=project.project_type,
+            )
+            server_store.set_workflow(project.project_type)
+            server_store.current_stage = project.current_stage
+            solution_artifact = _get_project_manager().get_latest_artifact(
+                project_id, "solution_decision", title="Solution Decision"
+            )
+            solution_confirmed = False
+            if solution_artifact is not None:
+                try:
+                    solution_confirmed = json.loads(solution_artifact.content).get("action") in {"select", "compose"}
+                except (TypeError, json.JSONDecodeError):
+                    solution_confirmed = False
+            server_store.record_confirmation(
+                "solution_confirmed",
+                solution_confirmed,
+                detail="用户已确认方案" if solution_confirmed else "尚未确认有效方案",
+            )
+            actual_gate = refresh_gate(server_store, workflow_root)
+            sync_artifact_deliverables(
+                server_store,
+                [artifact.type for artifact in _get_project_manager().list_artifacts(project_id)],
+            )
+            server_store.save()
+            actual_gate = compute_gate(server_store)
+            actual_missing = [
+                item for item in actual_gate.missing
+                if item.kind not in {"confirmation", "task"} and item.required and not item.satisfied
+            ]
+            if not actual_gate.can_advance or actual_missing:
+                raise HTTPException(
+                    409,
+                    detail={
+                        "message": "服务端重新计算的阶段门禁未满足",
+                        "gate": actual_gate.to_dict(),
+                    },
+                )
+        updated = _get_project_manager().update(
+            project_id,
+            current_stage=request.stage,
+            progress=request.progress,
+            next_steps=(_recommend_next_action(project, request.stage) or {}).get("action", ""),
+            blocked_reason="",
+        )
+        if updated is None:
+            raise HTTPException(404, "Project not found")
+        return {**updated.to_dict(), "gate": request.gate}
+
+    @app.get("/api/projects/{project_id}/workflow-suggestion")
+    async def api_project_workflow_suggestion(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        project = _get_owned_project(project_id, current_user)
+        return {
+            **classify_project_type(goal=project.goal, description=project.description),
+            "current": {
+                "project_type": project.project_type,
+                "workflow_version": project.workflow_version,
+                "type_confirmed": project.type_confirmed,
+            },
+        }
+
+    @app.post("/api/projects/{project_id}/workflow-confirm")
+    async def api_confirm_project_workflow(
+        project_id: str,
+        request: UpdateProjectRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        project = _get_owned_project(project_id, current_user)
+        if not request.project_type:
+            raise HTTPException(422, "project_type is required")
+        if project.current_stage != "problem_discovery" and project.project_type != request.project_type:
+            raise HTTPException(409, "项目类型只能在问题探索阶段确认或重新评估")
+        updated = _get_project_manager().update(
+            project_id,
+            project_type=request.project_type,
+            workflow_version=WORKFLOW_VERSION,
+            type_source=request.type_source or "user_confirmed",
+            type_confidence=request.type_confidence or "high",
+            type_confirmed=True,
+        )
+        if updated is None:
+            raise HTTPException(404, "Project not found")
+        return {**updated.to_dict(), "workflow_stages": list(stages_for(updated.project_type))}
 
     @app.post("/api/projects/{project_id}/archive")
     async def api_archive_project(
@@ -2278,6 +2607,9 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         next_action = _recommend_next_action(project)
         return {
             "project_id": project_id,
+            "project_type": project.project_type,
+            "workflow_version": project.workflow_version,
+            "workflow_stages": list(stages_for(project.project_type)),
             "stage": project.current_stage,
             "progress": project.progress,
             "blocked_reason": project.blocked_reason or None,
@@ -2295,6 +2627,109 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         project = _get_owned_project(project_id, current_user)
         return build_workbench_snapshot(project, _get_project_manager())
 
+    @app.post("/api/projects/{project_id}/phase2/tracks/{track}/advance")
+    async def api_advance_hybrid_track(
+        project_id: str,
+        track: str,
+        request: WorkflowTrackAdvanceRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        project = _get_owned_project(project_id, current_user)
+        if project.project_type != "hybrid":
+            raise HTTPException(409, "只有混合项目支持独立并行轨道")
+        track_definitions = tracks_for("hybrid")
+        if track not in track_definitions:
+            raise HTTPException(422, detail={"message": "未知的混合项目轨道", "track": track})
+        pm = _get_project_manager()
+        title = "Hybrid Workflow Track State"
+        current = pm.get_latest_artifact(project_id, "workflow_track_state", title=title)
+        if request.expected_version is not None and (current is None or current.version != request.expected_version):
+            raise HTTPException(409, detail={"message": "混合轨道状态已变化，请刷新后重试", "current_version": current.version if current else None})
+        try:
+            state = json.loads(current.content) if current else {}
+        except (TypeError, json.JSONDecodeError):
+            state = {}
+        tracks = state.get("tracks") if isinstance(state.get("tracks"), dict) else {}
+        for name, stages in track_definitions.items():
+            saved = tracks.get(name) if isinstance(tracks.get(name), dict) else {}
+            tracks[name] = {
+                "state": str(saved.get("state") or "pending"),
+                "stages": list(stages),
+                "current_stage": saved.get("current_stage"),
+                "completed_stages": list(saved.get("completed_stages") or []),
+                "next_stage": saved.get("next_stage") if "next_stage" in saved else (stages[0] if stages else None),
+            }
+        selected = tracks[track]
+        solution = pm.get_latest_artifact(project_id, "solution_decision", title="Solution Decision")
+        try:
+            solution_confirmed = solution is not None and json.loads(solution.content).get("action") in {"select", "compose"}
+        except (TypeError, json.JSONDecodeError):
+            solution_confirmed = False
+        comparison = pm.get_latest_artifact(project_id, "solution_comparison", title="Solution Comparison")
+        try:
+            comparison_valid = comparison is not None and not SolutionComparison.from_dict(json.loads(comparison.content)).phase2_validation_errors()
+        except (TypeError, json.JSONDecodeError, ValueError):
+            comparison_valid = False
+        if not solution_confirmed or not comparison_valid:
+            raise HTTPException(409, "尚未确认方案，不能启动混合项目并行轨道")
+        if track == "protocol":
+            protocol = pm.get_latest_artifact(project_id, "protocol_confirmation", title="Versioned Protocol")
+            try:
+                protocol_confirmed = protocol is not None and json.loads(protocol.content).get("confirmed") is True
+            except (TypeError, json.JSONDecodeError):
+                protocol_confirmed = False
+            if not protocol_confirmed:
+                raise HTTPException(409, "尚未确认版本化协议，不能启动协议轨道")
+        if track == "integration":
+            unfinished = [
+                name for name in ("software", "hardware", "protocol")
+                if tracks[name].get("state") != "completed"
+            ]
+            if unfinished:
+                raise HTTPException(409, detail={"message": "软件、硬件和协议轨道必须先完成，才能启动集成轨道", "unfinished_tracks": unfinished})
+        if selected["state"] == "completed":
+            raise HTTPException(409, "该混合项目轨道已经完成")
+        stages = selected["stages"]
+        current_stage = selected.get("current_stage")
+        completed = list(selected.get("completed_stages") or [])
+        if current_stage is None:
+            selected["state"] = "active"
+            selected["current_stage"] = stages[0] if stages else None
+            selected["next_stage"] = stages[1] if len(stages) > 1 else None
+        else:
+            requirements = {
+                "testing": {"test_plan", "test_result"},
+                "hardware_design": {"hardware_architecture", "wiring_design"},
+                "procurement": {"bom"},
+                "maker": {"assembly_step"},
+                # Compile/upload/monitor are persisted as local hardware run
+                # evidence and are finally required by hardware_acceptance;
+                # the track itself must at least have a durable firmware
+                # project definition.
+                "firmware": {"firmware_project"},
+                "hardware_testing": {"hardware_acceptance"},
+                "integration_testing": {"protocol_scenarios", "integration_test", "test_result"},
+            }
+            required = requirements.get(str(current_stage), set())
+            artifact_types = {artifact.type for artifact in pm.list_artifacts(project_id)}
+            if required and not required.issubset(artifact_types):
+                raise HTTPException(409, detail={"message": "当前轨道仍缺少交付物", "track": track, "stage": current_stage, "required_artifacts": sorted(required - artifact_types)})
+            if current_stage not in completed:
+                completed.append(current_stage)
+            index = stages.index(current_stage)
+            if index + 1 >= len(stages):
+                selected["state"] = "completed"
+                selected["current_stage"] = current_stage
+                selected["next_stage"] = None
+            else:
+                selected["state"] = "active"
+                selected["current_stage"] = stages[index + 1]
+                selected["next_stage"] = stages[index + 2] if index + 2 < len(stages) else None
+        selected["completed_stages"] = completed
+        content = {"workflow_version": project.workflow_version, "tracks": tracks, "updated_by": current_user.user_id, "updated_at": _utc_now_iso()}
+        artifact = pm.save_artifact(project_id, "workflow_track_state", title, json.dumps(content, ensure_ascii=False, indent=2), "推进混合项目并行轨道")
+        return {"track": track, "state": selected, "tracks": tracks, "artifact_id": artifact.id, "version": artifact.version}
+
     @app.get("/api/projects/{project_id}/evidence")
     async def api_list_evidence(
         project_id: str,
@@ -2306,6 +2741,45 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if not include_invalid:
             items = [item for item in items if item.get("status", "active") == "active"]
         return items
+
+    @app.get("/api/projects/{project_id}/evidence/{artifact_id}/impact")
+    async def api_evidence_impact(
+        project_id: str,
+        artifact_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Show references that would change before invalidating or merging evidence."""
+        _get_owned_project(project_id, current_user)
+        pm = _get_project_manager()
+        artifact = pm.get_artifact(project_id, artifact_id)
+        if artifact is None or artifact.type != "discovery_evidence":
+            raise HTTPException(404, "Evidence not found")
+        latest: dict[tuple[str, str], Any] = {}
+        for candidate in pm.list_artifacts(project_id):
+            key = (candidate.type, candidate.title)
+            if candidate.version >= getattr(latest.get(key), "version", -1):
+                latest[key] = candidate
+        affected = []
+        for candidate in latest.values():
+            if candidate.id == artifact_id:
+                continue
+            if artifact_id not in candidate.content:
+                continue
+            category = {
+                "problem_brief": "Problem Brief",
+                "market_research_report": "研究结论",
+                "research_source": "研究来源",
+                "solution_comparison": "方案比较",
+                "solution_decision": "方案决策",
+            }.get(candidate.type, candidate.type)
+            affected.append({
+                "artifact_id": candidate.id,
+                "type": candidate.type,
+                "title": candidate.title,
+                "version": candidate.version,
+                "category": category,
+            })
+        return {"evidence_id": artifact_id, "affected": affected, "count": len(affected)}
 
     @app.post("/api/projects/{project_id}/evidence")
     async def api_create_evidence(
@@ -2338,11 +2812,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         artifact = pm.get_artifact(project_id, artifact_id)
         if artifact is None or artifact.type != "discovery_evidence":
             raise HTTPException(404, "Evidence not found")
+        if request.expected_version is not None and artifact.version != request.expected_version:
+            raise HTTPException(409, detail={"message": "证据版本已变化，请刷新后重试", "current_version": artifact.version})
         try:
             evidence = Evidence.from_dict(json.loads(artifact.content))
         except (ValueError, json.JSONDecodeError) as exc:
             raise HTTPException(422, f"Stored evidence is invalid: {exc}") from exc
-        for key, value in request.model_dump(exclude_none=True).items():
+        for key, value in request.model_dump(exclude_none=True, exclude={"expected_version"}).items():
             setattr(evidence, key, value)
         evidence.__post_init__()
         updated = pm.save_artifact(
@@ -2356,6 +2832,80 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         data.update({"artifact_id": updated.id, "version": updated.version, "title": updated.title})
         return data
 
+    @app.post("/api/projects/{project_id}/evidence/{artifact_id}/merge")
+    async def api_merge_evidence(
+        project_id: str,
+        artifact_id: str,
+        request: MergeEvidenceRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Merge evidence while rewriting durable references to the target item."""
+        _get_owned_project(project_id, current_user)
+        pm = _get_project_manager()
+        source = pm.get_artifact(project_id, artifact_id)
+        target = pm.get_artifact(project_id, request.target_evidence_id)
+        if source is None or source.type != "discovery_evidence":
+            raise HTTPException(404, "Source evidence not found")
+        if target is None or target.type != "discovery_evidence":
+            raise HTTPException(404, "Target evidence not found")
+        if source.id == target.id:
+            raise HTTPException(422, "不能将证据合并到自身")
+        if request.expected_source_version is not None and source.version != request.expected_source_version:
+            raise HTTPException(409, detail={"message": "源证据版本已变化，请刷新后重试", "current_version": source.version})
+        if request.expected_target_version is not None and target.version != request.expected_target_version:
+            raise HTTPException(409, detail={"message": "目标证据版本已变化，请刷新后重试", "current_version": target.version})
+
+        def replace_reference(value: Any) -> Any:
+            if isinstance(value, str):
+                return value.replace(source.id, target.id)
+            if isinstance(value, list):
+                return [replace_reference(item) for item in value]
+            if isinstance(value, dict):
+                return {key: replace_reference(item) for key, item in value.items()}
+            return value
+
+        rewritten: list[dict[str, Any]] = []
+        latest: dict[tuple[str, str], Any] = {}
+        for candidate in pm.list_artifacts(project_id):
+            key = (candidate.type, candidate.title)
+            if candidate.version >= getattr(latest.get(key), "version", -1):
+                latest[key] = candidate
+        for candidate in latest.values():
+            if candidate.id in {source.id, target.id} or source.id not in candidate.content:
+                continue
+            try:
+                parsed = json.loads(candidate.content)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            replaced = replace_reference(parsed)
+            if replaced == parsed:
+                continue
+            updated = pm.save_artifact(
+                project_id=project_id,
+                type=candidate.type,
+                title=candidate.title,
+                content=json.dumps(replaced, ensure_ascii=False, indent=2),
+                change_reason=f"Evidence merged: {source.id} -> {target.id}",
+            )
+            rewritten.append({"artifact_id": updated.id, "type": updated.type, "title": updated.title, "version": updated.version})
+
+        source_data = Evidence.from_dict(json.loads(source.content))
+        source_data.status = "merged"
+        source_data.notes = f"已合并到证据 {target.id}" + (f"；{request.reason}" if request.reason else "")
+        merged_source = pm.save_artifact(
+            project_id=project_id,
+            type=source.type,
+            title=source.title,
+            content=json.dumps(source_data.to_dict(), ensure_ascii=False, indent=2),
+            change_reason="Evidence merged into another evidence item",
+        )
+        return {
+            "source": {**source_data.to_dict(), "artifact_id": merged_source.id, "version": merged_source.version},
+            "target_evidence_id": target.id,
+            "rewritten": rewritten,
+            "count": len(rewritten),
+        }
+
     @app.post("/api/projects/{project_id}/evidence/{artifact_id}/restore")
     async def api_restore_evidence(
         project_id: str,
@@ -2368,6 +2918,470 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             UpdateEvidenceRequest(status="active"),
             current_user,
         )
+
+    @app.delete("/api/projects/{project_id}/evidence/{artifact_id}")
+    async def api_delete_evidence(
+        project_id: str,
+        artifact_id: str,
+        expected_version: int | None = None,
+        confirm_impact: bool = False,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Versioned soft-delete with an explicit impact confirmation.
+
+        Evidence remains in the immutable Artifact history and can be restored;
+        the endpoint never physically removes project data.
+        """
+        _get_owned_project(project_id, current_user)
+        impact = await api_evidence_impact(project_id, artifact_id, current_user)
+        if not confirm_impact:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": "删除前请确认受影响的 Problem Brief、研究结论和方案引用",
+                    "impact": impact,
+                },
+            )
+        return await api_update_evidence(
+            project_id,
+            artifact_id,
+            UpdateEvidenceRequest(status="deleted", expected_version=expected_version),
+            current_user,
+        )
+
+    @app.post("/api/projects/{project_id}/research/runs")
+    async def api_run_research(
+        project_id: str,
+        request: ResearchRunRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        config = _config
+        providers = [
+            TavilySearchProvider(getattr(config, "tavily_api_key", "") if config else ""),
+            SerperSearchProvider(getattr(config, "serper_api_key", "") if config else ""),
+            GitHubSearchProvider(getattr(config, "github_token", "") if config else ""),
+            SemanticScholarProvider(getattr(config, "semantic_scholar_api_key", "") if config else ""),
+            PatentSearchProvider(getattr(config, "patent_search_url", "") if config else ""),
+            CrowdfundingSearchProvider(getattr(config, "crowdfunding_search_url", "") if config else ""),
+            CommunitySearchProvider(),
+            RedditSearchProvider(),
+            GitHubDiscussionsProvider(getattr(config, "github_token", "") if config else ""),
+        ]
+        run = execute_research_run(
+            request.query,
+            providers,
+            run_id=f"research_{uuid.uuid4().hex[:10]}",
+            limit=request.limit,
+        )
+        pm = _get_project_manager()
+        run_artifact = pm.save_artifact(
+            project_id=project_id,
+            type="research_run",
+            title=f"Research Run {run.run_id}",
+            content=json.dumps(run.to_dict(), ensure_ascii=False, indent=2),
+            change_reason="Multi-source research run",
+        )
+        for source in run.sources:
+            pm.save_artifact(
+                project_id=project_id,
+                type="research_source",
+                title=f"Research Source: {source.url or source.title[:80]}",
+                content=json.dumps(source.to_dict(), ensure_ascii=False, indent=2),
+                change_reason=f"Collected by {run.run_id}",
+            )
+        return {**run.to_dict(), "artifact_id": run_artifact.id, "version": run_artifact.version}
+
+    @app.get("/api/projects/{project_id}/research/runs")
+    async def api_list_research_runs(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        runs = []
+        for artifact in _get_project_manager().list_artifacts(project_id):
+            if artifact.type != "research_run":
+                continue
+            try:
+                data = json.loads(artifact.content)
+            except json.JSONDecodeError:
+                continue
+            data.update({"artifact_id": artifact.id, "version": artifact.version})
+            runs.append(data)
+        return sorted(runs, key=lambda item: item.get("run_id", ""), reverse=True)
+
+    @app.post("/api/projects/{project_id}/research/sources")
+    async def api_save_research_source(
+        project_id: str,
+        request: ResearchSourceRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        from kyrozen.research.models import ResearchSource
+
+        try:
+            source = ResearchSource.from_dict(request.source)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if not _is_openable_external_url(source.url):
+            raise HTTPException(422, "研究来源必须提供可打开的绝对 HTTP(S) URL")
+        pm = _get_project_manager()
+        title = f"Research Source: {source.url or source.title[:80]}"
+        current = pm.get_latest_artifact(project_id, "research_source", title=title)
+        if request.expected_version is not None and (current is None or current.version != request.expected_version):
+            raise HTTPException(409, detail={"message": "研究来源版本已变化，请刷新后重试", "current_version": current.version if current else None})
+        artifact = pm.save_artifact(
+            project_id=project_id,
+            type="research_source",
+            title=title,
+            content=json.dumps(source.to_dict(), ensure_ascii=False, indent=2),
+            change_reason="Research source edited",
+        )
+        return {**source.to_dict(), "artifact_id": artifact.id, "version": artifact.version}
+
+    @app.get("/api/projects/{project_id}/solutions")
+    async def api_get_solution_comparison(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        artifact = _get_project_manager().get_latest_artifact(project_id, "solution_comparison", title="Solution Comparison")
+        if artifact is None:
+            return {"comparison": None, "confirmed": False}
+        try:
+            comparison = SolutionComparison.from_dict(json.loads(artifact.content))
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise HTTPException(422, f"方案比较无法解析: {exc}") from exc
+        decision_artifact = _get_project_manager().get_latest_artifact(project_id, "solution_decision", title="Solution Decision")
+        confirmed = False
+        if decision_artifact is not None:
+            try:
+                confirmed = json.loads(decision_artifact.content).get("action") in {"select", "compose"}
+            except (TypeError, json.JSONDecodeError):
+                confirmed = False
+        return {
+            "comparison": comparison.to_dict(),
+            "validation_errors": comparison.phase2_validation_errors(),
+            "confirmed": confirmed,
+            "artifact_id": artifact.id,
+            "version": artifact.version,
+        }
+
+    @app.post("/api/projects/{project_id}/solutions")
+    async def api_save_solution_comparison(
+        project_id: str,
+        request: SolutionComparisonRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        project = _get_owned_project(project_id, current_user)
+        current_artifact = _get_project_manager().get_latest_artifact(project_id, "solution_comparison", title="Solution Comparison")
+        if request.expected_version is not None:
+            if current_artifact is None or current_artifact.version != request.expected_version:
+                raise HTTPException(409, detail={"message": "方案版本已变化，请刷新后重试", "current_version": current_artifact.version if current_artifact else None})
+        try:
+            comparison = SolutionComparison.from_dict(request.comparison)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        referenced_evidence_ids = sorted({
+            evidence_id
+            for solution in comparison.solutions
+            for evidence_id in solution.evidence_ids
+            if str(evidence_id).strip()
+        })
+        missing_evidence_ids = [
+            evidence_id
+            for evidence_id in referenced_evidence_ids
+            if (pm_artifact := _get_project_manager().get_artifact(project_id, evidence_id)) is None
+            or pm_artifact.type != "discovery_evidence"
+        ]
+        if missing_evidence_ids:
+            raise HTTPException(422, detail={
+                "message": "方案引用了不存在或不属于当前项目的证据",
+                "missing_evidence_ids": missing_evidence_ids,
+            })
+        if request.action in {"select", "compose"}:
+            # A draft comparison may be saved while research is still in
+            # progress, but a user confirmation is the irreversible gate into
+            # implementation. Every selected candidate must point to an
+            # existing problem evidence record, and the project must contain
+            # at least one real, openable research source. This prevents a
+            # generic Artifact write or a synthetic three-candidate payload
+            # from bypassing the evidence -> research -> decision loop.
+            missing_candidate_refs = [
+                solution.name or f"方案 {index + 1}"
+                for index, solution in enumerate(comparison.solutions)
+                if not any(str(evidence_id).strip() for evidence_id in solution.evidence_ids)
+            ]
+            if missing_candidate_refs:
+                raise HTTPException(422, detail={
+                    "message": "确认方案前，每个候选方案至少需要引用一条问题证据",
+                    "missing_candidate_evidence": missing_candidate_refs,
+                })
+            real_research_source = False
+            for candidate in _get_project_manager().list_artifacts(project_id):
+                if candidate.type not in {"research_source", "market_research_report"}:
+                    continue
+                try:
+                    payload = json.loads(candidate.content)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                sources = payload.get("sources", []) if candidate.type == "market_research_report" else [payload]
+                if any(
+                    isinstance(source, dict)
+                    and _is_openable_external_url(source.get("url"))
+                    and not any(marker in str(source.get("title", "")).lower() for marker in ("not configured", "search failed", "rate limited"))
+                    for source in sources
+                ):
+                    real_research_source = True
+                    break
+            if not real_research_source:
+                raise HTTPException(422, detail={
+                    "message": "确认方案前必须先保存至少一条真实、可打开的市场研究来源",
+                })
+        if request.action == "regenerate":
+            # Regeneration is intentionally agent-provided: the API does not
+            # invent market evidence or candidate solutions. It persists the
+            # new candidate set and its lineage so the desktop can safely
+            # present a fresh comparison before confirmation.
+            comparison.regeneration_count = (comparison.regeneration_count or 0) + 1
+            comparison.regenerated_from_version = current_artifact.version if current_artifact else None
+        errors = comparison.phase2_validation_errors()
+        if errors and request.action in {"save", "select", "compose"}:
+            raise HTTPException(422, detail={"message": "方案比较尚未满足第二阶段门禁", "errors": errors})
+        pm = _get_project_manager()
+        impact_artifact = None
+        artifact = pm.save_artifact(
+            project_id=project_id,
+            type="solution_comparison",
+            title="Solution Comparison",
+            content=json.dumps(comparison.to_dict(), ensure_ascii=False, indent=2),
+            change_reason=f"Solution comparison action: {request.action}",
+        )
+        if request.action in {"select", "compose"}:
+            decision = pm.add_decision(
+                project_id=project_id,
+                decision=f"Solution {request.action}: {comparison.recommendation}",
+                reason=comparison.recommendation_reason,
+                alternatives=[solution.name for solution in comparison.solutions],
+                source="user",
+            )
+            impact_targets = [
+                {"key": "prd", "artifact_type": "product_definition", "title": "PRD", "applicable": True},
+                {"key": "technical_plan", "artifact_type": "technical_plan", "title": "Technical Plan", "applicable": True},
+                {"key": "procurement", "artifact_type": "hardware_bom", "title": "Bill of Materials", "applicable": project.project_type in {"embedded", "hybrid"}},
+                {"key": "testing", "artifact_type": "test_plan", "title": "Test Plan", "applicable": True},
+                {"key": "file_tasks", "artifact_type": "file_task", "title": "Solution File Tasks", "applicable": True},
+            ]
+            generated_tasks: list[dict[str, Any]] = []
+            task_manager = _get_agent().task_manager
+            existing_tasks = task_manager.list_tasks(project_id=project_id)
+            for target in impact_targets:
+                if not target["applicable"]:
+                    continue
+                task_title = f"方案影响：更新{target['title']}"
+                task = next((item for item in existing_tasks if item.title == task_title and item.status not in {"completed", "cancelled"}), None)
+                if task is None:
+                    task = task_manager.create(
+                        title=task_title,
+                        description=f"方案 {comparison.recommendation} 已确认；请根据方案决策更新 {target['title']}。",
+                        project_id=project_id,
+                        mode="planning" if target["key"] in {"prd", "technical_plan"} else "testing" if target["key"] == "testing" else "hardware_development" if target["key"] == "procurement" else "development",
+                    )
+                generated_tasks.append({"id": task.id, "title": task.title, "status": task.status, "target": target["key"]})
+            impact = {
+                "decision_id": decision.id,
+                "action": request.action,
+                "recommendation": comparison.recommendation,
+                "affected_files": list(request.affected_files),
+                "requested_tasks": list(request.affected_tasks),
+                "targets": impact_targets,
+                "generated_tasks": generated_tasks,
+            }
+            impact_artifact = pm.save_artifact(
+                project_id=project_id,
+                type="solution_impact",
+                title="Solution Impact Tasks",
+                content=json.dumps(impact, ensure_ascii=False, indent=2),
+                change_reason="Generated affected PRD, technical plan, procurement, testing and file tasks",
+            )
+            pm.save_artifact(
+                project_id=project_id,
+                type="solution_decision",
+                title="Solution Decision",
+                content=json.dumps({"action": request.action, "decision_id": decision.id, "affected_tasks": request.affected_tasks, "affected_files": request.affected_files, "impact_artifact_id": impact_artifact.id, "generated_task_ids": [item["id"] for item in generated_tasks]}, ensure_ascii=False, indent=2),
+                change_reason="User confirmed solution decision",
+            )
+        elif request.action in {"reject", "revoke"}:
+            cancelled_task_ids: list[str] = []
+            previous_decision = pm.get_latest_artifact(project_id, "solution_decision", title="Solution Decision")
+            if previous_decision is not None:
+                try:
+                    previous_data = json.loads(previous_decision.content)
+                except (TypeError, json.JSONDecodeError):
+                    previous_data = {}
+                task_manager = _get_agent().task_manager
+                for task_id in previous_data.get("generated_task_ids", []):
+                    task = task_manager.get(str(task_id))
+                    if task is None or task.project_id != project_id:
+                        continue
+                    # A completed task is historical evidence and must not be
+                    # rewritten. Pending/running confirmation work generated
+                    # by the revoked decision is explicitly stopped.
+                    if task.status in {"pending", "running", "waiting_confirmation"}:
+                        task.update_status("cancelled")
+                        task_manager.update(task)
+                        cancelled_task_ids.append(task.id)
+            pm.save_artifact(
+                project_id=project_id,
+                type="solution_decision",
+                title="Solution Decision",
+                content=json.dumps({"action": request.action, "affected_tasks": request.affected_tasks, "cancelled_task_ids": cancelled_task_ids}, ensure_ascii=False, indent=2),
+                change_reason="Solution decision revoked or rejected",
+            )
+        # Mirror the decision into the local gate used by the desktop Agent.
+        # The artifact remains the durable source of truth; this record only
+        # lets offline stage actions enforce the same hard prerequisite.
+        try:
+            if _config is not None:
+                root = Path(_config.project_dir(project_id))
+                gate_store = StageGateStore(
+                    root / ".kyrozen" / "stagegate.json",
+                    project_id=project_id,
+                    project_type=_get_owned_project(project_id, current_user).project_type,
+                )
+                gate_store.record_confirmation(
+                    "solution_confirmed",
+                    request.action in {"select", "compose"},
+                    detail="用户已确认方案" if request.action in {"select", "compose"} else "方案确认已撤销",
+                )
+                gate_store.save()
+        except Exception:
+            # API persistence has already succeeded; a local desktop gate can
+            # resynchronize from the artifact when it next advances/refreshes.
+            pass
+        return {"artifact_id": artifact.id, "version": artifact.version, "validation_errors": errors, "action": request.action, "impact_artifact_id": impact_artifact.id if impact_artifact else None}
+
+    @app.post("/api/projects/{project_id}/protocol/confirm")
+    async def api_confirm_protocol(
+        project_id: str,
+        request: ProtocolConfirmationRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        project = _get_owned_project(project_id, current_user)
+        if project.project_type != "hybrid":
+            raise HTTPException(409, "只有软硬件混合项目需要确认协议")
+        protocol = dict(request.protocol)
+        version = str(protocol.get("protocol_version") or "").strip()
+        message_type = str(protocol.get("message_type") or "").strip()
+        fields = protocol.get("fields")
+        if not version or not message_type or not isinstance(fields, dict):
+            raise HTTPException(422, "协议必须包含 protocol_version、message_type 和 fields")
+        pm = _get_project_manager()
+        current = pm.get_latest_artifact(project_id, "protocol_confirmation", title="Versioned Protocol")
+        if request.expected_version is not None and (current is None or current.version != request.expected_version):
+            raise HTTPException(409, detail={"message": "协议确认版本已变化，请刷新后重试", "current_version": current.version if current else None})
+        previous_protocol: dict[str, Any] | None = None
+        if current is not None:
+            try:
+                previous_content = json.loads(current.content)
+                if isinstance(previous_content, dict) and isinstance(previous_content.get("protocol"), dict):
+                    previous_protocol = previous_content["protocol"]
+            except json.JSONDecodeError:
+                previous_protocol = None
+        protocol_changed = request.confirmed and previous_protocol != protocol
+        generated_tasks: list[dict[str, Any]] = []
+        impact_artifact = None
+        if protocol_changed:
+            task_manager = _get_agent().task_manager
+            existing_tasks = task_manager.list_tasks(project_id=project_id)
+            requested_targets = [f"文件：{item}" for item in request.affected_files]
+            requested_targets.extend(f"任务：{item}" for item in request.affected_tasks)
+            requested_targets.append("测试：验证协议版本、字段和兼容性")
+            for target in requested_targets:
+                title = f"协议影响：{target}"
+                task = next((item for item in existing_tasks if item.title == title and item.status not in {"completed", "cancelled"}), None)
+                if task is None:
+                    task = task_manager.create(
+                        title=title,
+                        description=f"协议 {version} 已变化，请检查并更新 {target}。",
+                        project_id=project_id,
+                        mode="testing" if target.startswith("测试：") else "development",
+                    )
+                generated_tasks.append({"id": task.id, "title": task.title, "status": task.status})
+            impact_artifact = pm.save_artifact(
+                project_id=project_id,
+                type="protocol_impact",
+                title="Protocol Impact Tasks",
+                content=json.dumps({
+                    "protocol_version": version,
+                    "previous_protocol": previous_protocol,
+                    "protocol": protocol,
+                    "affected_files": list(request.affected_files),
+                    "affected_tasks": list(request.affected_tasks),
+                    "generated_tasks": generated_tasks,
+                }, ensure_ascii=False, indent=2),
+                change_reason="Generated protocol change impact tasks and compatibility test",
+            )
+        content = {
+            "protocol": protocol,
+            "confirmed": request.confirmed,
+            "affected_files": list(request.affected_files),
+            "affected_tasks": list(request.affected_tasks),
+            "protocol_changed": protocol_changed,
+            "impact_artifact_id": impact_artifact.id if impact_artifact else None,
+            "generated_task_ids": [item["id"] for item in generated_tasks],
+        }
+        artifact = pm.save_artifact(
+            project_id=project_id,
+            type="protocol_confirmation",
+            title="Versioned Protocol",
+            content=json.dumps(content, ensure_ascii=False, indent=2),
+            change_reason="User confirmed versioned hybrid protocol" if request.confirmed else "User revoked versioned hybrid protocol",
+        )
+        if request.confirmed:
+            connection_model = build_connection_model(
+                protocol,
+                affected_files=list(request.affected_files),
+                affected_tasks=list(request.affected_tasks),
+            )
+            connection_artifact = pm.save_artifact(
+                project_id=project_id,
+                type="protocol_connection_model",
+                title="Six-Layer Protocol Connection Model",
+                content=json.dumps(connection_model, ensure_ascii=False, indent=2),
+                change_reason="Persisted six-layer hybrid connection contract",
+            )
+        else:
+            connection_artifact = None
+        try:
+            root = Path(_config.project_dir(project_id)) if _config is not None else Path(f".kyrozen/projects/{project_id}")
+            store = StageGateStore(root / ".kyrozen" / "stagegate.json", project_id=project_id, project_type="hybrid")
+            store.record_confirmation("protocol_design_confirmed", request.confirmed, detail=f"协议 {version} 已确认" if request.confirmed else "协议确认已撤销")
+            store.save()
+        except Exception:
+            # The immutable artifact is authoritative; local gate sync will
+            # recover the confirmation on the next desktop refresh.
+            pass
+        return {**content, "artifact_id": artifact.id, "version": artifact.version, "connection_model_artifact_id": connection_artifact.id if connection_artifact else None}
+
+    @app.post("/api/projects/{project_id}/protocol/scenarios")
+    async def api_run_protocol_scenarios(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Run and persist the deterministic six-case protocol simulator."""
+        _get_owned_project(project_id, current_user)
+        from kyrozen.hardware.transport import run_fake_protocol_scenarios
+
+        result = run_fake_protocol_scenarios()
+        artifact = _get_project_manager().save_artifact(
+            project_id=project_id,
+            type="protocol_scenarios",
+            title="Protocol Scenario Run",
+            content=json.dumps(result, ensure_ascii=False, indent=2),
+            change_reason="Server-side deterministic protocol simulator",
+        )
+        return {**result, "artifact_id": artifact.id, "version": artifact.version}
 
     @app.get("/api/projects/{project_id}/chat")
     async def api_get_project_chat(
@@ -2400,37 +3414,65 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
     ):
         pm = _get_project_manager()
         project = _get_owned_project(project_id, current_user)
-        stages = list(PROJECT_STAGES)
-        try:
-            current_index = stages.index(project.current_stage)
-        except ValueError:
-            current_index = -1
-        max_index = len(stages) - 1
-        if current_index < max_index:
-            next_index = current_index + 1
-            new_stage = stages[next_index]
-            original_stage = project.current_stage
-            project.current_stage = new_stage
-            next_action = _recommend_next_action(project)
-            project.current_stage = original_stage
-            next_steps = next_action["action"] if next_action else ""
-            updated = pm.update(
-                project_id,
-                current_stage=new_stage,
-                progress=next_index * 100 // max_index,
-                next_steps=next_steps,
-            )
+        if project.current_stage == "problem_discovery" and not project.type_confirmed:
+            raise HTTPException(409, "请先在问题探索阶段确认项目类型和对应流程")
+        workflow_root = Path(_config.project_dir(project_id) if _config is not None else f".kyrozen/projects/{project_id}")
+        store = StageGateStore(workflow_root / ".kyrozen" / "stagegate.json", project_id=project_id, project_type=project.project_type)
+        store.set_workflow(project.project_type)
+        # Keep the local gate's hard solution-decision condition synchronized
+        # with the immutable artifact chain before evaluating the transition.
+        # A rejected/revoked decision must not satisfy the implementation gate.
+        solution_artifact = pm.get_latest_artifact(project_id, "solution_decision", title="Solution Decision")
+        solution_confirmed = False
+        if solution_artifact is not None:
+            try:
+                solution_action = json.loads(solution_artifact.content).get("action")
+                solution_confirmed = solution_action in {"select", "compose"}
+            except (TypeError, json.JSONDecodeError):
+                solution_confirmed = False
+        store.record_confirmation(
+            "solution_confirmed",
+            solution_confirmed,
+            detail="用户已确认方案" if solution_confirmed else "尚未确认有效方案",
+        )
+        if project.current_stage in stages_for(project.project_type) and store.current_stage != project.current_stage:
+            # Synchronize an already persisted cloud stage into the gate; the
+            # transition itself is still performed only by advance_stage().
+            store.current_stage = project.current_stage
+        gate = refresh_gate(store, workflow_root)
+        sync_artifact_deliverables(store, [artifact.type for artifact in pm.list_artifacts(project_id)])
+        store.save()
+        gate = compute_gate(store)
+        stages = list(stages_for(project.project_type))
+        if store.current_stage == stages[-1]:
+            readiness = build_workbench_snapshot(project, pm).get("phase2_completion", {})
+            if not readiness.get("ready"):
+                raise HTTPException(
+                    409,
+                    detail={"message": "第二阶段验收条件尚未全部满足", "phase2_completion": readiness},
+                )
+            required_missing = [item for item in gate.missing if item.kind not in {"confirmation", "task"} and item.required]
+            if required_missing:
+                raise HTTPException(409, detail={"message": "阶段门禁未满足", "gate": gate.to_dict()})
+            result = {"ok": True, "stage": store.current_stage, "gate": gate.to_dict()}
         else:
-            next_action = _recommend_next_action(project)
-            updated = pm.update(
-                project_id,
-                status="completed",
-                progress=100,
-                next_steps=next_action["action"] if next_action else "",
-            )
+            result = advance_stage(store, "normal")
+        if not result.get("ok"):
+            raise HTTPException(409, detail={"message": result.get("error", "阶段门禁未满足"), "gate": result.get("gate", {})})
+        new_stage = str(result.get("stage", store.current_stage))
+        is_last = new_stage == stages[-1] and store.current_stage == new_stage
+        next_action = _recommend_next_action(project, new_stage)
+        updated = pm.update(
+            project_id,
+            current_stage=new_stage,
+            progress=100 if is_last else int(store.progress),
+            status="completed" if is_last else project.status,
+            next_steps=next_action["action"] if next_action else "",
+            blocked_reason="",
+        )
         if updated is None:
             raise HTTPException(404, "Project not found")
-        return updated.to_dict()
+        return {**updated.to_dict(), "gate": result.get("gate", {}), "workflow_stages": stages}
 
     @app.get("/api/projects/{project_id}/tasks")
     async def api_project_tasks(
@@ -2489,6 +3531,69 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         pm = _get_project_manager()
         _get_owned_project(project_id, current_user)
         try:
+            if request.expected_version is not None:
+                current = pm.get_latest_artifact(project_id, request.type, title=request.title)
+                if current is None or current.version != request.expected_version:
+                    raise HTTPException(409, detail={"message": "Artifact 版本已变化，请刷新后重试", "current_version": current.version if current else None})
+            protected_gate_artifacts = {
+                "solution_comparison": "方案比较接口",
+                "solution_decision": "方案比较接口",
+                "protocol_confirmation": "协议确认接口",
+                "protocol_connection_model": "协议确认接口",
+                "protocol_scenarios": "协议模拟器接口",
+                "workflow_track_state": "混合轨道推进接口",
+            }
+            if request.type in protected_gate_artifacts:
+                raise HTTPException(422, detail={"message": f"{request.type} 只能通过{protected_gate_artifacts[request.type]}写入"})
+            if request.type == "validation_report":
+                from kyrozen.testing.models import ValidationReport
+                report = ValidationReport.from_dict(json.loads(request.content))
+                validation_errors = report.phase2_validation_errors()
+                if validation_errors:
+                    raise HTTPException(422, detail={"message": "验证报告尚未满足第二阶段门禁", "errors": validation_errors})
+            if request.type == "hardware_acceptance":
+                # Keep the physical-evidence gate server-side as well as in
+                # the desktop form. A generic Artifact write must not be able
+                # to turn a BLOCKED/no-board run into a passed acceptance.
+                payload = json.loads(request.content)
+                required = {
+                    "observed_behavior": "实际行为观察记录",
+                    "confirmed_at": "用户确认时间",
+                    "confirmation_answer": "Ask question 的用户回答",
+                }
+                missing = [label for key, label in required.items() if not str(payload.get(key, "")).strip()]
+                if payload.get("confirmation_answer") != "confirmed_behavior_and_reconnect":
+                    missing.append("Ask question 的明确肯定回答（符合，拔插后已恢复）")
+                if payload.get("confirmed_by_user") is not True:
+                    missing.append("用户明确确认")
+                if payload.get("physical_evidence_required") is not True:
+                    missing.append("实物证据标记")
+                timestamps = payload.get("hardware_run_timestamps")
+                if not isinstance(timestamps, list) or not timestamps:
+                    missing.append("硬件运行记录引用")
+                runs = payload.get("hardware_runs")
+                if not isinstance(runs, list):
+                    missing.append("硬件运行记录摘要")
+                else:
+                    successful_actions = {
+                        str(run.get("action"))
+                        for run in runs
+                        if isinstance(run, dict) and run.get("status") == "PASSED" and run.get("success") is True
+                    }
+                    if not {"compile", "upload", "monitor"}.issubset(successful_actions):
+                        missing.append("编译、上传和串口观察成功记录")
+                    discoveries = [
+                        run for run in runs
+                        if isinstance(run, dict)
+                        and run.get("action") == "list_ports"
+                        and run.get("status") == "PASSED"
+                        and run.get("success") is True
+                        and run.get("board_detected") is True
+                    ]
+                    if len(discoveries) < 2:
+                        missing.append("两次确认板卡的成功发现记录")
+                if missing:
+                    raise HTTPException(422, detail={"message": "实物验收证据不完整，仍应保持 BLOCKED", "missing": missing})
             artifact = pm.save_artifact(
                 project_id=project_id,
                 type=request.type,
@@ -2595,6 +3700,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             _get_owned_project(request.project_id, current_user)
         feedback_id = str(uuid.uuid4())
         now = _utc_now_iso()
+        participant_id = request.participant_id.strip() or current_user.user_id
         feedback = {
             "id": feedback_id,
             "user_id": current_user.user_id,
@@ -2603,7 +3709,16 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "description": request.description,
             "priority": request.priority,
             "status": "open",
-            "metadata": {},
+            "metadata": {
+                "user_type": request.user_type,
+                "task": request.task,
+                "completed": request.completed,
+                "duration_seconds": request.duration_seconds,
+                "blockers": request.blockers,
+                "quote": request.quote,
+                "satisfaction": request.satisfaction,
+                "participant_id": participant_id,
+            },
             "created_at": now,
             "updated_at": now,
         }
@@ -2615,21 +3730,28 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 pm = _get_project_manager()
                 pm.save_artifact(
                     project_id=request.project_id,
-                    artifact_id=f"feedback_{feedback_id}",
                     type="user_feedback",
-                    title=f"用户反馈 - {request.type}",
+                    title=f"用户反馈 - {request.type} - {feedback_id}",
                     content=json.dumps({
                         "source_type": "manual",
                         "content": request.description,
                         "priority": request.priority,
                         "sentiment": "",
                         "problems": [],
-                        "participant_id": current_user.user_id,
+                        "participant_id": participant_id,
                         "timestamp": now,
+                        "user_type": request.user_type,
+                        "task": request.task,
+                        "completed": request.completed,
+                        "duration_seconds": request.duration_seconds,
+                        "blockers": request.blockers,
+                        "quote": request.quote,
+                        "satisfaction": request.satisfaction,
                     }, ensure_ascii=False),
+                    change_reason="Manual user validation feedback recorded",
                 )
             except Exception as exc:
-                _logger.warning("Failed to save feedback artifact: %s", exc)
+                get_logger(__name__).warning("Failed to save feedback artifact: %s", exc)
         return feedback
 
     @app.get("/api/feedback")
@@ -3059,16 +4181,22 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         latest_test_plan = pm.get_latest_artifact(project_id, "test_plan", title="Test Plan")
         test_plan = TestPlan()
         if latest_test_plan is not None:
-            import json
             try:
                 test_plan = TestPlan.from_dict(json.loads(latest_test_plan.content))
             except (json.JSONDecodeError, ValueError):
                 pass
 
         test_results = []
+        test_cases = []
         user_feedback = []
         for artifact in pm.list_artifacts(project_id):
-            if artifact.type == "test_result":
+            if artifact.type == "test_case":
+                try:
+                    from kyrozen.testing.models import TestCase
+                    test_cases.append(TestCase.from_dict(json.loads(artifact.content)).to_dict())
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif artifact.type == "test_result":
                 try:
                     from kyrozen.testing.models import TestResult
                     test_results.append(TestResult.from_dict(json.loads(artifact.content)))
@@ -3086,7 +4214,6 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         )
         validation_report = ValidationReport()
         if latest_validation is not None:
-            import json
             try:
                 validation_report = ValidationReport.from_dict(json.loads(latest_validation.content))
             except (json.JSONDecodeError, ValueError):
@@ -3097,7 +4224,6 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         )
         iteration_plan = {"items": [], "overall_recommendation": ""}
         if latest_iteration is not None:
-            import json
             try:
                 iteration_plan = json.loads(latest_iteration.content)
             except (json.JSONDecodeError, ValueError):
@@ -3108,11 +4234,23 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             if d.decision.startswith("Testing decision:") or d.decision.startswith("Validation decision:")
         ]
 
+        participant_ids = {
+            feedback.participant_id
+            for feedback in user_feedback
+            if feedback.participant_id
+        }
+
         return {
             "project_id": project_id,
             "test_plan": test_plan.to_dict(),
+            "test_cases": test_cases,
             "test_results": [r.to_dict() for r in test_results],
             "user_feedback": [fb.to_dict() for fb in user_feedback],
+            "user_validation": {
+                "participant_count": len(participant_ids),
+                "completed_count": sum(1 for fb in user_feedback if fb.completed is True),
+                "minimum_participants_met": len(participant_ids) >= 3,
+            },
             "validation_report": validation_report.to_dict(),
             "iteration_plan": iteration_plan,
             "decisions": [d.to_dict() for d in decisions[-5:]],
@@ -3120,6 +4258,56 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             "latest_validation_artifact_id": latest_validation.id if latest_validation else None,
             "latest_iteration_artifact_id": latest_iteration.id if latest_iteration else None,
         }
+
+    @app.get("/api/projects/{project_id}/defects")
+    async def api_project_defects(
+        project_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        defects = []
+        for artifact in _get_project_manager().list_artifacts(project_id):
+            if artifact.type != "defect":
+                continue
+            try:
+                item = json.loads(artifact.content)
+            except json.JSONDecodeError:
+                continue
+            item.update({"artifact_id": artifact.id, "version": artifact.version})
+            defects.append(item)
+        return defects
+
+    @app.patch("/api/projects/{project_id}/defects/{artifact_id}")
+    async def api_update_defect(
+        project_id: str,
+        artifact_id: str,
+        request: UpdateDefectRequest,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        _get_owned_project(project_id, current_user)
+        pm = _get_project_manager()
+        artifact = pm.get_artifact(project_id, artifact_id)
+        if artifact is None or artifact.type != "defect":
+            raise HTTPException(404, "Defect not found")
+        if request.expected_version is not None and artifact.version != request.expected_version:
+            raise HTTPException(409, detail={"message": "缺陷版本已变化，请刷新后重试", "current_version": artifact.version})
+        from kyrozen.testing.models import Defect
+        try:
+            defect = Defect.from_dict(json.loads(artifact.content))
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(422, f"Stored defect is invalid: {exc}") from exc
+        for key, value in request.model_dump(exclude_none=True, exclude={"expected_version"}).items():
+            setattr(defect, key, value)
+        if defect.regression_result_id:
+            defect.status = "resolved"
+        updated = pm.save_artifact(
+            project_id=project_id,
+            type="defect",
+            title=artifact.title,
+            content=json.dumps(defect.to_dict(), ensure_ascii=False, indent=2),
+            change_reason="Defect status or regression updated",
+        )
+        return {**defect.to_dict(), "artifact_id": updated.id, "version": updated.version}
 
     # ------------------------------------------------------------------
     # Learning & Proactive Improvement
@@ -3444,6 +4632,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             user_id=current_user.user_id,
             project_id=request.project_id,
             access_token=current_user.access_token,
+            developer=_is_developer_account(current_user),
         )
         return {
             "token": token,
@@ -3458,6 +4647,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         user_id: str | None = None
         project_id: str | None = None
         access_token: str | None = None
+        developer = False
 
         if request.token:
             open_data = DesktopTokenManager.consume_open_token(request.token)
@@ -3466,6 +4656,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             user_id = open_data["user_id"]
             project_id = open_data.get("project_id")
             access_token = open_data.get("access_token")
+            developer = bool(open_data.get("developer"))
         elif request.access_token:
             config = _config or get_config()
             try:
@@ -3474,13 +4665,22 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 raise HTTPException(401, f"Invalid access token: {exc}") from exc
             user_id = payload.get("sub")
             access_token = request.access_token
+            metadata = payload.get("user_metadata", {}) or {}
+            github_user = str(metadata.get("github_username") or metadata.get("preferred_username") or metadata.get("user_name") or "").casefold()
+            developer = bool(
+                (_config and user_id in _config.developer_user_ids)
+                or (_config and github_user in {name.casefold() for name in _config.developer_github_users})
+            )
             if not user_id:
                 raise HTTPException(401, "Invalid access token: missing user id")
 
         if not user_id:
             raise HTTPException(401, "Invalid token")
 
-        credentials = DesktopTokenManager.create_credentials(user_id)
+        credentials = DesktopTokenManager.create_credentials(
+            user_id,
+            developer=developer or _is_developer_user_id(user_id),
+        )
 
         manager = _get_desktop_manager()
         client = manager.register(
@@ -3525,7 +4725,10 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 "weekly_credit_limit": 0,
                 "conversation_limit": 0,
             }
-        status = _get_membership_service().status(current_user.user_id)
+        status = _get_membership_service().status(
+            current_user.user_id,
+            plan_override=_membership_plan_override(current_user),
+        )
         project_limit = {"free": 1, "lite": 5, "pro": 20, "ultimate": 0, "enterprise": 0}.get(status["plan"], 1)
         return {
             **status,
@@ -3541,16 +4744,25 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         if _is_developer_account(current_user):
             return {"plan": "developer", "status": "active", "seats": [], "unlimited": True}
         service = _get_membership_service()
-        return {**service.status(current_user.user_id), "seats": service.seats(current_user.user_id)}
+        return {
+            **service.status(current_user.user_id, plan_override=_membership_plan_override(current_user)),
+            "seats": service.seats(current_user.user_id),
+            "membership_enabled": bool(_config and _config.membership_enabled),
+        }
 
     @app.get("/api/usage")
     async def api_usage(current_user: CurrentUser = Depends(get_current_user)):
         if _is_developer_account(current_user):
             return {"plan": "developer", "unlimited": True}
-        return _get_membership_service().status(current_user.user_id)
+        return _get_membership_service().status(
+            current_user.user_id,
+            plan_override=_membership_plan_override(current_user),
+        )
 
     @app.get("/api/membership/afdian/connect")
     async def api_afdian_connect(current_user: CurrentUser = Depends(get_current_user)):
+        if _config is not None and not _config.membership_enabled:
+            raise HTTPException(410, "首个测试版暂未开放会员功能")
         config = _config
         if config is None or not config.afdian_client_id or not config.afdian_client_secret:
             raise HTTPException(503, "爱发电 OAuth 尚未配置")
@@ -3583,6 +4795,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
     @app.post("/api/membership/afdian/checkout")
     async def api_afdian_checkout(request: AfdianCheckoutRequest, current_user: CurrentUser = Depends(get_current_user)):
+        if _config is not None and not _config.membership_enabled:
+            raise HTTPException(410, "首个测试版暂未开放会员功能")
         if _config is None:
             raise HTTPException(503, "支付服务未配置")
         client = AfdianClient(_config)
@@ -3596,6 +4810,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
     @app.get("/api/membership/afdian/payment-status/{checkout_id}")
     async def api_afdian_payment_status(checkout_id: str, current_user: CurrentUser = Depends(get_current_user)):
+        if _config is not None and not _config.membership_enabled:
+            raise HTTPException(410, "首个测试版暂未开放会员功能")
         session = _get_membership_service().afdian_checkout(current_user.user_id, checkout_id)
         if not session:
             raise HTTPException(404, "付款会话不存在")
@@ -3603,6 +4819,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
 
     @app.post("/api/webhooks/afdian")
     async def api_afdian_webhook(request: Request):
+        if _config is not None and not _config.membership_enabled:
+            return {"ec": 200, "em": "membership disabled in beta"}
         payload = await request.json()
         order = payload.get("data", {}).get("order", payload.get("order", payload)) if isinstance(payload, dict) else {}
         service = _get_membership_service()
@@ -3650,6 +4868,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         request: MembershipSeatRequest,
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        if _config is not None and not _config.membership_enabled:
+            raise HTTPException(410, "首个测试版暂未开放会员功能")
         if _is_developer_account(current_user):
             raise HTTPException(400, "开发者账户不需要家庭成员")
         try:
@@ -3662,6 +4882,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         member_user_id: str,
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        if _config is not None and not _config.membership_enabled:
+            raise HTTPException(410, "首个测试版暂未开放会员功能")
         if not _get_membership_service().remove_seat(current_user.user_id, member_user_id):
             raise HTTPException(404, "家庭成员不存在")
         return {"status": "removed", "user_id": member_user_id}
@@ -3672,6 +4894,8 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         request: MembershipPlanRequest,
         admin: CurrentUser = Depends(require_admin),
     ):
+        if _config is not None and not _config.membership_enabled and not _is_developer_account(admin):
+            raise HTTPException(410, "首个测试版暂未开放会员功能")
         try:
             return _get_membership_service().set_plan(user_id, request.plan)
         except ValueError as exc:
@@ -3845,7 +5069,15 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                     logger.log("info", f"Confirmation response for task {message.get('task_id')}: {message.get('confirmed')}")
 
                 elif msg_type == "model_request":
-                    asyncio.create_task(_handle_model_request(websocket, message, user_id, logger))
+                    asyncio.create_task(
+                        _handle_model_request(
+                            websocket,
+                            message,
+                            user_id,
+                            logger,
+                            developer=DesktopTokenManager.is_developer_ws_token(ws_token),
+                        )
+                    )
 
                 elif msg_type == "request_pending_tasks":
                     if _db is not None:

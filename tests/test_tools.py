@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from kyrozen.tools import get_default_registry
 from kyrozen.tools.file_tools import FileReadTool, FileWriteTool, FindFilesTool, ListDirTool
 from kyrozen.tools.terminal_tools import TerminalTool
+from kyrozen.tools.project_tools import AdvanceProjectStageTool, UpdateProjectTool
 
 
 def _set_workspace(monkeypatch, workspace: str) -> None:
@@ -116,3 +118,27 @@ def test_registry_has_phase1_tools():
     assert "find_files" in names
     assert "terminal" in names
     assert "git" in names
+    assert "advance_project_stage" in names
+
+
+def test_update_project_cannot_bypass_stage_gate(project_manager):
+    project = project_manager.create("Gate protected")
+    result = UpdateProjectTool(project_manager).execute(
+        "update", {"project_id": project.id, "current_stage": "market_research"}
+    )
+    assert not result.success
+    assert "advance_project_stage" in result.error
+    assert project_manager.get(project.id).current_stage == "problem_discovery"
+
+
+def test_advance_project_stage_uses_persisted_gate(project_manager):
+    project = project_manager.create("Advance through gate")
+    project_manager.update(project.id, type_confirmed=True)
+    root = Path(project_manager.db.db_path).parent / "projects" / project.id / "docs"
+    root.mkdir(parents=True)
+    (root / "PROBLEM.md").write_text("# Problem\nA real problem", encoding="utf-8")
+
+    result = AdvanceProjectStageTool(project_manager).execute("advance", {"project_id": project.id})
+    assert result.success, result.error
+    assert result.data["current_stage"] == "market_research"
+    assert project_manager.get(project.id).current_stage == "market_research"

@@ -222,7 +222,13 @@ async function verifyPython(pythonExe: string): Promise<string> {
   return result.stdout.trim() || result.stderr.trim();
 }
 
-/** Find a user-installed Python interpreter, including Windows py.exe. */
+/**
+ * Find a Python interpreter installed by the user.
+ *
+ * The Windows launcher is handled specially: `py.exe` is not itself a Python
+ * interpreter and cannot be passed to the Agent. We ask it for the selected
+ * interpreter path and return that path instead.
+ */
 export async function findSystemPython(): Promise<string | null> {
   const candidates = [
     ...getSystemPythonCandidates(),
@@ -236,8 +242,13 @@ export async function findSystemPython(): Promise<string | null> {
       // Try the next command/path.
     }
   }
+
   if (process.platform === 'win32') {
-    const launcher = await runCommand('py.exe', ['-3', '-c', 'import sys; print(sys.executable)'], { timeoutMs: 5_000 });
+    const launcher = await runCommand(
+      'py.exe',
+      ['-3', '-c', 'import sys; print(sys.executable)'],
+      { timeoutMs: 5_000 },
+    );
     if (launcher.code === 0) {
       const discovered = launcher.stdout.trim().split(/\r?\n/).pop()?.trim();
       if (discovered) {
@@ -245,7 +256,7 @@ export async function findSystemPython(): Promise<string | null> {
           await verifyPython(discovered);
           return discovered;
         } catch {
-          // Continue if the launcher points at an unavailable interpreter.
+          // The launcher may point at an unavailable interpreter; continue.
         }
       }
     }
@@ -269,6 +280,10 @@ export async function ensurePythonRuntime(
 ): Promise<string | null> {
   const cached = await getCachedPythonRuntime();
   if (cached) return cached;
+
+  // Prefer an existing user installation. This is especially important on
+  // Windows, where `python3` is usually not a valid command and downloading a
+  // second interpreter is surprising when Python is already installed.
   const systemPython = await findSystemPython();
   if (systemPython) {
     onProgress?.(`Using installed Python: ${await verifyPython(systemPython)}`);

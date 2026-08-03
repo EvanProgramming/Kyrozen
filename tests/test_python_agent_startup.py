@@ -106,6 +106,26 @@ def test_packaged_agent_starts_and_responds(stage: str):
 
         # Process must still be alive after a successful request.
         assert proc.poll() is None, "Agent crashed after handling a request."
+
+        if stage == "problem_discovery":
+            # A stale/client-supplied future stage must not overwrite the
+            # persisted local gate before advance() evaluates its conditions.
+            req = {
+                "jsonrpc": "2.0",
+                "id": "smoke-mismatch",
+                "method": "stage_action",
+                "params": {
+                    "action": "refresh",
+                    "workspace_root": workspace,
+                    "project_id": "proj_smoke",
+                    "stage": "development",
+                },
+            }
+            proc.stdin.write(json.dumps(req) + "\n")
+            proc.stdin.flush()
+            mismatch = _read_until_id(proc, "smoke-mismatch")
+            assert mismatch.get("result", {}).get("ok") is False
+            assert mismatch.get("result", {}).get("stage") == "problem_discovery"
     finally:
         proc.terminate()
         try:

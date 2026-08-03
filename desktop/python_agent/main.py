@@ -34,6 +34,7 @@ from kyrozen.core.stagegate import (
     get_status,
     refresh_gate,
 )
+from kyrozen.project.workflow import stages_for
 from kyrozen.core.task import Task
 from kyrozen.core import featuregen as featuregen_mod
 from kyrozen.core import deliverable_templates as deliverable_mod
@@ -71,6 +72,13 @@ _STAGE_INTENT_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
         r"帮我(做出来|开发|生成)|做出一个|开发这个|写一个",
         re.IGNORECASE,
     )),
+    ("protocol_design", re.compile(r"协议|消息格式|通信字段|离线重连|版本兼容", re.IGNORECASE)),
+    ("hardware_design", re.compile(r"硬件方案|板卡方案|电源设计|接线设计", re.IGNORECASE)),
+    ("procurement", re.compile(r"采购|BOM|物料清单|替代件", re.IGNORECASE)),
+    ("maker", re.compile(r"装配|组装|Maker|元件安装", re.IGNORECASE)),
+    ("firmware", re.compile(r"编译固件|烧录|上传固件|固件开发", re.IGNORECASE)),
+    ("hardware_testing", re.compile(r"硬件测试|串口观察|发现设备|拔插设备", re.IGNORECASE)),
+    ("integration_testing", re.compile(r"软硬件集成|集成测试", re.IGNORECASE)),
     ("testing", re.compile(
         r"跑?测试|运行测试|执行测试|测试用例|验收测试|回归测试|单元测|验证一下|测一测",
         re.IGNORECASE,
@@ -78,7 +86,7 @@ _STAGE_INTENT_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
 )
 
 
-def _detect_intended_stage(message: str) -> str | None:
+def _detect_intended_stage(message: str, project_type: str = "software") -> str | None:
     """Return the furthest lifecycle stage the user's message clearly intends to
     move into, or ``None`` if the message is plain Q&A (no progression intent)."""
     if not message:
@@ -87,7 +95,8 @@ def _detect_intended_stage(message: str) -> str | None:
     target_idx = -1
     for stage, pattern in _STAGE_INTENT_PATTERNS:
         if pattern.search(message):
-            idx = STAGES.index(stage) if stage in STAGES else -1
+            workflow_stages = stages_for(project_type)
+            idx = workflow_stages.index(stage) if stage in workflow_stages else -1
             if idx > target_idx:
                 target = stage
                 target_idx = idx
@@ -338,6 +347,34 @@ _STAGE_PLAN_TEMPLATES: dict[str, tuple[str, str, list[tuple[str, str]]]] = {
             ("保存技术方案", "写入技术设计文档并等待进入开发阶段"),
         ],
     ),
+    "protocol_design": (
+        "协议确认计划", "确认软硬件边界、版本化消息和兼容策略",
+        [("确认消息字段", "明确类型、单位、方向、频率和关联 ID"), ("设计错误处理", "定义离线、重连、重复和版本不兼容行为"), ("运行模拟器验证", "在 Fake Transport 上验证正常与异常通信"), ("保存协议决策", "记录协议版本和受影响文件、任务与测试")],
+    ),
+    "hardware_design": (
+        "硬件方案计划", "明确板卡、BOM、接线、电源和安全约束",
+        [("确认目标板卡", "用户确认 ESP32 DEV Module 和供电方式"), ("整理 BOM", "保存精确型号、数量、价格、链接和替代件"), ("设计接线", "记录两端引脚、电压、电流方向、公共地和禁止条件"), ("确认硬件方案", "等待用户确认后进入采购")],
+    ),
+    "procurement": (
+        "采购与 BOM 计划", "完成采购状态记录并为 Maker 装配准备材料",
+        [("检查物料", "核对型号、数量、兼容性和替代件"), ("记录采购", "保存供应商、价格、链接和订单状态"), ("确认到货", "逐项记录已到货、已检查或缺件"), ("进入装配", "所有必需元件已检查")],
+    ),
+    "maker": (
+        "Maker 装配计划", "按可恢复的步骤完成安全装配",
+        [("准备元件", "确认元件、工具、供电和安全提示"), ("执行单步装配", "每步记录动作、预期结果和照片"), ("检查接线", "确认公共地、电压和禁止条件"), ("确认完成", "用户确认实际装配结果")],
+    ),
+    "firmware": (
+        "固件编译上传计划", "在用户确认设备后完成固件验证",
+        [("检查工具链", "发现 Arduino CLI/PlatformIO、板卡核心和驱动"), ("编译固件", "记录工具版本、板卡、命令和编译错误"), ("上传固件", "区分未连接、端口占用、权限、板卡、速度和供电失败"), ("串口观察", "记录波特率和真实输出")],
+    ),
+    "hardware_testing": (
+        "硬件测试计划", "验证供电、输入、输出、通信和断电恢复",
+        [("确认上电", "用户确认供电和目标 LED/串口行为"), ("观察运行", "记录串口输出和连续运行结果"), ("执行拔插恢复", "重新发现设备并记录恢复结果"), ("保存硬件证据", "形成可追溯测试结果或明确 BLOCKED")],
+    ),
+    "integration_testing": (
+        "软硬件集成测试计划", "验证应用、API、传输和设备之间的六层连接",
+        [("正常通信", "验证请求、响应和关联 ID"), ("异常通信", "验证离线、重连、重复和错误消息"), ("版本兼容", "验证不兼容协议被拒绝"), ("保存回归报告", "关联需求、缺陷、证据和原用例")],
+    ),
     "development": (
         "开发执行计划",
         "按确认的产品需求和技术方案实现可运行的 MVP",
@@ -462,6 +499,8 @@ class DesktopAgentRuntime:
                 self._handle_software_feature(params, req_id)
             elif method == "interaction":
                 self._handle_interaction(params, req_id)
+            elif method == "hardware_action":
+                self._handle_hardware_action(params, req_id)
             else:
                 self._send_response(req_id, error=f"Unknown method: {method}")
         except Exception as exc:
@@ -616,6 +655,7 @@ class DesktopAgentRuntime:
         requested_mode = str(params.get("mode", ""))
         stage = str(params.get("stage", ""))
         project_type = str(params.get("project_type", ""))
+        workflow_stages = stages_for(project_type or "software")
 
         state_dir = root_path / ".kyrozen"
 
@@ -625,11 +665,14 @@ class DesktopAgentRuntime:
         # "Problem Discovery" forever. If the local gate is ahead of the cloud
         # stage, route by the local stage and ignore the stale dispatched mode.
         try:
-            local_store = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
+            local_store = StageGateStore(state_dir / "stagegate.json", project_id=project_id, project_type=project_type or "software")
+            if project_type in {"software", "embedded", "hybrid"} and local_store.workflow_type != project_type:
+                local_store.set_workflow(project_type)
+                local_store.save()
             local_stage = local_store.current_stage
-            if local_stage in STAGES:
-                cloud_idx = STAGES.index(stage) if stage in STAGES else -1
-                local_idx = STAGES.index(local_stage)
+            if local_stage in workflow_stages:
+                cloud_idx = workflow_stages.index(stage) if stage in workflow_stages else -1
+                local_idx = workflow_stages.index(local_stage)
                 if local_idx > cloud_idx:
                     self.logger.info(
                         "Local stage %s is ahead of cloud stage %s; routing by local stage",
@@ -648,30 +691,39 @@ class DesktopAgentRuntime:
         # source is ever written). Fast-forward the LOCAL gate to the furthest
         # intended stage (never regress) and route by it.
         try:
-            intended = _detect_intended_stage(message)
-            if intended and intended in STAGES:
-                probe = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
+            intended = _detect_intended_stage(message, project_type or "software")
+            if intended and intended in workflow_stages:
+                probe = StageGateStore(state_dir / "stagegate.json", project_id=project_id, project_type=project_type or "software")
+                if project_type in {"software", "embedded", "hybrid"} and probe.workflow_type != project_type:
+                    probe.set_workflow(project_type)
                 cur = probe.current_stage
-                if cur in STAGES and STAGES.index(intended) > STAGES.index(cur):
-                    # P0-R5: do NOT fast-forward into a stage whose hard entry
-                    # gate is not satisfied.  Otherwise plain-language intent
-                    # ("帮我做出来") can skip the PRD requirement, which makes
-                    # the gate, stage, and actual generation inconsistent.
-                    blocked = entry_blocked(probe, intended)
-                    if blocked:
-                        self.logger.info(
-                            "Intent-based stage fast-forward blocked at %s: %s",
-                            intended, blocked,
-                        )
+                if cur in workflow_stages and workflow_stages.index(intended) > workflow_stages.index(cur):
+                    # Advance one adjacent stage at a time through the same
+                    # gate used by the explicit desktop action.  Natural
+                    # language may express intent, but it must never jump over
+                    # a missing deliverable or confirmation by assigning an
+                    # arbitrary stage index.
+                    while probe.current_stage != intended:
+                        blocked = entry_blocked(probe, workflow_stages[workflow_stages.index(probe.current_stage) + 1])
+                        if blocked:
+                            self.logger.info(
+                                "Intent-based stage progression blocked before %s: %s",
+                                intended, blocked,
+                            )
+                            break
+                        result = advance(probe, "normal")
+                        if not result.get("ok"):
+                            self.logger.info(
+                                "Intent-based stage progression stopped before %s: %s",
+                                intended, result.get("error", "阶段门禁未满足"),
+                            )
+                            break
                     else:
-                        probe.current_stage = intended
-                        probe.progress = compute_progress(probe)
-                        probe.save()
                         self.logger.info(
-                            "Natural-language stage progression: %s -> %s", cur, intended,
+                            "Natural-language stage progression reached %s", intended,
                         )
-                        stage = intended
-                        requested_mode = ""
+                    stage = probe.current_stage
+                    requested_mode = ""
         except Exception:
             self.logger.debug("intent-based stage fast-forward failed", exc_info=True)
 
@@ -689,7 +741,7 @@ class DesktopAgentRuntime:
         # Stage gate (feature 3.2): keep the local gate in sync with the
         # server-reported lifecycle stage, scan deliverables, and push the gate
         # to the desktop UI so the panel always reflects real progress.
-        self._sync_and_push_stage(root_path, stage, project_id)
+        self._sync_and_push_stage(root_path, stage, project_id, project_type)
 
         # P0-R6: every task starts with a real, stage-specific execution plan.
         # The renderer must never derive a plan from ordinary model prose.
@@ -854,7 +906,7 @@ class DesktopAgentRuntime:
                     # deliverable it just wrote (e.g. docs/PROBLEM.md) is detected
                     # and the gate advances without requiring a manual refresh.
                     try:
-                        self._sync_and_push_stage(root_path, stage, project_id)
+                        self._sync_and_push_stage(root_path, stage, project_id, project_type)
                     except Exception:
                         self.logger.debug("post-task stage re-sync skipped", exc_info=True)
                     self._notify("task_result", {
@@ -1027,16 +1079,19 @@ class DesktopAgentRuntime:
         stdout = str((run.data or {}).get("stdout", "")).strip()
         return f"我已实际运行项目测试，结果通过。\n\n命令：{command}\n\n{stdout[-4000:]}".strip()
 
-    def _sync_and_push_stage(self, root_path: Path, stage: str, project_id: str) -> None:
+    def _sync_and_push_stage(self, root_path: Path, stage: str, project_id: str, project_type: str = "software") -> None:
         """Sync the local gate store with the server stage and push it to UI."""
         try:
             state_dir = root_path / ".kyrozen"
-            store = StageGateStore(state_dir / "stagegate.json", project_id=project_id)
-            if stage and stage in STAGES:
+            workflow_stages = stages_for(project_type or "software")
+            store = StageGateStore(state_dir / "stagegate.json", project_id=project_id, project_type=project_type or "software")
+            if project_type in {"software", "embedded", "hybrid"} and store.workflow_type != project_type:
+                store.set_workflow(project_type)
+            if stage and stage in workflow_stages:
                 # Never regress the local stage: the cloud value can lag behind
                 # a local advance (best-effort PUT). Only fast-forward.
-                local_idx = STAGES.index(store.current_stage) if store.current_stage in STAGES else -1
-                if STAGES.index(stage) > local_idx:
+                local_idx = workflow_stages.index(store.current_stage) if store.current_stage in workflow_stages else -1
+                if workflow_stages.index(stage) > local_idx:
                     store.current_stage = stage
                 store.progress = compute_progress(store)
                 store.save()
@@ -1074,11 +1129,33 @@ class DesktopAgentRuntime:
         workspace_root = str(params.get("workspace_root", "."))
         project_id = str(params.get("project_id", ""))
         stage = str(params.get("stage", ""))
+        project_type = str(params.get("project_type", "software"))
+        workflow_stages = stages_for(project_type)
         root_path = Path(workspace_root).resolve()
         try:
-            store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=project_id)
-            if stage and stage in STAGES:
-                store.current_stage = stage
+            gate_path = root_path / ".kyrozen" / "stagegate.json"
+            had_persisted_gate = gate_path.exists()
+            store = StageGateStore(gate_path, project_id=project_id, project_type=project_type)
+            if store.workflow_type != project_type:
+                store.set_workflow(project_type)
+            if stage and stage in workflow_stages and stage != store.current_stage:
+                # A refresh may bootstrap a brand-new local gate from the
+                # server's already-persisted stage. Once a local gate exists,
+                # however, a client-supplied stage is only a display hint and
+                # must never overwrite the gate before advance() evaluates it.
+                if not had_persisted_gate and action == "refresh":
+                    store.current_stage = stage
+                    store.save()
+                else:
+                    gate = refresh_gate(store, str(root_path))
+                    result = {
+                        "ok": False,
+                        "error": "本地阶段门禁与请求阶段不一致，请先重新同步项目状态。",
+                        **get_status(store, gate),
+                    }
+                    self._send_response(req_id, result=result)
+                    self._push_stage(store, gate)
+                    return
             # Always re-scan so the gate reflects the latest workspace state
             # before any transition decision.
             gate = refresh_gate(store, str(root_path))
@@ -1104,6 +1181,115 @@ class DesktopAgentRuntime:
             self._push_stage(store, gate)
         except Exception as exc:
             self.logger.error("stage_action failed: %s", exc, exc_info=True)
+            self._send_response(req_id, error=str(exc))
+
+    def _handle_hardware_action(self, params: dict[str, object], req_id: object) -> None:
+        """Run one local hardware operation from the desktop workbench.
+
+        This deliberately executes on the user's machine, not on the API
+        server.  Discovery is read-only; compile/upload/monitor results are
+        recorded locally so an offline device remains an explicit BLOCKED
+        result rather than a fabricated success.
+        """
+        workspace_root = str(params.get("workspace_root", "."))
+        project_id = str(params.get("project_id", ""))
+        action = str(params.get("action", "list_ports"))
+        root = Path(workspace_root).resolve()
+        home = Path.home().resolve()
+        if not root.is_absolute() or not str(root).startswith(str(home)):
+            self._send_response(req_id, error=f"Invalid workspace root: {workspace_root}")
+            return
+        try:
+            from kyrozen.hardware.bridge import HardwareBridge, classify_upload_error
+
+            firmware_dir = root / "hardware" / "firmware"
+            firmware_dir.mkdir(parents=True, exist_ok=True)
+            bridge = HardwareBridge(firmware_dir)
+            if action == "list_ports":
+                result = bridge.list_ports(
+                    board=str(params.get("board") or "") or None,
+                    port=str(params.get("port") or "") or None,
+                )
+            elif action == "compile":
+                result = bridge.compile(board=str(params.get("board") or "") or None)
+            elif action == "upload":
+                result = bridge.upload(board=str(params.get("board") or "") or None, port=str(params.get("port") or "") or None)
+            elif action == "monitor":
+                port = str(params.get("port") or "")
+                if not port:
+                    raise ValueError("串口不能为空")
+                result = bridge.monitor(port=port, baud=int(params.get("baud") or 115200))
+            elif action == "protocol_exchange":
+                from kyrozen.hardware.transport import VersionedMessage, create_transport
+
+                transport_kind = str(params.get("transport") or "fake")
+                transport = create_transport(transport_kind)
+                port = str(params.get("port") or ("fake" if transport_kind == "fake" else ""))
+                if not port:
+                    result = {
+                        "success": False,
+                        "stderr": "真实串口协议测试需要先选择串口",
+                        "block_reason": "not_connected",
+                    }
+                else:
+                    message_data = params.get("message") or {}
+                    if isinstance(message_data, str):
+                        message_data = json.loads(message_data)
+                    message = VersionedMessage.from_dict(message_data)
+                    transport.connect(port, int(params.get("baud") or 115200))
+                    try:
+                        transport.send(message)
+                        response = transport.receive(timeout=1.0)
+                        result = {
+                            "success": response is not None and not response.error_code and response.correlation_id == message.correlation_id,
+                            "transport": transport_kind,
+                            "request": message.to_dict(),
+                            "response": response.to_dict() if response else None,
+                            "stderr": response.error_code if response and response.error_code else "",
+                        }
+                    finally:
+                        transport.disconnect()
+            elif action == "protocol_scenarios":
+                from kyrozen.hardware.transport import run_fake_protocol_scenarios
+                result = run_fake_protocol_scenarios()
+            else:
+                raise ValueError(f"Unsupported hardware action: {action}")
+            stderr = str(result.get("stderr") or "")
+            result["action"] = action
+            result["project_id"] = project_id
+            result["board"] = str(params.get("board") or "")
+            result["port"] = str(params.get("port") or "")
+            result["baud"] = int(params.get("baud") or 115200)
+            toolchain = result.get("toolchain")
+            if not isinstance(toolchain, dict):
+                toolchain = bridge.toolchain_status()
+                result["toolchain"] = toolchain
+            arduino_info = toolchain.get("arduino_cli") if isinstance(toolchain, dict) else None
+            pio_info = toolchain.get("platformio") if isinstance(toolchain, dict) else None
+            result["tool_version"] = str(
+                (arduino_info or {}).get("version")
+                or (pio_info or {}).get("version")
+                or ""
+            )
+            if not result.get("command"):
+                result["command"] = f"{action} board={result['board']} port={result['port']} baud={result['baud']}".strip()
+            if action == "list_ports":
+                result["status"] = "PASSED" if result.get("success") and result.get("board_detected") else "BLOCKED"
+            else:
+                result["status"] = "PASSED" if result.get("success") else "FAILED"
+            result["error_category"] = classify_upload_error(stderr) if not result.get("success") else ""
+            history_path = root / ".kyrozen" / "hardware_runs.json"
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else []
+                if not isinstance(history, list):
+                    history = []
+            except Exception:
+                history = []
+            history.append({**result, "timestamp": time.time(), "command": result.get("command", "")})
+            history_path.write_text(json.dumps(history[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
+            self._send_response(req_id, result=result)
+        except Exception as exc:
             self._send_response(req_id, error=str(exc))
 
     def _handle_software_feature(self, params: dict[str, object], req_id: object) -> None:
@@ -1172,7 +1358,7 @@ class DesktopAgentRuntime:
                 records = featuregen_mod.build_feature_records(spec, run)
                 run.feature_records = records
                 saved = featuregen_mod.save_software_feature(root_path, spec, run, feature_records=records)
-                gate_store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=str(params.get("project_id") or ""))
+                gate_store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=str(params.get("project_id") or ""), project_type=str(params.get("project_type") or "software"))
                 if gate_store.current_stage == "development":
                     gate_store.record_verification("build_passes", run.overall_success, detail="真实安装、构建、测试与核心流程通过" if run.overall_success else "运行或测试失败")
                 elif gate_store.current_stage == "testing":
@@ -1198,7 +1384,7 @@ class DesktopAgentRuntime:
                 records = featuregen_mod.build_feature_records(spec, run)
                 run.feature_records = records
                 saved = featuregen_mod.save_software_feature(root_path, spec, run, feature_records=records)
-                gate_store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=str(params.get("project_id") or ""))
+                gate_store = StageGateStore(root_path / ".kyrozen" / "stagegate.json", project_id=str(params.get("project_id") or ""), project_type=str(params.get("project_type") or "software"))
                 if gate_store.current_stage == "development":
                     gate_store.record_verification("build_passes", run.overall_success, detail="修复后真实构建与测试通过" if run.overall_success else "修复后仍未通过")
                 elif gate_store.current_stage == "testing":

@@ -19,12 +19,18 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     description TEXT,
     goal TEXT,
+    budget TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     current_stage TEXT NOT NULL DEFAULT 'problem_discovery',
     next_steps TEXT,
     blocked_reason TEXT,
     progress INTEGER NOT NULL DEFAULT 0,
     risks TEXT,
+    project_type TEXT NOT NULL DEFAULT 'software',
+    workflow_version TEXT NOT NULL DEFAULT 'phase2.v1',
+    type_source TEXT NOT NULL DEFAULT 'default',
+    type_confidence TEXT NOT NULL DEFAULT 'low',
+    type_confirmed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -244,6 +250,7 @@ class KyrozenDatabase:
         with self._lock, self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
             self._migrate_tasks_table(conn)
+            self._migrate_projects_table(conn)
 
     def _migrate_tasks_table(self, conn: sqlite3.Connection) -> None:
         """Add desktop-client related columns to existing tasks tables."""
@@ -256,6 +263,20 @@ class KyrozenDatabase:
         if "assigned_client_id" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN assigned_client_id TEXT")
 
+    def _migrate_projects_table(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+        additions = {
+            "budget": "TEXT NOT NULL DEFAULT ''",
+            "project_type": "TEXT NOT NULL DEFAULT 'software'",
+            "workflow_version": "TEXT NOT NULL DEFAULT 'phase2.v1'",
+            "type_source": "TEXT NOT NULL DEFAULT 'default'",
+            "type_confidence": "TEXT NOT NULL DEFAULT 'low'",
+            "type_confirmed": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {definition}")
+
     # ------------------------------------------------------------------
     # Projects
     # ------------------------------------------------------------------
@@ -263,20 +284,28 @@ class KyrozenDatabase:
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO projects (id, user_id, name, description, goal, status, current_stage,
-                                      next_steps, blocked_reason, progress, risks, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO projects (id, user_id, name, description, goal, budget, status, current_stage,
+                                      next_steps, blocked_reason, progress, risks, project_type,
+                                      workflow_version, type_source, type_confidence, type_confirmed,
+                                      created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id=excluded.user_id,
                     name=excluded.name,
                     description=excluded.description,
                     goal=excluded.goal,
+                    budget=excluded.budget,
                     status=excluded.status,
                     current_stage=excluded.current_stage,
                     next_steps=excluded.next_steps,
                     blocked_reason=excluded.blocked_reason,
                     progress=excluded.progress,
                     risks=excluded.risks,
+                    project_type=excluded.project_type,
+                    workflow_version=excluded.workflow_version,
+                    type_source=excluded.type_source,
+                    type_confidence=excluded.type_confidence,
+                    type_confirmed=excluded.type_confirmed,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -285,12 +314,18 @@ class KyrozenDatabase:
                     project.name,
                     project.description,
                     project.goal,
+                    project.budget,
                     project.status,
                     project.current_stage,
                     project.next_steps,
                     getattr(project, "blocked_reason", None),
                     getattr(project, "progress", 0),
                     json.dumps(project.risks, ensure_ascii=False),
+                    project.project_type,
+                    project.workflow_version,
+                    project.type_source,
+                    project.type_confidence,
+                    int(project.type_confirmed),
                     project.created_at,
                     project.updated_at,
                 ),
@@ -328,12 +363,18 @@ class KyrozenDatabase:
             "name": row["name"],
             "description": row["description"] or "",
             "goal": row["goal"] or "",
+            "budget": row["budget"] or "",
             "status": row["status"],
             "current_stage": row["current_stage"],
             "next_steps": row["next_steps"] or "",
             "blocked_reason": row["blocked_reason"] or "",
             "progress": row["progress"] or 0,
             "risks": json.loads(row["risks"] or "[]"),
+            "project_type": row["project_type"] if "project_type" in row.keys() else "software",
+            "workflow_version": row["workflow_version"] if "workflow_version" in row.keys() else "phase2.v1",
+            "type_source": row["type_source"] if "type_source" in row.keys() else "default",
+            "type_confidence": row["type_confidence"] if "type_confidence" in row.keys() else "low",
+            "type_confirmed": bool(row["type_confirmed"]) if "type_confirmed" in row.keys() else False,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         })

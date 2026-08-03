@@ -38,6 +38,7 @@ VALID_FEEDBACK_SOURCES = {
     "trial",
     "survey",
     "comparison",
+    "manual",
 }
 
 VALID_SENTIMENTS = {
@@ -59,6 +60,16 @@ VALID_VALIDATION_CONCLUSIONS = {
     "fail",
     "partial",
     "insufficient_evidence",
+    "continue_release",
+    "release_after_fix",
+    "reduce_scope",
+    "stop_project",
+}
+FINAL_VALIDATION_CONCLUSIONS = {
+    "continue_release",
+    "release_after_fix",
+    "reduce_scope",
+    "stop_project",
 }
 
 VALID_PRIORITIES = {
@@ -147,6 +158,8 @@ class TestResult:
     duration_ms: int = 0
     environment: str = ""
     executed_by: str = "agent"        # agent | user | ci
+    defect_id: str = ""
+    regression_of: str = ""
 
     def __post_init__(self) -> None:
         if self.result and self.result not in VALID_RESULT_STATUSES:
@@ -165,6 +178,8 @@ class TestResult:
             "duration_ms": self.duration_ms,
             "environment": self.environment,
             "executed_by": self.executed_by,
+            "defect_id": self.defect_id,
+            "regression_of": self.regression_of,
         }
 
     @classmethod
@@ -181,6 +196,57 @@ class TestResult:
             duration_ms=int(data.get("duration_ms", 0) or 0),
             environment=data.get("environment", ""),
             executed_by=data.get("executed_by", "agent"),
+            defect_id=data.get("defect_id", ""),
+            regression_of=data.get("regression_of", ""),
+        )
+
+
+@dataclass
+class Defect:
+    """A failure that can be assigned, fixed and regression-tested."""
+
+    defect_id: str = ""
+    title: str = ""
+    severity: str = "medium"
+    status: str = "open"  # open / in_progress / resolved / verified / rejected
+    reproduction_steps: list[str] = field(default_factory=list)
+    actual: str = ""
+    expected: str = ""
+    related_requirement: str = ""
+    test_case_id: str = ""
+    owner: str = ""
+    fix: str = ""
+    evidence_ids: list[str] = field(default_factory=list)
+    regression_result_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.severity not in VALID_PRIORITIES:
+            raise ValueError(f"Invalid defect severity '{self.severity}'")
+        if self.status not in {"open", "in_progress", "resolved", "verified", "rejected"}:
+            raise ValueError(f"Invalid defect status '{self.status}'")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "defect_id": self.defect_id, "title": self.title, "severity": self.severity,
+            "status": self.status, "reproduction_steps": list(self.reproduction_steps),
+            "actual": self.actual, "expected": self.expected,
+            "related_requirement": self.related_requirement, "test_case_id": self.test_case_id,
+            "owner": self.owner, "fix": self.fix, "evidence_ids": list(self.evidence_ids),
+            "regression_result_id": self.regression_result_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Defect":
+        return cls(
+            defect_id=data.get("defect_id", ""), title=data.get("title", ""),
+            severity=data.get("severity", "medium"), status=data.get("status", "open"),
+            reproduction_steps=list(data.get("reproduction_steps") or []),
+            actual=data.get("actual", ""), expected=data.get("expected", ""),
+            related_requirement=data.get("related_requirement", ""),
+            test_case_id=data.get("test_case_id", ""), owner=data.get("owner", ""),
+            fix=data.get("fix", ""),
+            evidence_ids=list(data.get("evidence_ids") or []),
+            regression_result_id=data.get("regression_result_id", ""),
         )
 
 
@@ -234,12 +300,23 @@ class UserFeedback:
     sentiment: str = ""               # one of VALID_SENTIMENTS
     timestamp: str = ""
     participant_id: str = ""
+    user_type: str = ""
+    task: str = ""
+    completed: bool | None = None
+    duration_seconds: int | None = None
+    blockers: list[str] = field(default_factory=list)
+    quote: str = ""
+    satisfaction: int | None = None
 
     def __post_init__(self) -> None:
         if self.source_type and self.source_type not in VALID_FEEDBACK_SOURCES:
             raise ValueError(f"Invalid feedback source type '{self.source_type}'")
         if self.sentiment and self.sentiment not in VALID_SENTIMENTS:
             raise ValueError(f"Invalid sentiment '{self.sentiment}'")
+        if self.duration_seconds is not None and self.duration_seconds < 0:
+            raise ValueError("duration_seconds cannot be negative")
+        if self.satisfaction is not None and not 1 <= self.satisfaction <= 5:
+            raise ValueError("satisfaction must be between 1 and 5")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -249,6 +326,13 @@ class UserFeedback:
             "sentiment": self.sentiment,
             "timestamp": self.timestamp,
             "participant_id": self.participant_id,
+            "user_type": self.user_type,
+            "task": self.task,
+            "completed": self.completed,
+            "duration_seconds": self.duration_seconds,
+            "blockers": list(self.blockers),
+            "quote": self.quote,
+            "satisfaction": self.satisfaction,
         }
 
     @classmethod
@@ -260,6 +344,13 @@ class UserFeedback:
             sentiment=data.get("sentiment", ""),
             timestamp=data.get("timestamp", ""),
             participant_id=data.get("participant_id", ""),
+            user_type=data.get("user_type", ""),
+            task=data.get("task", ""),
+            completed=data.get("completed"),
+            duration_seconds=(int(data["duration_seconds"]) if data.get("duration_seconds") is not None else None),
+            blockers=list(data.get("blockers") or []),
+            quote=data.get("quote", ""),
+            satisfaction=(int(data["satisfaction"]) if data.get("satisfaction") is not None else None),
         )
 
 
@@ -333,6 +424,34 @@ class ValidationReport:
         if self.conclusion and self.conclusion not in VALID_VALIDATION_CONCLUSIONS:
             raise ValueError(f"Invalid validation conclusion '{self.conclusion}'")
 
+    def participant_ids(self) -> set[str]:
+        return {feedback.participant_id for feedback in self.user_feedback if feedback.participant_id}
+
+    def target_participant_ids(self) -> set[str]:
+        """Return distinct participants with an attributable validation task.
+
+        A participant ID by itself is not evidence that the person was a
+        target user. Final Phase 2 validation therefore requires both the
+        participant's user type and the task they attempted. Draft reports
+        may still contain partial/legacy feedback while validation is in
+        progress.
+        """
+        return {
+            feedback.participant_id
+            for feedback in self.user_feedback
+            if feedback.participant_id.strip()
+            and feedback.user_type.strip()
+            and feedback.task.strip()
+        }
+
+    def phase2_validation_errors(self) -> list[str]:
+        """Return final-report errors without weakening draft/partial reports."""
+        if self.conclusion not in FINAL_VALIDATION_CONCLUSIONS:
+            return []
+        if len(self.target_participant_ids()) < 3:
+            return ["最终验证报告至少需要三名不同目标用户的验证记录（每条需包含用户类型和验证任务）"]
+        return []
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "original_problem": self.original_problem,
@@ -368,6 +487,7 @@ class TestingArtifactBundle:
     validation_report: ValidationReport = field(default_factory=ValidationReport)
     iteration_plan: IterationPlan = field(default_factory=IterationPlan)
     user_feedback: list[UserFeedback] = field(default_factory=list)
+    defects: list[Defect] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -376,6 +496,7 @@ class TestingArtifactBundle:
             "validation_report": self.validation_report.to_dict(),
             "iteration_plan": self.iteration_plan.to_dict(),
             "user_feedback": [fb.to_dict() for fb in self.user_feedback],
+            "defects": [defect.to_dict() for defect in self.defects],
         }
 
     @classmethod
@@ -386,4 +507,5 @@ class TestingArtifactBundle:
             validation_report=ValidationReport.from_dict(data.get("validation_report") or {}),
             iteration_plan=IterationPlan.from_dict(data.get("iteration_plan") or {}),
             user_feedback=[UserFeedback.from_dict(fb) for fb in data.get("user_feedback") or []],
+            defects=[Defect.from_dict(defect) for defect in data.get("defects") or []],
         )

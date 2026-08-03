@@ -7,18 +7,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .workflow import PROJECT_TYPES, WORKFLOW_VERSION, normalize_stage, stages_for
+
 
 PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 
-PROJECT_STAGES = (
-    "problem_discovery",
-    "market_research",
-    "product_definition",
-    "solution_design",
-    "development",
-    "testing",
-    "iteration",
-)
+# Compatibility export for older tools: it is the union of the same workflow
+# definitions used by Project validation and the API, not a second lifecycle.
+PROJECT_STAGES = tuple(dict.fromkeys(
+    stage for project_type in PROJECT_TYPES for stage in stages_for(project_type)
+))
 
 
 @dataclass
@@ -28,12 +26,18 @@ class Project:
     name: str
     description: str = ""
     goal: str = ""
+    budget: str = ""
     status: str = "active"
     current_stage: str = "problem_discovery"
     next_steps: str = ""
     blocked_reason: str = ""
     progress: int = 0
     risks: list[str] = field(default_factory=list)
+    project_type: str = "software"
+    workflow_version: str = WORKFLOW_VERSION
+    type_source: str = "default"
+    type_confidence: str = "low"
+    type_confirmed: bool = False
     id: str = field(default_factory=lambda: f"proj_{uuid.uuid4().hex[:8]}")
     user_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -42,8 +46,13 @@ class Project:
     def __post_init__(self) -> None:
         if self.status not in PROJECT_STATUSES:
             raise ValueError(f"Invalid status '{self.status}'. Valid: {PROJECT_STATUSES}")
-        if self.current_stage not in PROJECT_STAGES:
-            raise ValueError(f"Invalid stage '{self.current_stage}'. Valid: {PROJECT_STAGES}")
+        if self.project_type not in PROJECT_TYPES:
+            raise ValueError(f"Invalid project type '{self.project_type}'. Valid: {PROJECT_TYPES}")
+        self.current_stage = normalize_stage(self.current_stage, self.project_type)
+        if self.current_stage not in stages_for(self.project_type):
+            raise ValueError(f"Invalid stage '{self.current_stage}' for {self.project_type} workflow")
+        if self.type_confidence not in {"low", "medium", "high"}:
+            raise ValueError(f"Invalid project type confidence '{self.type_confidence}'")
 
     def update(self, **kwargs: Any) -> None:
         """Update project fields and refresh updated_at."""
@@ -53,8 +62,13 @@ class Project:
             setattr(self, key, value)
         if "status" in kwargs and kwargs["status"] not in PROJECT_STATUSES:
             raise ValueError(f"Invalid status '{kwargs['status']}'")
-        if "current_stage" in kwargs and kwargs["current_stage"] not in PROJECT_STAGES:
-            raise ValueError(f"Invalid stage '{kwargs['current_stage']}'")
+        if "project_type" in kwargs and kwargs["project_type"] not in PROJECT_TYPES:
+            raise ValueError(f"Invalid project type '{kwargs['project_type']}'")
+        effective_type = kwargs.get("project_type", self.project_type)
+        if "current_stage" in kwargs:
+            self.current_stage = normalize_stage(str(kwargs["current_stage"]), effective_type)
+            if self.current_stage not in stages_for(effective_type):
+                raise ValueError(f"Invalid stage '{kwargs['current_stage']}' for {effective_type} workflow")
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,12 +78,18 @@ class Project:
             "name": self.name,
             "description": self.description,
             "goal": self.goal,
+            "budget": self.budget,
             "status": self.status,
             "current_stage": self.current_stage,
             "next_steps": self.next_steps,
             "blocked_reason": self.blocked_reason,
             "progress": self.progress,
             "risks": self.risks,
+            "project_type": self.project_type,
+            "workflow_version": self.workflow_version,
+            "type_source": self.type_source,
+            "type_confidence": self.type_confidence,
+            "type_confirmed": self.type_confirmed,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -82,12 +102,18 @@ class Project:
             name=data.get("name", ""),
             description=data.get("description", ""),
             goal=data.get("goal", ""),
+            budget=data.get("budget", ""),
             status=data.get("status", "active"),
             current_stage=data.get("current_stage", "problem_discovery"),
             next_steps=data.get("next_steps", ""),
             blocked_reason=data.get("blocked_reason", ""),
             progress=data.get("progress", 0),
             risks=data.get("risks", []),
+            project_type=data.get("project_type", "software"),
+            workflow_version=data.get("workflow_version", WORKFLOW_VERSION),
+            type_source=data.get("type_source", "default"),
+            type_confidence=data.get("type_confidence", "low"),
+            type_confirmed=bool(data.get("type_confirmed", False)),
             created_at=data.get("created_at", datetime.now(timezone.utc).isoformat()),
             updated_at=data.get("updated_at", datetime.now(timezone.utc).isoformat()),
         )

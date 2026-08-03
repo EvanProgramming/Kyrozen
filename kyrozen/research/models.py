@@ -85,6 +85,20 @@ class ResearchSource:
     related_claim: str = ""  # the claim this source supports or refutes
     confidence: str = "medium"  # low/medium/high
     fact_type: str = "fact"  # fact/inference/unknown
+    doi: str = ""
+    authors: list[str] = field(default_factory=list)
+    year: int | None = None
+    patent_number: str = ""
+    applicant: str = ""
+    legal_status: str = ""
+    target_amount: str = ""
+    raised_amount: str = ""
+    backers: int | None = None
+    delivery_status: str = ""
+    published_at: str = ""
+    engagement: int | None = None
+    platform: str = ""
+    polarity: str = "unknown"  # positive / negative / mixed / unknown
 
     def __post_init__(self) -> None:
         if self.source_type not in SOURCE_TYPES:
@@ -93,6 +107,8 @@ class ResearchSource:
             raise ValueError(f"Invalid confidence '{self.confidence}'")
         if self.fact_type not in FACT_TYPES:
             raise ValueError(f"Invalid fact_type '{self.fact_type}'")
+        if self.polarity not in {"positive", "negative", "mixed", "unknown"}:
+            raise ValueError(f"Invalid polarity '{self.polarity}'")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -105,6 +121,20 @@ class ResearchSource:
             "related_claim": self.related_claim,
             "confidence": self.confidence,
             "fact_type": self.fact_type,
+            "doi": self.doi,
+            "authors": list(self.authors),
+            "year": self.year,
+            "patent_number": self.patent_number,
+            "applicant": self.applicant,
+            "legal_status": self.legal_status,
+            "target_amount": self.target_amount,
+            "raised_amount": self.raised_amount,
+            "backers": self.backers,
+            "delivery_status": self.delivery_status,
+            "published_at": self.published_at,
+            "engagement": self.engagement,
+            "platform": self.platform,
+            "polarity": self.polarity,
         }
 
     @classmethod
@@ -119,6 +149,20 @@ class ResearchSource:
             related_claim=data.get("related_claim", ""),
             confidence=data.get("confidence", "medium"),
             fact_type=data.get("fact_type", "fact"),
+            doi=data.get("doi", ""),
+            authors=list(data.get("authors") or []),
+            year=data.get("year"),
+            patent_number=data.get("patent_number", ""),
+            applicant=data.get("applicant", ""),
+            legal_status=data.get("legal_status", ""),
+            target_amount=data.get("target_amount", ""),
+            raised_amount=data.get("raised_amount", ""),
+            backers=data.get("backers"),
+            delivery_status=data.get("delivery_status", ""),
+            published_at=data.get("published_at", ""),
+            engagement=data.get("engagement"),
+            platform=data.get("platform", ""),
+            polarity=data.get("polarity", "unknown"),
         )
 
 

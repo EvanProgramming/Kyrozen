@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from typing import Any
 from unittest.mock import patch
 
@@ -12,7 +13,8 @@ from fastapi.testclient import TestClient
 
 from kyrozen.api.server import create_app
 from kyrozen.config import KyrozenConfig
-from kyrozen.hardware.bridge import HardwareBridge, HardwareBridgeError
+from kyrozen.hardware.bridge import HardwareBridge, HardwareBridgeError, classify_upload_error
+from kyrozen.hardware.transport import CONNECTION_LAYERS, FakeSerialTransport, SerialPortTransport, VersionedMessage, build_connection_model, create_transport, run_fake_protocol_scenarios
 from kyrozen.hardware.models import (
     BOM,
     VALID_COMMUNICATIONS,
@@ -235,6 +237,12 @@ def test_bom_serialization(bom_data: dict[str, Any]):
     assert BOM.from_dict(data).items[0].vendor == "DigiKey"
 
 
+def test_bom_calculates_line_and_total_price():
+    bom = BOM(items=[BOMItem(name="ESP32", quantity=2, price="4.5")])
+    assert bom.items[0].total_price == "9"
+    assert bom.total_estimate == "9"
+
+
 def test_wiring_design_serialization(wiring_data: dict[str, Any]):
     wiring = WiringDesign.from_dict(wiring_data)
     assert len(wiring.connections) == 2
@@ -372,6 +380,9 @@ def test_bridge_validates_command_whitelist():
     bridge._validate_args(["arduino-cli", "compile", "--fqbn", "x:y:z", "."])
     bridge._validate_args(["pio", "run"])
     bridge._validate_args(["pio", "device", "list"])
+    bridge._validate_args(["arduino-cli", "version"])
+    bridge._validate_args(["arduino-cli", "core", "list"])
+    bridge._validate_args(["pio", "--version"])
 
     with pytest.raises(HardwareBridgeError):
         bridge._validate_args([])
@@ -391,6 +402,59 @@ def test_bridge_list_ports_without_tools():
         result = bridge.list_ports()
     assert result["success"] is False
     assert "No supported hardware tool found" in result["stderr"]
+    assert result["status"] == "BLOCKED"
+    assert result["board_detected"] is False
+    assert result["toolchain"]["arduino_cli"]["installed"] is False
+
+
+def test_bridge_list_ports_does_not_claim_unknown_serial_ports_are_a_board():
+    bridge = HardwareBridge()
+    output = "Port Protocol Type Board Name FQBN Core\n/dev/cu.debug serial Serial Port Unknown\n"
+    with patch("kyrozen.hardware.bridge.shutil.which", side_effect=lambda command: "/usr/bin/arduino-cli" if command == "arduino-cli" else None), patch.object(
+        bridge, "run", return_value={"success": True, "returncode": 0, "stdout": output, "stderr": ""}
+    ):
+        result = bridge.list_ports()
+    assert result["board_detected"] is False
+    assert result["status"] == "BLOCKED"
+    assert result["block_reason"] == "board_not_connected"
+
+
+def test_bridge_list_ports_accepts_user_confirmed_board_on_usb_uart(tmp_path, monkeypatch):
+    bridge = HardwareBridge(tmp_path)
+
+    monkeypatch.setattr(shutil, "which", lambda command: "/usr/bin/arduino-cli" if command == "arduino-cli" else None)
+
+    def fake_run(args, timeout=120):
+        if args[1:] == ["version"]:
+            return {"success": True, "stdout": "arduino-cli 1.5.1", "stderr": ""}
+        if args[1:] == ["core", "list"]:
+            return {"success": True, "stdout": "esp32:esp32 3.3.10", "stderr": ""}
+        return {
+            "success": True,
+            "stdout": "/dev/cu.usbserial-10 serial Serial Port (USB) Unknown\n",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(bridge, "run", fake_run)
+    result = bridge.list_ports(
+        board="esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi",
+        port="/dev/cu.usbserial-10",
+    )
+
+    assert result["board_detected"] is True
+    assert result["board_identification"] == "user_confirmed"
+    assert result["status"] == "PASSED"
+
+
+def test_bridge_list_ports_recognizes_an_arduino_cli_fqbn():
+    bridge = HardwareBridge()
+    output = "Port Protocol Type Board Name FQBN Core\n/dev/cu.usb serial Serial Port ESP32 Dev Module esp32:esp32:esp32 esp32\n"
+    with patch("kyrozen.hardware.bridge.shutil.which", side_effect=lambda command: "/usr/bin/arduino-cli" if command == "arduino-cli" else None), patch.object(
+        bridge, "run", return_value={"success": True, "returncode": 0, "stdout": output, "stderr": ""}
+    ):
+        result = bridge.list_ports()
+    assert result["board_detected"] is True
+    assert result["status"] not in {"BLOCKED"}
 
 
 def test_bridge_compile_requires_board():
@@ -405,6 +469,60 @@ def test_bridge_upload_requires_board():
     result = bridge.upload()
     assert result["success"] is False
     assert "Board FQBN is required" in result["stderr"]
+
+
+def test_api_rejects_unverified_physical_acceptance_artifact(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "Physical gate"}).json()
+    response = api_client.post(f"/api/projects/{project['id']}/artifacts", json={
+        "type": "hardware_acceptance",
+        "title": "ESP32 Physical Acceptance",
+        "content": json.dumps({"observed_behavior": "LED looked correct"}),
+    })
+    assert response.status_code == 422
+    assert "BLOCKED" in response.json()["detail"]["message"]
+
+
+def test_api_accepts_only_complete_physical_evidence_summary(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "Physical evidence"}).json()
+    runs = [
+        {"action": "list_ports", "status": "PASSED", "success": True, "board_detected": True},
+        {"action": "list_ports", "status": "PASSED", "success": True, "board_detected": True},
+        {"action": "compile", "status": "PASSED", "success": True},
+        {"action": "upload", "status": "PASSED", "success": True},
+        {"action": "monitor", "status": "PASSED", "success": True},
+    ]
+    response = api_client.post(f"/api/projects/{project['id']}/artifacts", json={
+        "type": "hardware_acceptance", "title": "ESP32 Physical Acceptance",
+        "content": json.dumps({
+            "observed_behavior": "串口输出 telemetry，拔插后恢复",
+            "confirmed_by_user": True, "confirmation_answer": "confirmed_behavior_and_reconnect", "confirmed_at": "2026-08-03T00:00:00Z",
+            "physical_evidence_required": True, "hardware_run_timestamps": ["t1", "t2"],
+            "hardware_runs": runs,
+        }),
+    })
+    assert response.status_code == 200, response.text
+
+
+def test_api_rejects_non_affirmative_physical_question_answer(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "Physical answer gate"}).json()
+    runs = [
+        {"action": "list_ports", "status": "PASSED", "success": True, "board_detected": True},
+        {"action": "list_ports", "status": "PASSED", "success": True, "board_detected": True},
+        {"action": "compile", "status": "PASSED", "success": True},
+        {"action": "upload", "status": "PASSED", "success": True},
+        {"action": "monitor", "status": "PASSED", "success": True},
+    ]
+    response = api_client.post(f"/api/projects/{project['id']}/artifacts", json={
+        "type": "hardware_acceptance", "title": "ESP32 Physical Acceptance",
+        "content": json.dumps({
+            "observed_behavior": "串口输出异常，未确认拔插恢复",
+            "confirmed_by_user": True, "confirmation_answer": "yes", "confirmed_at": "2026-08-03T00:00:00Z",
+            "physical_evidence_required": True, "hardware_run_timestamps": ["t1", "t2"],
+            "hardware_runs": runs,
+        }),
+    })
+    assert response.status_code == 422
+    assert "Ask question 的明确肯定回答（符合，拔插后已恢复）" in response.json()["detail"]["missing"]
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +662,140 @@ def test_hardware_agent_prompt_forbids_manufacturing():
     assert "hardware_bridge" in prompt
 
 
+def test_fake_serial_transport_supports_reconnect_and_duplicate_messages():
+    transport = FakeSerialTransport()
+    message = VersionedMessage(protocol_version="1.0", message_type="set_led", fields={"value": 1})
+    with pytest.raises(ConnectionError):
+        transport.send(message)
+    transport.connect("/dev/cu.test")
+    transport.duplicate_next = True
+    transport.send(message)
+    first = transport.receive()
+    second = transport.receive()
+    assert first is not None and first.correlation_id == message.correlation_id
+    assert second is not None and second.correlation_id == message.correlation_id
+    transport.disconnect()
+    with pytest.raises(ConnectionError):
+        transport.receive()
+
+
+def test_fake_serial_transport_reports_incompatible_protocol():
+    transport = FakeSerialTransport(protocol_version="2.0")
+    transport.connect("/dev/cu.fake")
+    transport.send(VersionedMessage(protocol_version="1.0", message_type="telemetry"))
+    response = transport.receive()
+    assert response is not None
+    assert response.error_code == "protocol_version_incompatible"
+    assert response.message_type == "error"
+
+
+def test_real_serial_transport_uses_injected_device_and_round_trips_messages():
+    class Device:
+        is_open = True
+        timeout = 0
+
+        def __init__(self):
+            self.writes = []
+            self.reads = [VersionedMessage(protocol_version="1.0", message_type="telemetry").encode_line()]
+            self.closed = False
+
+        def write(self, payload):
+            self.writes.append(payload)
+
+        def readline(self):
+            return self.reads.pop(0) if self.reads else b""
+
+        def close(self):
+            self.closed = True
+            self.is_open = False
+
+    device = Device()
+    transport = SerialPortTransport(lambda port, baud, timeout: device)
+    transport.connect("/dev/cu.fake", 115200)
+    message = VersionedMessage(protocol_version="1.0", message_type="set_led", fields={"value": 1})
+    transport.send(message)
+    received = transport.receive()
+    assert received is not None and received.message_type == "telemetry"
+    assert device.writes == [message.encode_line()]
+    transport.disconnect()
+    assert not transport.connected
+
+
+def test_real_serial_transport_turns_malformed_lines_into_explicit_errors():
+    class Device:
+        is_open = True
+        timeout = 0
+        def write(self, payload):
+            pass
+        def readline(self):
+            return b"not-json\n"
+        def close(self):
+            self.is_open = False
+
+    transport = SerialPortTransport(lambda port, baud, timeout: Device())
+    transport.connect("/dev/cu.fake")
+    response = transport.receive()
+    assert response is not None
+    assert response.message_type == "error"
+    assert response.error_code == "invalid_message"
+
+
+def test_transport_factory_switches_between_fake_and_real():
+    assert isinstance(create_transport("fake"), FakeSerialTransport)
+    assert isinstance(create_transport("serial"), SerialPortTransport)
+    with pytest.raises(ValueError):
+        create_transport("ble")
+
+
+def test_hardware_bridge_protocol_exchange_can_run_with_fake_transport(project_manager):
+    from kyrozen.tools.hardware_tools import HardwareBridgeTool
+
+    project = project_manager.create(name="Protocol", goal="G")
+    result = HardwareBridgeTool(project_manager).execute("protocol_exchange", {
+        "project_id": project.id,
+        "transport": "fake",
+        "message": {"protocol_version": "1.0", "message_type": "telemetry", "fields": {"value": 1}},
+    })
+    assert result.success, result.error
+    assert result.data["response"]["message_type"] == "ack:telemetry"
+    assert result.data["response"]["correlation_id"] == result.data["request"]["correlation_id"]
+
+
+def test_fake_protocol_scenarios_cover_all_phase2_cases():
+    result = run_fake_protocol_scenarios()
+    assert result["status"] == "PASSED"
+    assert [item["scenario"] for item in result["scenarios"]] == [
+        "normal", "offline", "reconnect", "duplicate", "error", "version_incompatible",
+    ]
+    assert all(item["status"] == "PASSED" for item in result["scenarios"])
+
+
+def test_six_layer_connection_model_preserves_protocol_impact_without_device_assumptions():
+    model = build_connection_model(
+        {"protocol_version": "1.0", "message_type": "telemetry", "fields": {"value": "number"}},
+        affected_files=["firmware/protocol.json"], affected_tasks=["更新字段映射"],
+    )
+    assert [layer["name"] for layer in model["layers"]] == list(CONNECTION_LAYERS)
+    assert model["protocol_version"] == "1.0"
+    assert model["affected_files"] == ["firmware/protocol.json"]
+    assert "ble_uuid" not in model
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("serial port not found", "not_connected"),
+        ("resource temporarily unavailable", "port_occupied"),
+        ("permission denied opening port", "permission_denied"),
+        ("upload speed 921600 is too high", "upload_speed_too_high"),
+        ("Timed out waiting for packet header", "board_error"),
+        ("brownout detector was triggered", "power_failure"),
+    ],
+)
+def test_upload_failures_have_distinct_recovery_categories(stderr: str, expected: str):
+    assert classify_upload_error(stderr) == expected
+
+
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
@@ -608,6 +860,48 @@ def test_hardware_state_endpoint(api_client: TestClient, architecture_data: dict
 def test_hardware_state_requires_project(api_client: TestClient):
     res = api_client.get("/api/projects/proj_missing/hardware/state")
     assert res.status_code == 404
+
+
+def test_hybrid_protocol_change_generates_impact_tasks_and_test(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "协议影响", "project_type": "hybrid"}).json()
+    pid = project["id"]
+    confirmed = api_client.post(f"/api/projects/{pid}/workflow-confirm", json={"project_type": "hybrid"})
+    assert confirmed.status_code == 200, confirmed.text
+    protocol = {"protocol_version": "1.0", "message_type": "telemetry", "fields": {"value": "number"}}
+    first = api_client.post(f"/api/projects/{pid}/protocol/confirm", json={"protocol": protocol, "confirmed": True})
+    assert first.status_code == 200, first.text
+    assert first.json()["generated_task_ids"]
+    assert first.json()["impact_artifact_id"]
+
+    changed = {**protocol, "protocol_version": "1.1", "fields": {"value": "number", "unit": "string"}}
+    second = api_client.post(
+        f"/api/projects/{pid}/protocol/confirm",
+        json={
+            "protocol": changed,
+            "confirmed": True,
+            "affected_files": ["firmware/src/protocol.cpp", "app/src/protocol.ts"],
+            "affected_tasks": ["更新协议字段映射"],
+            "expected_version": first.json()["version"],
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["protocol_changed"] is True
+    assert len(second.json()["generated_task_ids"]) == 4
+    artifacts = api_client.get(f"/api/projects/{pid}/artifacts").json()
+    assert any(item["type"] == "protocol_impact" for item in artifacts)
+    assert any(item["type"] == "protocol_connection_model" for item in artifacts)
+
+
+def test_protocol_scenarios_are_server_generated_and_persisted(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "服务端协议模拟", "project_type": "hybrid"}).json()
+    pid = project["id"]
+    result = api_client.post(f"/api/projects/{pid}/protocol/scenarios")
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "PASSED"
+    assert result.json()["artifact_id"]
+    artifacts = api_client.get(f"/api/projects/{pid}/artifacts").json()
+    scenario = next(item for item in artifacts if item["type"] == "protocol_scenarios")
+    assert "duplicate" in scenario["content"]
 
 
 # ---------------------------------------------------------------------------

@@ -133,7 +133,9 @@ function PythonStep({
     };
   }, [kyrozen, setState]);
 
-  // Check automatically when this step is opened.
+  // Check automatically when this step is opened. Previously the page showed
+  // “not installed” until the user guessed that they needed to click a second
+  // status button, and the check only looked for Kyrozen's bundled runtime.
   useEffect(() => {
     let mounted = true;
     void kyrozen.checkPythonRuntime().then((result) => {

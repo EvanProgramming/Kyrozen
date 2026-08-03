@@ -30,7 +30,19 @@ COMPARISON_DIMENSIONS = {
     "stability",
     "scalability",
     "risk",
+    "time",
+    "user_value",
+    "technical_risk",
+    "maintenance_cost",
+    "data_risk",
+    "validation_difficulty",
 }
+
+# Phase 2 decision gate dimensions. COMPARISON_DIMENSIONS remains backward
+# compatible for legacy planning artifacts and tests.
+PHASE2_COMPARISON_DIMENSIONS = (
+    "time", "cost", "user_value", "technical_risk", "maintenance_cost", "data_risk", "validation_difficulty",
+)
 
 
 @dataclass
@@ -214,6 +226,11 @@ class Solution:
     development_time: str = ""
     risk: str = ""
     scalability: str = ""
+    dimension_scores: dict[str, str] = field(default_factory=dict)
+    assumptions: list[str] = field(default_factory=list)
+    excluded_content: list[str] = field(default_factory=list)
+    failure_conditions: list[str] = field(default_factory=list)
+    evidence_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -226,6 +243,11 @@ class Solution:
             "development_time": self.development_time,
             "risk": self.risk,
             "scalability": self.scalability,
+            "dimension_scores": dict(self.dimension_scores),
+            "assumptions": list(self.assumptions),
+            "excluded_content": list(self.excluded_content),
+            "failure_conditions": list(self.failure_conditions),
+            "evidence_ids": list(self.evidence_ids),
         }
 
     @classmethod
@@ -240,6 +262,11 @@ class Solution:
             development_time=data.get("development_time", ""),
             risk=data.get("risk", ""),
             scalability=data.get("scalability", ""),
+            dimension_scores=dict(data.get("dimension_scores") or {}),
+            assumptions=list(data.get("assumptions") or []),
+            excluded_content=list(data.get("excluded_content") or []),
+            failure_conditions=list(data.get("failure_conditions") or []),
+            evidence_ids=list(data.get("evidence_ids") or []),
         )
 
 
@@ -251,6 +278,32 @@ class SolutionComparison:
     comparison_dimensions: list[str] = field(default_factory=lambda: list(COMPARISON_DIMENSIONS))
     recommendation: str = ""
     recommendation_reason: str = ""
+    regeneration_count: int = 0
+    regenerated_from_version: int | None = None
+
+    def phase2_validation_errors(self) -> list[str]:
+        errors: list[str] = []
+        if len(self.solutions) != 3:
+            errors.append("必须提供保守、平衡、激进三个候选方案")
+        names = {solution.name.strip() for solution in self.solutions}
+        for required in ("保守", "平衡", "激进"):
+            if not any(required in name for name in names):
+                errors.append(f"缺少{required}方案")
+        if not all(d in self.comparison_dimensions for d in PHASE2_COMPARISON_DIMENSIONS):
+            errors.append("必须完成时间、成本、用户价值、技术风险、维护成本、数据风险、验证难度七个比较维度")
+        for solution in self.solutions:
+            missing = [dimension for dimension in PHASE2_COMPARISON_DIMENSIONS if not str(solution.dimension_scores.get(dimension, "")).strip()]
+            if missing:
+                errors.append(f"{solution.name or '未命名方案'}缺少比较评分：{', '.join(missing)}")
+        if not self.recommendation.strip():
+            errors.append("必须填写推荐方案")
+        if not self.recommendation_reason.strip():
+            errors.append("必须填写推荐依据")
+        if self.recommendation.strip() and self.solutions and not any(
+            self.recommendation.strip() == solution.name.strip() for solution in self.solutions
+        ):
+            errors.append("推荐方案必须对应三个候选方案之一")
+        return errors
 
     def __post_init__(self) -> None:
         invalid = {d for d in self.comparison_dimensions if d not in COMPARISON_DIMENSIONS}
@@ -263,6 +316,8 @@ class SolutionComparison:
             "comparison_dimensions": list(self.comparison_dimensions),
             "recommendation": self.recommendation,
             "recommendation_reason": self.recommendation_reason,
+            "regeneration_count": self.regeneration_count,
+            "regenerated_from_version": self.regenerated_from_version,
         }
 
     @classmethod
@@ -272,6 +327,8 @@ class SolutionComparison:
             comparison_dimensions=list(data.get("comparison_dimensions") or COMPARISON_DIMENSIONS),
             recommendation=data.get("recommendation", ""),
             recommendation_reason=data.get("recommendation_reason", ""),
+            regeneration_count=int(data.get("regeneration_count", 0) or 0),
+            regenerated_from_version=data.get("regenerated_from_version"),
         )
 
 

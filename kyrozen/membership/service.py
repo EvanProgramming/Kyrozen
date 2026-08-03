@@ -339,8 +339,9 @@ class MembershipService:
         row["member_user_id"] = user_id
         return row
 
-    def policy(self, user_id: str) -> PlanPolicy:
-        return POLICIES.get(str(self.membership(user_id)["plan"]), POLICIES["free"])
+    def policy(self, user_id: str, *, plan_override: str | None = None) -> PlanPolicy:
+        plan = plan_override or str(self.membership(user_id)["plan"])
+        return POLICIES.get(plan, POLICIES["free"])
 
     def set_plan(self, user_id: str, plan: str, *, status: str = "active") -> dict[str, Any]:
         if plan not in POLICIES:
@@ -358,9 +359,9 @@ class MembershipService:
             )
         return self.membership(user_id)
 
-    def project_decision(self, user_id: str, active_project_count: int) -> tuple[bool, str]:
+    def project_decision(self, user_id: str, active_project_count: int, *, plan_override: str | None = None) -> tuple[bool, str]:
         row = self.membership(user_id)
-        policy = self.policy(user_id)
+        policy = self.policy(user_id, plan_override=plan_override)
         if policy.active_projects and active_project_count >= policy.active_projects:
             if policy.plan == "free":
                 return False, "免费账户最多创建一个项目；已有项目可完整使用全部阶段。"
@@ -412,9 +413,9 @@ class MembershipService:
         row = self._query(sql, params)
         return {"credits": float(row["credits"] or 0), "cost": float(row["cost"] or 0), "conversations": float(row["conversations"] or 0)}
 
-    def check(self, user_id: str, estimate: UsageEstimate | None = None, *, conversation: bool = False) -> dict[str, Any]:
+    def check(self, user_id: str, estimate: UsageEstimate | None = None, *, conversation: bool = False, plan_override: str | None = None) -> dict[str, Any]:
         row = self.membership(user_id)
-        policy = self.policy(user_id)
+        policy = self.policy(user_id, plan_override=plan_override)
         owner = row["owner_user_id"]
         now = _now()
         weekly_start = _parse(row["period_start"])
@@ -451,8 +452,8 @@ class MembershipService:
             (str(uuid.uuid4()), owner, user_id, project_id, task_id, kind, provider, model, estimate.prompt_tokens, estimate.completion_tokens, estimate.cache_hit_tokens, estimate.tool_calls, estimate.credits, estimate.cost_rmb, self.formula_version, json.dumps(metadata or {}, ensure_ascii=False), _iso(_now())),
         )
 
-    def status(self, user_id: str) -> dict[str, Any]:
-        return self.check(user_id)
+    def status(self, user_id: str, *, plan_override: str | None = None) -> dict[str, Any]:
+        return self.check(user_id, plan_override=plan_override)
 
     def seats(self, user_id: str) -> list[dict[str, Any]]:
         owner = self._owner(user_id)

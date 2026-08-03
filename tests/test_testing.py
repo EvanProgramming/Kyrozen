@@ -14,6 +14,7 @@ from kyrozen.config import KyrozenConfig
 from kyrozen.planning.models import PRD, MVP
 from kyrozen.project.context import ProjectContextBuilder
 from kyrozen.testing.models import (
+    Defect,
     IterationItem,
     IterationPlan,
     TestCase,
@@ -214,6 +215,35 @@ def test_test_result_invalid_result():
         TestResult(result="broken")
 
 
+def test_failed_result_creates_serializable_defect_and_regression_link():
+    defect = Defect(defect_id="DEF-1", title="连接失败", test_case_id="TC-1")
+    defect.regression_result_id = "ART-2"
+    defect.status = "resolved"
+    restored = Defect.from_dict(defect.to_dict())
+    assert restored.regression_result_id == "ART-2"
+    assert restored.status == "resolved"
+
+
+def test_failed_test_creates_defect_then_pass_regression_resolves_it(project_manager):
+    project = project_manager.create("缺陷回归项目")
+    tool = SaveTestResultTool(project_manager)
+    failed = tool.execute("save", {"project_id": project.id, "result": {
+        "test_case_id": "TC-REG-1", "test_case_name": "连接按钮", "result": "failed",
+        "actual": "连接超时", "expected": "连接成功",
+    }})
+    assert failed.success
+    defect_id = failed.data["defect_id"]
+    regression = tool.execute("save", {"project_id": project.id, "result": {
+        "test_case_id": "TC-REG-1", "test_case_name": "连接按钮", "result": "passed",
+        "actual": "修复后连接成功", "regression_of": defect_id,
+    }})
+    assert regression.success
+    defects = [a for a in project_manager.list_artifacts(project.id) if a.type == "defect"]
+    latest = next(json.loads(a.content) for a in reversed(defects) if json.loads(a.content).get("defect_id") == defect_id and json.loads(a.content).get("regression_result_id"))
+    assert latest["status"] == "resolved"
+    assert latest["regression_result_id"] == regression.data["artifact_id"]
+
+
 def test_user_feedback_serialization(user_feedback_data: dict[str, Any]):
     fb = UserFeedback.from_dict(user_feedback_data)
     assert fb.source_type == "trial"
@@ -254,6 +284,48 @@ def test_validation_report_serialization(validation_report_data: dict[str, Any])
 def test_validation_report_invalid_conclusion():
     with pytest.raises(ValueError):
         ValidationReport(conclusion="maybe")
+
+
+def test_final_validation_report_requires_three_distinct_participants():
+    report = ValidationReport(
+        conclusion="continue_release",
+        user_feedback=[UserFeedback(participant_id="P1", user_type="maker", task="核心任务")],
+    )
+    assert report.phase2_validation_errors()
+    report.user_feedback.extend([
+        UserFeedback(participant_id="P2", user_type="maker", task="核心任务"),
+        UserFeedback(participant_id="P3", user_type="maker", task="核心任务"),
+    ])
+    assert report.phase2_validation_errors() == []
+
+
+def test_final_validation_report_rejects_participants_without_target_user_fields():
+    report = ValidationReport(
+        conclusion="continue_release",
+        user_feedback=[
+            UserFeedback(participant_id="P1", user_type="maker", task="核心任务"),
+            UserFeedback(participant_id="P2", user_type="maker"),
+            UserFeedback(participant_id="P3", task="核心任务"),
+        ],
+    )
+    assert "用户类型和验证任务" in report.phase2_validation_errors()[0]
+
+
+def test_user_feedback_preserves_task_validation_fields_and_legacy_defaults():
+    feedback = UserFeedback.from_dict({
+        "source_type": "trial",
+        "participant_id": "P-1",
+        "user_type": "maker",
+        "task": "上传固件并观察串口",
+        "completed": False,
+        "duration_seconds": 95,
+        "blockers": ["找不到串口"],
+        "quote": "我不知道下一步该点哪里",
+        "satisfaction": 2,
+    })
+    assert feedback.to_dict()["task"] == "上传固件并观察串口"
+    assert feedback.completed is False
+    assert UserFeedback.from_dict({}).satisfaction is None
 
 
 def test_testing_artifact_bundle_round_trip(
@@ -499,6 +571,7 @@ def test_testing_agent_prompt_contains_tools():
     assert "run_software_test" in prompt
     assert "run_hardware_test" in prompt
     assert "User validation is required" in prompt
+    assert "continue_release, release_after_fix, reduce_scope, stop_project" in prompt
     assert "Do NOT change product requirements" in prompt
 
 
@@ -592,6 +665,17 @@ def test_testing_state_endpoint(api_client: TestClient, test_plan_data: dict[str
         "change_reason": "Seed",
     })
 
+    case = TestCase(
+        id="TC-SW-01", name="Status page renders", type="functional",
+        related_requirement="FR-01", steps=["打开状态页"], expected="显示设备状态", status="ready",
+    )
+    api_client.post(f"/api/projects/{pid}/artifacts", json={
+        "type": "test_case",
+        "title": "Test Case: TC-SW-01 - Status page renders",
+        "content": json.dumps(case.to_dict()),
+        "change_reason": "Seed",
+    })
+
     result = TestResult(test_case_id="TC-SW-01", test_case_name="Status page renders", result="passed")
     api_client.post(f"/api/projects/{pid}/artifacts", json={
         "type": "test_result",
@@ -636,6 +720,7 @@ def test_testing_state_endpoint(api_client: TestClient, test_plan_data: dict[str
     data = res.json()
     assert data["project_id"] == pid
     assert data["test_plan"]["name"] == "MVP Validation Plan"
+    assert data["test_cases"][0]["related_requirement"] == "FR-01"
     assert len(data["test_results"]) == 1
     assert data["test_results"][0]["result"] == "passed"
     assert len(data["user_feedback"]) == 1
@@ -647,6 +732,72 @@ def test_testing_state_endpoint(api_client: TestClient, test_plan_data: dict[str
 def test_testing_state_requires_project(api_client: TestClient):
     res = api_client.get("/api/projects/proj_missing/testing/state")
     assert res.status_code == 404
+
+
+def test_feedback_endpoint_persists_structured_user_validation(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "Feedback Project", "goal": "G"}).json()
+    response = api_client.post("/api/feedback", json={
+        "project_id": project["id"],
+        "type": "experience",
+        "description": "用户无法找到串口",
+        "participant_id": "P-01",
+        "user_type": "maker",
+        "task": "发现设备并观察串口",
+        "completed": False,
+        "duration_seconds": 90,
+        "blockers": ["端口不明确"],
+        "quote": "我不知道该选哪个端口",
+        "satisfaction": 2,
+    })
+    assert response.status_code == 200
+    artifacts = api_client.get(f"/api/projects/{project['id']}/artifacts")
+    assert artifacts.status_code == 200
+    assert any(item["type"] == "user_feedback" for item in artifacts.json())
+    state = api_client.get(f"/api/projects/{project['id']}/testing/state")
+    assert state.status_code == 200
+    feedback = state.json()["user_feedback"]
+    assert feedback[-1]["participant_id"] == "P-01"
+    assert feedback[-1]["task"] == "发现设备并观察串口"
+    assert feedback[-1]["completed"] is False
+    assert state.json()["user_validation"]["participant_count"] == 1
+
+
+def test_final_validation_report_accepts_three_recorded_participants(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "Three Users", "goal": "G"}).json()
+    for participant_id in ("U-01", "U-02", "U-03"):
+        response = api_client.post("/api/feedback", json={
+            "project_id": project["id"],
+            "type": "experience",
+            "description": f"Validation result for {participant_id}",
+            "participant_id": participant_id,
+            "user_type": "maker",
+            "task": "完成设备发现",
+            "completed": True,
+            "satisfaction": 4,
+        })
+        assert response.status_code == 200
+
+    report = ValidationReport(
+        original_problem="设备状态难以确认",
+        tested_solution="串口状态助手",
+        conclusion="continue_release",
+        user_feedback=[
+            UserFeedback(
+                participant_id=f"U-0{i}",
+                source_type="manual",
+                user_type="maker",
+                task="完成设备发现",
+            )
+            for i in range(1, 4)
+        ],
+    )
+    saved = api_client.post(f"/api/projects/{project['id']}/artifacts", json={
+        "type": "validation_report",
+        "title": "Validation Report",
+        "content": json.dumps(report.to_dict()),
+        "change_reason": "Three-user validation",
+    })
+    assert saved.status_code == 200
 
 
 # ---------------------------------------------------------------------------

@@ -205,6 +205,120 @@ def test_solution_comparison_serialization(solution_comparison_data: dict[str, A
     assert data["solutions"][0]["name"] == "Software Only"
 
 
+def test_phase2_solution_api_requires_three_named_candidates(api_client: TestClient):
+    project = api_client.post("/api/projects", json={"name": "方案门禁项目"})
+    assert project.status_code == 200
+    project_id = project.json()["id"]
+    evidence = api_client.post(f"/api/projects/{project_id}/evidence", json={
+        "claim": "用户需要在开始实现前比较风险和成本",
+        "evidence_type": "interview",
+    }).json()
+    source = api_client.post(f"/api/projects/{project_id}/research/sources", json={
+        "source": {"title": "公开研究资料", "url": "https://example.com/research", "source_type": "web_page", "summary": "真实公开来源"},
+    })
+    assert source.status_code == 200, source.text
+    dimensions = ["time", "cost", "user_value", "technical_risk", "maintenance_cost", "data_risk", "validation_difficulty"]
+    comparison = {
+        "solutions": [
+            {"name": name, "solution": name, "dimension_scores": {dimension: 3 for dimension in dimensions}, "evidence_ids": [evidence["artifact_id"]]}
+            for name in ["保守方案", "平衡方案", "激进方案"]
+        ],
+        "comparison_dimensions": dimensions,
+        "recommendation": "平衡方案",
+        "recommendation_reason": "先验证核心价值",
+    }
+    saved = api_client.post(f"/api/projects/{project_id}/solutions", json={"comparison": comparison, "action": "save"})
+    assert saved.status_code == 200
+    confirmed = api_client.post(f"/api/projects/{project_id}/solutions", json={"comparison": comparison, "action": "select", "affected_tasks": ["更新 PRD"]})
+    assert confirmed.status_code == 200
+    restored = api_client.get(f"/api/projects/{project_id}/solutions")
+    assert restored.status_code == 200
+    assert restored.json()["confirmed"] is True
+    revoked = api_client.post(f"/api/projects/{project_id}/solutions", json={"comparison": comparison, "action": "revoke"})
+    assert revoked.status_code == 200
+    assert api_client.get(f"/api/projects/{project_id}/solutions").json()["confirmed"] is False
+    tasks = api_client.get(f"/api/projects/{project_id}/tasks").json()
+    affected = [task for task in tasks if str(task.get("title", "")).startswith("方案影响：")]
+    assert affected
+    assert all(task["status"] == "cancelled" for task in affected)
+
+
+def test_solution_confirmation_requires_evidence_and_real_research(api_client: TestClient):
+    project_id = api_client.post("/api/projects", json={"name": "方案闭环强门禁"}).json()["id"]
+    dimensions = ["time", "cost", "user_value", "technical_risk", "maintenance_cost", "data_risk", "validation_difficulty"]
+    comparison = {
+        "solutions": [
+            {"name": name, "solution": name, "dimension_scores": {dimension: 3 for dimension in dimensions}}
+            for name in ("保守方案", "平衡方案", "激进方案")
+        ],
+        "comparison_dimensions": dimensions,
+        "recommendation": "平衡方案",
+        "recommendation_reason": "先验证核心价值",
+    }
+    missing_evidence = api_client.post(f"/api/projects/{project_id}/solutions", json={"comparison": comparison, "action": "select"})
+    assert missing_evidence.status_code == 422
+    assert "missing_candidate_evidence" in missing_evidence.json()["detail"]
+
+    evidence = api_client.post(f"/api/projects/{project_id}/evidence", json={
+        "claim": "用户需要在实现前比较方案", "evidence_type": "interview",
+    }).json()
+    for solution in comparison["solutions"]:
+        solution["evidence_ids"] = [evidence["artifact_id"]]
+    missing_research = api_client.post(f"/api/projects/{project_id}/solutions", json={"comparison": comparison, "action": "select"})
+    assert missing_research.status_code == 422
+    assert "真实、可打开的市场研究来源" in missing_research.json()["detail"]["message"]
+
+
+def test_phase2_solution_regeneration_preserves_lineage_without_fabricating_results(api_client: TestClient):
+    project_id = api_client.post("/api/projects", json={"name": "方案重新生成"}).json()["id"]
+    dimensions = ["time", "cost", "user_value", "technical_risk", "maintenance_cost", "data_risk", "validation_difficulty"]
+    comparison = {
+        "solutions": [
+            {"name": name, "solution": f"真实输入 {name}", "dimension_scores": {dimension: 3 for dimension in dimensions}}
+            for name in ["保守方案", "平衡方案", "激进方案"]
+        ],
+        "comparison_dimensions": dimensions,
+        "recommendation": "平衡方案",
+        "recommendation_reason": "先验证核心价值",
+    }
+    first = api_client.post(f"/api/projects/{project_id}/solutions", json={"comparison": comparison, "action": "save"})
+    assert first.status_code == 200
+    regenerated = api_client.post(
+        f"/api/projects/{project_id}/solutions",
+        json={"comparison": comparison, "action": "regenerate", "expected_version": first.json()["version"]},
+    )
+    assert regenerated.status_code == 200, regenerated.text
+    current = api_client.get(f"/api/projects/{project_id}/solutions").json()
+    assert current["confirmed"] is False
+    assert current["comparison"]["regeneration_count"] == 1
+    assert current["comparison"]["regenerated_from_version"] == first.json()["version"]
+
+
+def test_phase2_solution_requires_complete_scores_and_owned_evidence(api_client: TestClient):
+    project_id = api_client.post("/api/projects", json={"name": "方案证据门禁"}).json()["id"]
+    dimensions = ["time", "cost", "user_value", "technical_risk", "maintenance_cost", "data_risk", "validation_difficulty"]
+    solutions = [
+        {"name": name, "solution": name, "dimension_scores": {dimension: 3 for dimension in dimensions}}
+        for name in ["保守方案", "平衡方案", "激进方案"]
+    ]
+    solutions[0]["evidence_ids"] = ["evidence-does-not-exist"]
+    invalid_evidence = api_client.post(
+        f"/api/projects/{project_id}/solutions",
+        json={"comparison": {"solutions": solutions, "comparison_dimensions": dimensions, "recommendation": "平衡方案", "recommendation_reason": "依据"}, "action": "save"},
+    )
+    assert invalid_evidence.status_code == 422
+    assert invalid_evidence.json()["detail"]["missing_evidence_ids"] == ["evidence-does-not-exist"]
+
+    solutions[0]["evidence_ids"] = []
+    del solutions[1]["dimension_scores"]["data_risk"]
+    incomplete = api_client.post(
+        f"/api/projects/{project_id}/solutions",
+        json={"comparison": {"solutions": solutions, "comparison_dimensions": dimensions, "recommendation": "平衡方案", "recommendation_reason": "依据"}, "action": "save"},
+    )
+    assert incomplete.status_code == 422
+    assert "data_risk" in incomplete.json()["detail"]["errors"][0]
+
+
 def test_product_brief_serialization(product_brief_data: dict[str, Any]):
     brief = ProductBrief.from_dict(product_brief_data)
     assert brief.product_goal.product_goal == "Help runners stay in flow with adaptive music"

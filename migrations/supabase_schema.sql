@@ -40,12 +40,18 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     description TEXT,
     goal TEXT,
+    budget TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     current_stage TEXT NOT NULL DEFAULT 'problem_discovery',
     next_steps TEXT,
     blocked_reason TEXT,
     progress INTEGER DEFAULT 0,
     risks JSONB DEFAULT '[]',
+    project_type TEXT NOT NULL DEFAULT 'software',
+    workflow_version TEXT NOT NULL DEFAULT 'phase2.v1',
+    type_source TEXT NOT NULL DEFAULT 'default',
+    type_confidence TEXT NOT NULL DEFAULT 'low',
+    type_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

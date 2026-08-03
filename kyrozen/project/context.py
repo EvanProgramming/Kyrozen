@@ -17,7 +17,8 @@ from kyrozen.learning.models import FailureKnowledge, LearningRecord, SuccessKno
 from kyrozen.testing.models import TestPlan, ValidationReport
 
 from .manager import ProjectManager
-from .project import PROJECT_STAGES, Project
+from .project import Project
+from .workflow import stages_for
 
 
 class ProjectContextBuilder:
@@ -83,8 +84,8 @@ class ProjectContextBuilder:
         else:
             lines.append("\nRelevant Project Memories: none")
 
-        lines.append(f"\nValid project stages: {', '.join(sorted(PROJECT_STAGES))}")
-        lines.append("You may use the update_project tool to update current_stage, next_steps, or risks ONLY when the user explicitly asks you to.")
+        lines.append(f"\nValid stages for {project.project_type} workflow: {', '.join(stages_for(project.project_type))}")
+        lines.append("You may use update_project for next_steps or risks only when explicitly asked. Never write current_stage directly; use advance_project_stage so the unified StageGate evaluates the transition.")
         lines.append("DO NOT write files, execute commands, or update project state unless the user explicitly asks you to.")
         lines.append("\n[User Message]")
         return "\n".join(lines)

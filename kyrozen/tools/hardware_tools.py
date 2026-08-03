@@ -444,6 +444,16 @@ class HardwareBridgeTool(Tool):
                     ToolParameter(name="port", param_type="string", description="Serial port"),
                     ToolParameter(name="baud", param_type="integer", description="Baud rate", required=False),
                 ],
+                "protocol_exchange": [
+                    ToolParameter(name="project_id", param_type="string", description="Project ID"),
+                    ToolParameter(name="transport", param_type="string", description="serial or fake"),
+                    ToolParameter(name="message", param_type="object", description="Versioned application message"),
+                    ToolParameter(name="port", param_type="string", description="Serial port for real transport", required=False),
+                    ToolParameter(name="baud", param_type="integer", description="Baud rate", required=False),
+                ],
+                "protocol_scenarios": [
+                    ToolParameter(name="project_id", param_type="string", description="Project ID"),
+                ],
             },
         )
 
@@ -470,8 +480,45 @@ class HardwareBridgeTool(Tool):
                 if not port:
                     return ToolResult(success=False, data=None, error="Missing port for monitor")
                 result = bridge.monitor(port=port, baud=int(parameters.get("baud") or 115200))
+            elif action == "protocol_exchange":
+                from kyrozen.hardware.transport import VersionedMessage, create_transport
+                transport_kind = str(parameters.get("transport") or "fake")
+                transport = create_transport(transport_kind)
+                transport.connect(str(parameters.get("port") or "fake"), int(parameters.get("baud") or 115200))
+                try:
+                    message = VersionedMessage.from_dict(parameters.get("message") or {})
+                    transport.send(message)
+                    response = transport.receive(timeout=1.0)
+                    result = {
+                        "success": response is not None and not response.error_code and response.correlation_id == message.correlation_id,
+                        "transport": transport_kind,
+                        "request": message.to_dict(),
+                        "response": response.to_dict() if response else None,
+                    }
+                finally:
+                    transport.disconnect()
+            elif action == "protocol_scenarios":
+                from kyrozen.hardware.transport import run_fake_protocol_scenarios
+                result = run_fake_protocol_scenarios()
             else:
                 return ToolResult(success=False, data=None, error=f"Unsupported action '{action}'")
-            return ToolResult(success=result.get("success", False), data=result, error=result.get("stderr", ""))
+            result.setdefault("action", action)
+            result.setdefault("board", str(parameters.get("board") or ""))
+            result.setdefault("port", str(parameters.get("port") or ""))
+            result.setdefault("baud", int(parameters.get("baud") or 115200))
+            if action in {"list_ports", "compile", "upload", "monitor"} and not isinstance(result.get("toolchain"), dict):
+                result["toolchain"] = bridge.toolchain_status()
+            toolchain = result.get("toolchain") if isinstance(result.get("toolchain"), dict) else {}
+            result.setdefault(
+                "tool_version",
+                str(
+                    (toolchain.get("arduino_cli") or {}).get("version")
+                    or (toolchain.get("platformio") or {}).get("version")
+                    or ""
+                ),
+            )
+            result.setdefault("error_category", "")
+            accepted = bool(result.get("success", False)) and result.get("status") != "BLOCKED"
+            return ToolResult(success=accepted, data=result, error=result.get("stderr", "") or result.get("block_reason", ""))
         except Exception as e:
             return ToolResult(success=False, data=None, error=f"{type(e).__name__}: {e}")

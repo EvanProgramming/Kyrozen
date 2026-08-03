@@ -14,7 +14,10 @@ class Evidence:
     """A single recorded evidence item tied to a project."""
 
     claim: str
+    original_text: str = ""
+    summary: str = ""
     source: str = "user_statement"  # user_statement / ai_inference / external_evidence
+    source_name: str = ""
     verified: bool = False
     confidence: str = "medium"  # low / medium / high
     notes: str = ""
@@ -24,7 +27,8 @@ class Evidence:
     target_audience: str = ""
     related_question: str = ""
     counter_evidence: list[str] = field(default_factory=list)
-    status: str = "active"  # active / invalid / merged
+    claim_type: str = "unknown"  # fact / opinion / inference / unknown
+    status: str = "active"  # active / invalid / merged / deleted
 
     def __post_init__(self) -> None:
         if self.source not in EVIDENCE_SOURCES:
@@ -34,15 +38,20 @@ class Evidence:
         valid_types = {"interview", "observation", "survey", "screenshot", "video", "public_source", "user_statement", "ai_inference", "external_evidence"}
         if self.evidence_type not in valid_types:
             raise ValueError(f"Invalid evidence_type '{self.evidence_type}'")
-        if self.status not in {"active", "invalid", "merged"}:
+        if self.status not in {"active", "invalid", "merged", "deleted"}:
             raise ValueError(f"Invalid evidence status '{self.status}'")
+        if self.claim_type not in {"fact", "opinion", "inference", "unknown"}:
+            raise ValueError(f"Invalid claim_type '{self.claim_type}'")
         if not self.observed_at:
             self.observed_at = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "claim": self.claim,
+            "original_text": self.original_text,
+            "summary": self.summary,
             "source": self.source,
+            "source_name": self.source_name,
             "verified": self.verified,
             "confidence": self.confidence,
             "notes": self.notes,
@@ -52,6 +61,7 @@ class Evidence:
             "target_audience": self.target_audience,
             "related_question": self.related_question,
             "counter_evidence": list(self.counter_evidence),
+            "claim_type": self.claim_type,
             "status": self.status,
         }
 
@@ -59,7 +69,10 @@ class Evidence:
     def from_dict(cls, data: dict[str, Any]) -> "Evidence":
         return cls(
             claim=data.get("claim", ""),
+            original_text=data.get("original_text", ""),
+            summary=data.get("summary", ""),
             source=data.get("source", "user_statement"),
+            source_name=data.get("source_name", ""),
             verified=data.get("verified", False),
             confidence=data.get("confidence", "medium"),
             notes=data.get("notes", ""),
@@ -69,6 +82,7 @@ class Evidence:
             target_audience=data.get("target_audience", ""),
             related_question=data.get("related_question", ""),
             counter_evidence=list(data.get("counter_evidence") or []),
+            claim_type=data.get("claim_type", "unknown"),
             status=data.get("status", "active"),
         )
 

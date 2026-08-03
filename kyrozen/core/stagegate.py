@@ -22,27 +22,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from kyrozen.project.workflow import PROJECT_TYPES, WORKFLOW_STAGES, stages_for
+
 
 # ---------------------------------------------------------------------------
-# Stage lifecycle (mirrors kyrozen.project.project.PROJECT_STAGES)
+# Compatibility export: dynamic gate instances use ``stages_for``; this is the
+# union for callers that still import a single STAGES constant.
 # ---------------------------------------------------------------------------
 
-STAGES: tuple[str, ...] = (
-    "problem_discovery",
-    "market_research",
-    "product_definition",
-    "solution_design",
-    "development",
-    "testing",
-    "iteration",
-)
+STAGES: tuple[str, ...] = tuple(dict.fromkeys(
+    stage for workflow in WORKFLOW_STAGES.values() for stage in workflow
+))
 
 STAGE_LABELS: dict[str, str] = {
     "problem_discovery": "问题探索",
     "market_research": "市场调研",
     "product_definition": "产品定义",
     "solution_design": "方案设计",
+    "protocol_design": "协议设计",
     "development": "软件开发",
+    "hardware_design": "硬件方案",
+    "procurement": "采购/BOM",
+    "maker": "Maker 装配",
+    "firmware": "固件",
+    "hardware_testing": "硬件测试",
+    "integration_testing": "软硬件集成测试",
     "testing": "测试验证",
     "iteration": "迭代改进",
 }
@@ -77,6 +81,33 @@ def _c(item_id: str, label: str, skippable: bool = False) -> GateItem:
 
 def _v(item_id: str, label: str, skippable: bool = False) -> GateItem:
     return GateItem(id=item_id, label=label, kind="verification", skippable=skippable)
+
+
+def _definition(stage: str) -> StageDefinition | None:
+    """Return a gate definition, including workflow-specific Phase 2 stages."""
+    existing = STAGE_DEFINITIONS.get(stage)
+    if existing is not None:
+        return existing
+    labels = {
+        "hardware_design": ("硬件方案", "硬件架构与接线", ("docs/HARDWARE.md", "hardware")),
+        "procurement": ("采购/BOM", "BOM 与采购记录", ("docs/BOM.md", "bom")),
+        "maker": ("Maker 装配", "逐步装配记录", ("docs/MAKER.md", "maker")),
+        "firmware": ("固件", "固件源码", ("firmware", "hardware/firmware")),
+        "hardware_testing": ("硬件测试", "硬件测试记录", ("docs/HARDWARE_TEST.md", "hardware_tests")),
+        "protocol_design": ("协议设计", "版本化协议", ("docs/PROTOCOL.md", "protocol")),
+        "integration_testing": ("集成测试", "软硬件集成测试记录", ("docs/INTEGRATION_TEST.md", "integration_tests")),
+    }
+    item = labels.get(stage)
+    if item is None:
+        return None
+    # Hybrid projects must explicitly confirm their versioned protocol before
+    # protocol implementation or integration work can advance.
+    confirmation_skippable = stage != "protocol_design"
+    return StageDefinition(
+        key=stage,
+        label=item[0],
+        items=(_d(stage, item[1], item[2]), _c(f"{stage}_confirmed", f"用户确认{item[0]}", skippable=confirmation_skippable)),
+    )
 
 
 # Per-stage required deliverables / confirmations / verifications.
@@ -117,6 +148,7 @@ STAGE_DEFINITIONS: dict[str, StageDefinition] = {
         items=(
             _d("tech_design", "技术方案（docs/TECH_DESIGN.md）", ("docs/TECH_DESIGN.md", "docs/DESIGN.md", "DESIGN.md"), skippable=True),
             _c("design_confirmed", "用户确认技术方案", skippable=True),
+            _c("solution_confirmed", "用户确认保守/平衡/激进方案", skippable=False),
         ),
     ),
     "development": StageDefinition(
@@ -201,10 +233,11 @@ class StageGateStore:
       * failed     -- a required task failed (surfaced as a repair entry)
     """
 
-    def __init__(self, path: str | Path, project_id: str = "") -> None:
+    def __init__(self, path: str | Path, project_id: str = "", project_type: str = "software") -> None:
         self.path = Path(path)
         self.project_id = project_id
-        self.current_stage: str = STAGES[0]
+        self.workflow_type = project_type if project_type in PROJECT_TYPES else "software"
+        self.current_stage: str = stages_for(self.workflow_type)[0]
         self.progress: int = 0
         self.records: dict[str, dict[str, Any]] = {}
         self.tasks: dict[str, dict[str, Any]] = {}
@@ -221,9 +254,12 @@ class StageGateStore:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except Exception:
             return
+        self.workflow_type = data.get("workflow_type", self.workflow_type)
+        if self.workflow_type not in PROJECT_TYPES:
+            self.workflow_type = "software"
         self.current_stage = data.get("current_stage", self.current_stage)
-        if self.current_stage not in STAGES:
-            self.current_stage = STAGES[0]
+        if self.current_stage not in stages_for(self.workflow_type):
+            self.current_stage = stages_for(self.workflow_type)[0]
         self.progress = int(data.get("progress", 0))
         self.records = data.get("records", {})
         self.tasks = data.get("tasks", {})
@@ -237,6 +273,7 @@ class StageGateStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "project_id": self.project_id,
+            "workflow_type": self.workflow_type,
             "current_stage": self.current_stage,
             "progress": self.progress,
             "records": self.records,
@@ -248,6 +285,14 @@ class StageGateStore:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.path)
+
+    def set_workflow(self, project_type: str) -> None:
+        if project_type not in PROJECT_TYPES:
+            raise ValueError(f"Invalid project type '{project_type}'")
+        self.workflow_type = project_type
+        if self.current_stage not in stages_for(project_type):
+            self.current_stage = stages_for(project_type)[0]
+        self.progress = compute_progress(self)
 
     # -- recording --------------------------------------------------------
 
@@ -295,7 +340,7 @@ class StageGateStore:
         return True
 
     def _reset_stage(self, stage: str) -> None:
-        definition = STAGE_DEFINITIONS.get(stage)
+        definition = _definition(stage)
         if not definition:
             return
         for item in definition.items:
@@ -312,7 +357,7 @@ def detect_deliverables(workspace_root: str | Path, stage: str) -> dict[str, boo
     """Scan the workspace for deliverable files of the given stage."""
     root = Path(workspace_root)
     result: dict[str, bool] = {}
-    definition = STAGE_DEFINITIONS.get(stage)
+    definition = _definition(stage)
     if definition is None:
         return result
     for item in definition.items:
@@ -388,9 +433,10 @@ def compute_progress(store: StageGateStore) -> int:
     deliverable status, verification results and user confirmation.
     """
     stage = store.current_stage
-    idx = STAGES.index(stage) if stage in STAGES else 0
-    n = len(STAGES)
-    definition = STAGE_DEFINITIONS.get(stage)
+    stages = stages_for(store.workflow_type)
+    idx = stages.index(stage) if stage in stages else 0
+    n = len(stages)
+    definition = _definition(stage)
     if definition is None:
         return int(round((idx + 1) / n * 100))
 
@@ -420,8 +466,9 @@ def compute_progress(store: StageGateStore) -> int:
 
 def compute_gate(store: StageGateStore) -> GateStatus:
     stage = store.current_stage
-    definition = STAGE_DEFINITIONS.get(stage)
-    idx = STAGES.index(stage) if stage in STAGES else 0
+    stages = stages_for(store.workflow_type)
+    definition = _definition(stage)
+    idx = stages.index(stage) if stage in stages else 0
     satisfied: list[Condition] = []
     missing: list[Condition] = []
     blocked_entry_reason: str | None = None
@@ -461,9 +508,15 @@ def compute_gate(store: StageGateStore) -> GateStatus:
                 )
             )
 
-    # Hard entry gate: cannot be in (or advance within) development without PRD.
-    if stage == "development" and not _item_satisfied(store.records.get("prd", {}), "deliverable"):
+    # Hard entry gates: implementation work requires both a real PRD and an
+    # explicitly confirmed solution.  The embedded workflow has no separate
+    # solution_design stage, so it is checked when entering hardware_design.
+    if stage in {"solution_design", "development", "firmware", "hardware_design", "protocol_design"} and not _item_satisfied(store.records.get("prd", {}), "deliverable"):
         blocked_entry_reason = "缺少产品需求文档(PRD)，无法进入开发阶段。请先在「产品定义」阶段完成 PRD。"
+    elif stage == "solution_design" and not _item_satisfied(store.records.get("solution_confirmed", {}), "confirmation"):
+        blocked_entry_reason = "尚未确认保守、平衡或激进方案，不能进入实现阶段。请先完成方案决策。"
+    elif stage in {"development", "firmware", "hardware_design", "protocol_design"} and not _item_satisfied(store.records.get("solution_confirmed", {}), "confirmation"):
+        blocked_entry_reason = "尚未确认实现方案，不能进入软件、硬件或协议实现。请先完成方案决策。"
 
     # Clicking “进入下一阶段” is itself the explicit user confirmation. A
     # confirmation item is displayed as pending, but must not make that button
@@ -475,7 +528,7 @@ def compute_gate(store: StageGateStore) -> GateStatus:
         stage=stage,
         stage_label=definition.label if definition else STAGE_LABELS.get(stage, stage),
         index=idx,
-        total=len(STAGES),
+        total=len(stages),
         satisfied=satisfied,
         missing=missing,
         can_advance=can_advance,
@@ -487,8 +540,10 @@ def compute_gate(store: StageGateStore) -> GateStatus:
 
 def entry_blocked(store: StageGateStore, stage: str) -> str | None:
     """Return a reason if the given stage cannot be entered yet."""
-    if stage == "development" and not _item_satisfied(store.records.get("prd", {}), "deliverable"):
+    if stage in {"development", "firmware", "hardware_design", "protocol_design"} and not _item_satisfied(store.records.get("prd", {}), "deliverable"):
         return "缺少产品需求文档(PRD)，无法进入开发阶段。请先在「产品定义」阶段完成 PRD。"
+    if stage in {"development", "firmware", "hardware_design", "protocol_design"} and not _item_satisfied(store.records.get("solution_confirmed", {}), "confirmation"):
+        return "尚未确认实现方案，不能进入软件、硬件或协议实现。请先完成方案决策。"
     return None
 
 
@@ -497,7 +552,14 @@ def refresh_gate(store: StageGateStore, workspace_root: str | Path) -> GateStatu
     # Migrate state created by older clients that allowed hard requirements to
     # be skipped. A non-skippable item must never remain satisfied by a legacy
     # skip record after upgrading.
-    hard_ids = {item.id for definition in STAGE_DEFINITIONS.values() for item in definition.items if not item.skippable}
+    workflow_definitions = [_definition(stage) for stage in stages_for(store.workflow_type)]
+    hard_ids = {
+        item.id
+        for definition in workflow_definitions
+        if definition is not None
+        for item in definition.items
+        if not item.skippable
+    }
     for item_id in hard_ids:
         rec = store.records.get(item_id)
         if rec and rec.get("skipped"):
@@ -520,6 +582,42 @@ def refresh_gate(store: StageGateStore, workspace_root: str | Path) -> GateStatu
     store.progress = compute_progress(store)
     store.save()
     return compute_gate(store)
+
+
+# Versioned Artifacts are the durable Phase 2 record, while the stage gate
+# still supports legacy file-based projects. Callers that have a project
+# manager can mirror these artifact types into the gate after refresh so a
+# desktop/API workflow does not require duplicating every artifact as Markdown.
+ARTIFACT_DELIVERABLES: dict[str, frozenset[str]] = {
+    "problem_statement": frozenset({"problem_brief", "discovery_evidence"}),
+    "market_report": frozenset({"market_research_report", "research_run", "research_source"}),
+    # The planning API and desktop workbench persist the PRD as a versioned
+    # ``product_definition`` Artifact. Keep legacy file/tool artifact names
+    # compatible too, so API-backed embedded projects use the same hard PRD
+    # entry gate as software projects.
+    "prd": frozenset({"product_definition", "PRD", "prd"}),
+    "tech_design": frozenset({"solution_comparison", "solution_decision"}),
+    "hardware_design": frozenset({"hardware_architecture", "wiring_design"}),
+    "procurement": frozenset({"bom"}),
+    "maker": frozenset({"assembly_step"}),
+    # Compile/upload/monitor runs are retained in the local hardware evidence
+    # stream; the durable project Artifact that opens this stage is the
+    # firmware definition. Physical acceptance is the only valid deliverable
+    # for leaving hardware testing, while debug records remain diagnostics.
+    "firmware": frozenset({"firmware_project"}),
+    "hardware_testing": frozenset({"hardware_acceptance"}),
+    "protocol_design": frozenset({"protocol_confirmation"}),
+    "integration_testing": frozenset({"protocol_scenarios", "integration_test", "test_result"}),
+}
+
+
+def sync_artifact_deliverables(store: StageGateStore, artifact_types: set[str] | list[str] | tuple[str, ...]) -> None:
+    """Mirror persisted Phase 2 artifact presence into stage-gate records."""
+    available = set(artifact_types)
+    for item_id, types in ARTIFACT_DELIVERABLES.items():
+        if available.intersection(types):
+            store.record_deliverable(item_id, True, detail="由项目 Artifact 持久化记录确认")
+    store.progress = compute_progress(store)
 
 
 def record_report_deliverable(
@@ -550,8 +648,9 @@ def record_report_deliverable(
         refresh_gate(store, str(root))
         # Explicitly detect the specific deliverable regardless of current stage.
         found = False
-        for stage in STAGE_DEFINITIONS:
-            items = STAGE_DEFINITIONS[stage].items
+        for stage in stages_for(store.workflow_type):
+            definition = _definition(stage)
+            items = definition.items if definition is not None else ()
             if any(item.id == deliverable_id for item in items):
                 found = detect_deliverables(root, stage).get(deliverable_id, False)
                 break
@@ -616,11 +715,12 @@ def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | Non
       * 'return' -- move back one stage and clear its gate for re-evaluation.
     """
     gate = compute_gate(store)
+    stages = stages_for(store.workflow_type)
     if mode == "return":
-        idx = STAGES.index(store.current_stage) if store.current_stage in STAGES else 0
+        idx = stages.index(store.current_stage) if store.current_stage in stages else 0
         if idx <= 0:
             return {"ok": False, "error": "已是第一阶段，无法返回。", **_status_dict(store, gate)}
-        prev = STAGES[idx - 1]
+        prev = stages[idx - 1]
         store.current_stage = prev
         store.tasks = {}
         store._reset_stage(prev)
@@ -630,11 +730,21 @@ def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | Non
         new_gate = compute_gate(store)
         return {"ok": True, "stage": prev, **_status_dict(store, new_gate)}
 
-    if store.current_stage not in STAGES:
+    if store.current_stage not in stages:
         return {"ok": False, "error": "未知阶段。", **_status_dict(store, gate)}
-    idx = STAGES.index(store.current_stage)
-    if idx >= len(STAGES) - 1:
+    idx = stages.index(store.current_stage)
+    if idx >= len(stages) - 1:
         return {"ok": False, "error": "已是最后阶段，无法继续推进。", **_status_dict(store, gate)}
+
+    # Cross-stage entry prerequisites (PRD and confirmed solution) are hard
+    # gates even when the current stage's own missing item is a confirmation.
+    # They cannot be bypassed by either normal or risk advancement.
+    if gate.blocked_entry_reason and mode in {"normal", "risk"}:
+        return {
+            "ok": False,
+            "error": gate.blocked_entry_reason,
+            **_status_dict(store, gate),
+        }
 
     required_missing = [c for c in gate.missing if c.kind not in {"task", "confirmation"} and c.required]
     if mode == "normal" and required_missing:
@@ -669,7 +779,7 @@ def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | Non
             )
 
     # Advancing = the user confirms the current stage's required confirmations.
-    definition = STAGE_DEFINITIONS.get(store.current_stage)
+    definition = _definition(store.current_stage)
     if definition is not None:
         for item in definition.items:
             if item.kind == "confirmation":
@@ -687,7 +797,7 @@ def advance(store: StageGateStore, mode: str, risk_details: dict[str, str] | Non
                 else:
                     store.record_confirmation(item.id, True, detail="用户确认（进入下一阶段）")
 
-    nxt = STAGES[idx + 1]
+    nxt = stages[idx + 1]
     entry_reason = entry_blocked(store, nxt)
     if entry_reason:
         return {"ok": False, "error": entry_reason, **_status_dict(store, gate)}

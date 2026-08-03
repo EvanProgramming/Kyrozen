@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from typing import Any
 
@@ -75,7 +76,14 @@ class DesktopClientManager:
         Prefers clients currently looking at the target project, then falls back
         to the most recently active online client.
         """
-        online = self.list_online_for_user(user_id)
+        # The REST token-exchange endpoint registers a presence record before
+        # the WebSocket is established.  That record is useful for status
+        # pages but cannot receive an assignment; routing must only consider a
+        # live WebSocket client or tasks are acknowledged and then stranded.
+        online = [
+            client for client in self.list_online_for_user(user_id)
+            if client.websocket is not None
+        ]
         if not online:
             return None
         if project_id:
@@ -90,7 +98,10 @@ class DesktopClientManager:
         if client is None or client.websocket is None:
             return False
         try:
-            await client.websocket.send_json(message)
+            # A broken/stalled socket must not hold the /api/chat request open
+            # indefinitely.  The caller can then use the server-side fallback
+            # and the task remains observable instead of disappearing.
+            await asyncio.wait_for(client.websocket.send_json(message), timeout=5.0)
             client.touch()
             return True
         except Exception as exc:

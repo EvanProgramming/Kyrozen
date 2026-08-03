@@ -53,7 +53,7 @@ def test_multi_month_grant_uses_31_day_semantics(temp_dir: str):
 
 
 def test_webhook_verifies_and_is_idempotent(temp_dir: str, monkeypatch):
-    config = KyrozenConfig(provider="ollama", workspace_root=temp_dir, afdian_plan_id_lite="plan-lite", afdian_open_user_id="creator", afdian_open_api_token="token")
+    config = KyrozenConfig(provider="ollama", workspace_root=temp_dir, membership_enabled=True, afdian_plan_id_lite="plan-lite", afdian_open_user_id="creator", afdian_open_api_token="token")
     service = MembershipService(KyrozenDatabase(f"{temp_dir}/kyrozen.db"), config)
     service.bind_afdian_account(TEST_USER.user_id, "afdian-user", "private-user")
     confirmed = {"out_trade_no": "trade-webhook", "user_id": "afdian-user", "user_private_id": "private-user", "plan_id": "plan-lite", "month": 1, "status": 2, "total_amount": 24}

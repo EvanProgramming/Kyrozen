@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .agent import HardwareDevelopmentAgent
 from .bridge import HardwareBridge, HardwareBridgeError
+from .transport import CONNECTION_LAYERS, FakeSerialTransport, SerialPortTransport, SerialTransport, VersionedMessage, build_connection_model, create_transport, run_fake_protocol_scenarios
 from .models import (
     BOM,
     VALID_COMMUNICATIONS,
@@ -12,6 +13,7 @@ from .models import (
     VALID_HARDWARE_DECISIONS,
     VALID_HARDWARE_STAGES,
     VALID_PURCHASE_STATUSES,
+    VALID_PROCUREMENT_STATUSES,
     AssemblyStep,
     BOMItem,
     Component,
@@ -36,6 +38,14 @@ __all__ = [
     "HardwareBridgeError",
     "HardwareDebugRecord",
     "HardwareDevelopmentAgent",
+    "FakeSerialTransport",
+    "CONNECTION_LAYERS",
+    "SerialPortTransport",
+    "SerialTransport",
+    "create_transport",
+    "build_connection_model",
+    "VersionedMessage",
+    "run_fake_protocol_scenarios",
     "HardwareSession",
     "VALID_COMMUNICATIONS",
     "VALID_CONTROLLERS",
@@ -43,6 +53,7 @@ __all__ = [
     "VALID_HARDWARE_DECISIONS",
     "VALID_HARDWARE_STAGES",
     "VALID_PURCHASE_STATUSES",
+    "VALID_PROCUREMENT_STATUSES",
     "WiringConnection",
     "WiringDesign",
 ]

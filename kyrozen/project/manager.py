@@ -6,6 +6,7 @@ from typing import Any
 
 from .db import KyrozenDatabase
 from .project import Artifact, Decision, Project
+from .workflow import WORKFLOW_VERSION
 
 
 class ProjectManager:
@@ -23,8 +24,10 @@ class ProjectManager:
         name: str,
         description: str = "",
         goal: str = "",
+        budget: str = "",
         initial_idea: str = "",
         user_id: str = "",
+        project_type: str = "software",
     ) -> Project:
         """Create a new project."""
         description = description or initial_idea
@@ -32,8 +35,11 @@ class ProjectManager:
             name=name,
             description=description,
             goal=goal,
+            budget=budget,
             next_steps="Clarify project goals and scope",
             user_id=user_id,
+            project_type=project_type,
+            workflow_version=WORKFLOW_VERSION,
         )
         self.db.save_project(project)
         return project

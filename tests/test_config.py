@@ -37,3 +37,11 @@ def test_get_config_from_env(monkeypatch):
     assert cfg.provider == "deepseek"
     assert cfg.api_key == "env-key"
     assert cfg.permission_mode == "permissive"
+
+
+def test_get_config_loads_research_endpoints(monkeypatch):
+    monkeypatch.setenv("PATENT_SEARCH_URL", "https://research.example/patents")
+    monkeypatch.setenv("CROWDFUNDING_SEARCH_URL", "https://research.example/crowdfunding")
+    cfg = get_config()
+    assert cfg.patent_search_url.endswith("/patents")
+    assert cfg.crowdfunding_search_url.endswith("/crowdfunding")

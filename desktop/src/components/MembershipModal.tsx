@@ -27,7 +27,6 @@ const plans: Array<{
 
 export function MembershipModal({ currentPlan, onClose, onRefresh, afdianCallbackVersion = 0 }: MembershipModalProps) {
   const [notice, setNotice] = useState('');
-  const [busyPlan, setBusyPlan] = useState<PlanKey | null>(null);
   const [checkoutId, setCheckoutId] = useState<string | null>(null);
   const [pendingPlan, setPendingPlan] = useState<PlanKey | null>(null);
 
@@ -60,7 +59,6 @@ export function MembershipModal({ currentPlan, onClose, onRefresh, afdianCallbac
   const choosePlan = async (plan: PlanKey) => {
     if (plan === currentPlan) return;
     if (!window.kyrozen || plan === 'free') return;
-    setBusyPlan(plan);
     setNotice('正在创建爱发电付款会话…');
     try {
       const checkout = await window.kyrozen.startAfdianCheckout(plan);
@@ -80,8 +78,6 @@ export function MembershipModal({ currentPlan, onClose, onRefresh, afdianCallbac
       }
     } catch (error: any) {
       setNotice(error?.message || '付款会话创建失败，请稍后重试。');
-    } finally {
-      setBusyPlan(null);
     }
   };
 
@@ -90,13 +86,17 @@ export function MembershipModal({ currentPlan, onClose, onRefresh, afdianCallbac
       <div className="panel w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6">
         <div className="flex items-start justify-between gap-4 mb-5">
           <div>
-            <h2 id="membership-title" className="font-display text-3xl text-ink">选择 Kyrozen 会员</h2>
-            <p className="text-sm text-ink-soft mt-1">所有会员都可以使用完整流程；区别在于项目数、Credit、频率和额度。</p>
+            <h2 id="membership-title" className="font-display text-3xl text-ink">会员功能</h2>
+            <p className="text-sm text-ink-soft mt-1">首个测试版暂不开放会员购买和升级。</p>
           </div>
           <button type="button" onClick={onClose} className="btn-ghost text-xl leading-none px-2" aria-label="关闭会员页面">×</button>
         </div>
 
         {notice && <div role="status" className="mb-4 border border-accent/30 bg-accent-soft px-3 py-2 text-sm text-accent">{notice}</div>}
+
+        <div className="mb-4 border border-warning/40 bg-warning-soft px-3 py-3 text-sm text-warning">
+          当前版本除开发者账号外，所有用户统一按免费方案使用：同时 1 个项目、每月创建 1 个项目、每周 1,000 Credit、每月 20 次对话，并受 5 小时 250 Credit 频率限制。会员方案将在后续版本开放。
+        </div>
 
         <div className="overflow-x-auto border border-line">
           <table className="w-full min-w-[760px] text-sm border-collapse">
@@ -138,12 +138,7 @@ export function MembershipModal({ currentPlan, onClose, onRefresh, afdianCallbac
         </div>
 
         <div className="flex flex-wrap justify-end gap-2 mt-5">
-          {plans.filter((plan) => plan.key !== 'free').map((plan) => (
-            <button key={plan.key} type="button" disabled={busyPlan !== null || checkoutId !== null} className={plan.key === currentPlan ? 'btn-secondary text-sm' : 'btn-primary text-sm'} onClick={() => void choosePlan(plan.key)}>
-              {busyPlan === plan.key ? '处理中…' : plan.key === currentPlan ? '当前方案' : `购买 ${plan.name}`}
-            </button>
-          ))}
-          <button type="button" onClick={onClose} className="btn-ghost text-sm">稍后再说</button>
+          <button type="button" onClick={onClose} className="btn-primary text-sm">知道了</button>
         </div>
       </div>
     </div>

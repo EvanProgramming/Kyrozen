@@ -31,6 +31,14 @@ def test_project_persistence(temp_dir: str):
     assert fetched.current_stage == "market_research"
 
 
+def test_legacy_stage_aliases_restore_into_phase2_workflow():
+    assert Project.from_dict({"name": "Legacy discovery", "current_stage": "discovery"}).current_stage == "problem_discovery"
+    assert Project.from_dict({"name": "Legacy planning", "current_stage": "planning"}).current_stage == "product_definition"
+    assert Project.from_dict({"name": "Legacy learning", "current_stage": "learning"}).current_stage == "iteration"
+    assert Project.from_dict({"name": "Legacy hardware", "current_stage": "hardware_development"}).current_stage == "development"
+    assert Project.from_dict({"name": "Embedded hardware", "project_type": "embedded", "current_stage": "hardware_development"}).current_stage == "hardware_design"
+
+
 def test_task_persistence_with_project_id(temp_dir: str):
     db_path = os.path.join(temp_dir, "kyrozen.db")
     db = KyrozenDatabase(db_path)
@@ -80,3 +88,50 @@ def test_desktop_client_model_persists_without_key_translation(temp_dir: str):
     assert stored is not None
     assert stored["id"] == client.client_id
     assert stored["device_name"] == "Test Mac"
+
+
+def test_phase2_project_fields_round_trip_through_postgres_and_supabase_adapters():
+    """Exercise both remote row adapters without requiring live credentials."""
+    from kyrozen.project.postgres_db import PostgresDatabase, SCHEMA_SQL
+    from kyrozen.project.supabase_db import SupabaseDatabase
+
+    for column in ("budget", "project_type", "workflow_version", "type_source", "type_confidence", "type_confirmed"):
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in SCHEMA_SQL
+
+    row = {
+        "id": "p-phase2",
+        "user_id": "u1",
+        "name": "Phase 2",
+        "description": "",
+        "goal": "",
+        "status": "active",
+        "current_stage": "problem_discovery",
+        "next_steps": "",
+        "blocked_reason": "",
+        "progress": 0,
+        "risks": [],
+        "project_type": "hybrid",
+        "workflow_version": "phase2.v1",
+        "type_source": "user_confirmed",
+        "type_confidence": "high",
+        "type_confirmed": True,
+        "created_at": "2026-08-03T00:00:00+00:00",
+        "updated_at": "2026-08-03T00:00:00+00:00",
+    }
+    postgres_project = PostgresDatabase._row_to_project(object.__new__(PostgresDatabase), row)
+    supabase_project = SupabaseDatabase._row_to_project(object.__new__(SupabaseDatabase), row)
+    for project in (postgres_project, supabase_project):
+        assert project.project_type == "hybrid"
+        assert project.workflow_version == "phase2.v1"
+        assert project.type_source == "user_confirmed"
+        assert project.type_confidence == "high"
+        assert project.type_confirmed is True
+
+    legacy = {key: value for key, value in row.items() if key not in {"project_type", "workflow_version", "type_source", "type_confidence", "type_confirmed"}}
+    for project in (
+        PostgresDatabase._row_to_project(object.__new__(PostgresDatabase), legacy),
+        SupabaseDatabase._row_to_project(object.__new__(SupabaseDatabase), legacy),
+    ):
+        assert project.project_type == "software"
+        assert project.workflow_version == "phase2.v1"
+        assert project.type_confirmed is False

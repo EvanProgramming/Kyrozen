@@ -3,21 +3,20 @@ import type { StageGateStatus } from '../types/global';
 
 interface ProjectState {
   project_id: string;
+  project_type?: 'software' | 'embedded' | 'hybrid';
+  workflow_stages?: string[];
   stage: string;
   progress: number;
   blocked_reason: string | null;
   next_action: { action: string; reason: string; target_mode: string } | null;
 }
 
-const STAGES = [
-  ['problem_discovery', '问题探索'],
-  ['market_research', '市场调研'],
-  ['product_definition', '产品定义'],
-  ['solution_design', '方案设计'],
-  ['development', '开发'],
-  ['testing', '测试验证'],
-  ['iteration', '迭代改进'],
-] as const;
+const STAGE_LABELS: Record<string, string> = {
+  problem_discovery: '问题探索', market_research: '市场调研', product_definition: '产品定义',
+  solution_design: '方案设计', protocol_design: '协议设计', development: '软件开发',
+  hardware_design: '硬件方案', procurement: '采购/BOM', maker: 'Maker 装配', firmware: '固件',
+  hardware_testing: '硬件测试', integration_testing: '集成测试', testing: '测试验证', iteration: '迭代改进',
+};
 
 /**
  * Keep the right rail compact: users see where they are and the adjacent
@@ -65,15 +64,17 @@ export function ProgressPanel({ projectId }: { projectId: string }) {
   };
 
   if (!state) return <div className="p-4 text-xs text-ink-faint">正在读取项目进度…</div>;
-  const currentIndex = Math.max(0, STAGES.findIndex(([key]) => key === state.stage));
+  const stageKeys = state.workflow_stages || ['problem_discovery', 'market_research', 'product_definition', 'solution_design', 'development', 'testing', 'iteration'];
+  const stages = stageKeys.map((key) => [key, STAGE_LABELS[key] || key] as const);
+  const currentIndex = Math.max(0, stages.findIndex(([key]) => key === state.stage));
   const gate = gateStatus?.gate ?? null;
   const progress = Math.max(0, Math.min(100, gateStatus?.progress ?? state.progress ?? 0));
-  const visibleStages = STAGES.slice(Math.max(0, currentIndex - 1), currentIndex + 2);
+  const visibleStages = stages.slice(Math.max(0, currentIndex - 1), currentIndex + 2);
   const requestStageReview = async () => {
     if (!window.kyrozen || !projectId || !gate) return;
     setBusy(true);
     setReviewNotice(null);
-    const currentLabel = STAGES[currentIndex]?.[1] || '当前阶段';
+    const currentLabel = stages[currentIndex]?.[1] || '当前阶段';
     const result = await window.kyrozen.sendChat(
       `请重新检查当前阶段“${currentLabel}”的目标和完成条件，结合当前项目已有成果判断是否可以进入下一阶段。如果可以，请说明判断依据；如果还不能，请说明缺少什么。`,
     );

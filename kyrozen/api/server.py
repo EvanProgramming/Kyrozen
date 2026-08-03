@@ -4067,68 +4067,75 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             WiringDesign,
         )
 
-        latest_arch = pm.get_latest_artifact(
-            project_id, "hardware_architecture", title="Hardware Architecture"
-        )
-        arch = HardwareArchitecture()
-        if latest_arch is not None:
-            import json
-            try:
-                arch = HardwareArchitecture.from_dict(json.loads(latest_arch.content))
-            except (json.JSONDecodeError, ValueError):
-                pass
+        def load_hardware_artifact(model: Any, artifact_type: str, title: str) -> tuple[Any, Any]:
+            """Read a versioned hardware artifact without breaking the workbench.
 
-        latest_bom = pm.get_latest_artifact(project_id, "bom", title="Bill of Materials")
-        bom = BOM()
-        if latest_bom is not None:
-            import json
+            Older projects and partially written artifacts must not turn the
+            read-only hardware projection into a 500.  Keep the artifact id
+            when possible so the desktop can still show that the source was
+            present, while falling back to an empty validated model.
+            """
+            latest = None
             try:
-                bom = BOM.from_dict(json.loads(latest_bom.content))
-            except (json.JSONDecodeError, ValueError):
-                pass
+                latest = pm.get_latest_artifact(project_id, artifact_type, title=title)
+                if latest is None:
+                    return model(), None
+                payload = json.loads(latest.content)
+                if not isinstance(payload, dict):
+                    raise ValueError("hardware artifact content must be a JSON object")
+                return model.from_dict(payload), latest
+            except Exception as exc:  # malformed legacy data must remain readable
+                get_logger(__name__).warning(
+                    f"Ignoring malformed hardware artifact {artifact_type} "
+                    f"for {project_id}: {exc}"
+                )
+                return model(), latest
 
-        latest_wiring = pm.get_latest_artifact(
-            project_id, "wiring_design", title="Wiring Design"
+        arch, latest_arch = load_hardware_artifact(
+            HardwareArchitecture, "hardware_architecture", "Hardware Architecture"
         )
-        wiring = WiringDesign()
-        if latest_wiring is not None:
-            import json
-            try:
-                wiring = WiringDesign.from_dict(json.loads(latest_wiring.content))
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        latest_firmware = pm.get_latest_artifact(
-            project_id, "firmware_project", title="Firmware Project"
+        bom, latest_bom = load_hardware_artifact(BOM, "bom", "Bill of Materials")
+        wiring, latest_wiring = load_hardware_artifact(
+            WiringDesign, "wiring_design", "Wiring Design"
         )
-        firmware = FirmwareProject()
-        if latest_firmware is not None:
-            import json
-            try:
-                firmware = FirmwareProject.from_dict(json.loads(latest_firmware.content))
-            except (json.JSONDecodeError, ValueError):
-                pass
+        firmware, latest_firmware = load_hardware_artifact(
+            FirmwareProject, "firmware_project", "Firmware Project"
+        )
 
         assembly_steps = []
         debug_records = []
-        for artifact in pm.list_artifacts(project_id):
-            if artifact.type == "assembly_step":
-                try:
+        try:
+            hardware_artifacts = pm.list_artifacts(project_id)
+        except Exception as exc:
+            get_logger(__name__).warning(
+                f"Unable to list hardware artifacts for {project_id}: {exc}"
+            )
+            hardware_artifacts = []
+        for artifact in hardware_artifacts:
+            try:
+                payload = json.loads(artifact.content)
+                if artifact.type == "assembly_step":
                     from kyrozen.hardware.models import AssemblyStep
-                    assembly_steps.append(AssemblyStep.from_dict(json.loads(artifact.content)))
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            elif artifact.type == "hardware_debug_record":
-                try:
+                    assembly_steps.append(AssemblyStep.from_dict(payload))
+                elif artifact.type == "hardware_debug_record":
                     from kyrozen.hardware.models import HardwareDebugRecord
-                    debug_records.append(HardwareDebugRecord.from_dict(json.loads(artifact.content)))
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                    debug_records.append(HardwareDebugRecord.from_dict(payload))
+            except Exception as exc:
+                get_logger(__name__).warning(
+                    f"Ignoring malformed hardware record "
+                    f"{getattr(artifact, 'id', 'unknown')} for {project_id}: {exc}"
+                )
 
-        decisions = [
-            d for d in pm.list_decisions(project_id)
-            if d.decision.startswith("Hardware decision:")
-        ]
+        try:
+            decisions = [
+                d for d in pm.list_decisions(project_id)
+                if d.decision.startswith("Hardware decision:")
+            ]
+        except Exception as exc:
+            get_logger(__name__).warning(
+                f"Unable to list hardware decisions for {project_id}: {exc}"
+            )
+            decisions = []
 
         # Summarize git commits if hardware project exists
         import subprocess

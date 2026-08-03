@@ -924,6 +924,22 @@ def test_hardware_state_requires_project(api_client: TestClient):
     assert res.status_code == 404
 
 
+def test_hardware_state_ignores_malformed_legacy_artifact(api_client: TestClient):
+    create = api_client.post("/api/projects", json={"name": "Legacy Hardware", "goal": "G"})
+    pid = create.json()["id"]
+    api_client.post(f"/api/projects/{pid}/artifacts", json={
+        "type": "firmware_project",
+        "title": "Firmware Project",
+        "content": "[]",
+        "change_reason": "Legacy malformed fixture",
+    })
+
+    res = api_client.get(f"/api/projects/{pid}/hardware/state")
+
+    assert res.status_code == 200
+    assert res.json()["firmware"]["build_status"] == "pending"
+
+
 def test_hybrid_protocol_change_generates_impact_tasks_and_test(api_client: TestClient):
     project = api_client.post("/api/projects", json={"name": "协议影响", "project_type": "hybrid"}).json()
     pid = project["id"]

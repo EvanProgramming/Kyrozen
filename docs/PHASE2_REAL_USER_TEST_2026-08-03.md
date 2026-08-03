@@ -154,3 +154,9 @@
 | 2026-08-03 | ESP32 串口探针上传 | 桌面端执行“上传固件”，Arduino CLI 返回 `success true returncode 0`，ESP32-S3、`/dev/cu.usbmodem101`、115200 信息与运行证据持久化，状态 PASSED。 | PASS | 继续串口观察 |
 | 2026-08-03 | ESP32 串口观察首次执行与重试 | 桌面端执行“串口观察”，8 秒有界采样返回 `success false`、`returncode -15`、`probe_seen false`、`monitor_ended_by_timeout true`；设备仍能被 Arduino CLI 枚举，随后从桌面端重试一次，仍未捕获探针输出。失败状态和重试入口均可见，未伪造硬件通过。 | BLOCKED | 需要确认设备实际串口行为，并继续排查串口占用/启动时序 |
 | 2026-08-03 | ESP32-S3 USB CDC 修复版 DMG | 针对 ESP32-S3 原生 USB CDC 默认未启用的问题，源码已将编译/上传选项固定为 `USBMode=hwcdc,CDCOnBoot=cdc`，硬件回归测试 `63 passed`；重新打包并安装 DMG 后，桌面端仍连接远端 `kyrozen.chat`，工作台日志继续出现 `/hardware/state` `500`，导致修复版编译请求无法完成。 | BLOCKED（远端服务未更新） | 先更新远端 API，再从此 DMG 继续物理串口验收 |
+| 2026-08-03 | 远端服务更新后 DMG 重试 | 重新从 arm64 DMG 安装并恢复登录；采购中心重新填写 ESP32-S3 FQBN 与 `/dev/cu.usbmodem101` 后执行只读发现，远端工作台成功返回并持久化 `board detected true`、`status PASSED`，确认此前 `/hardware/state` 阻塞已解除。 | PASS | 继续 USB CDC 修复版编译 |
+| 2026-08-03 | USB CDC 修复版编译 | 通过安装后的 DMG 执行“准备串口探针”和“编译固件”；ESP32-S3、`/dev/cu.usbmodem101`、115200，Arduino CLI 返回 `success true returncode 0`，状态 PASSED 且持久化。 | PASS | 继续上传固件 |
+| 2026-08-03 | USB CDC 修复版上传 | 通过安装后的 DMG 执行“上传固件”；Arduino CLI 返回 `success true returncode 0`，运行记录持久化为 PASSED。 | PASS | 继续串口观察 |
+| 2026-08-03 | USB CDC 修复版串口观察 | 通过重新安装的 DMG 执行“串口观察”；结果为 `success true`、`probe_seen true`、`monitor_ended_by_timeout true`、8 秒采样，状态 PASSED。设备真实输出已被探针识别；`returncode -15` 是有界采样主动终止监视器的结果。 | PASS | 继续协议六场景与拔插恢复 |
+| 2026-08-03 | 协议交换与六种模拟场景 | 通过桌面端 Fake 模拟器执行版本化 telemetry/ack 交换；normal、offline、reconnect、duplicate、error、version_incompatible 六场景全部返回 PASSED，并持久化 protocol version 1。 | PASS | 进行真实拔插恢复 |
+| 2026-08-03 | 串口采样字节流修复回归 | 串口观察首次在 USB CDC 已启用后暴露 `can't concat str to bytes`；修复 `TimeoutExpired` 字节/文本合并并新增回归测试，硬件测试 `64 passed`。重新打包安装后，桌面端串口观察返回 `success true`、`probe_seen true`，真实心跳被捕获。 | FIXED AND PASS | 等待用户确认物理拔插后执行最终确认 |

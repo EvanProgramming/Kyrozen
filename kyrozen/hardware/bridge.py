@@ -365,9 +365,12 @@ class HardwareBridge:
             except subprocess.TimeoutExpired:
                 process.kill()
                 stdout, stderr = process.communicate()
-            stdout = (exc.stdout or "") + (stdout or "")
-            stderr = (exc.stderr or "") + (stderr or "")
+            stdout = self._serial_text(exc.stdout) + self._serial_text(stdout)
+            stderr = self._serial_text(exc.stderr) + self._serial_text(stderr)
             timed_out = True
+        else:
+            stdout = self._serial_text(stdout)
+            stderr = self._serial_text(stderr)
         combined = f"{stdout}\n{stderr}"
         probe_seen = "KYROZEN_SERIAL_PROBE" in combined
         return {
@@ -381,3 +384,10 @@ class HardwareBridge:
             "probe_seen": probe_seen,
             "monitor_ended_by_timeout": timed_out,
         }
+
+    @staticmethod
+    def _serial_text(value: str | bytes | None) -> str:
+        """Normalize subprocess monitor output before combining streams."""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value or ""

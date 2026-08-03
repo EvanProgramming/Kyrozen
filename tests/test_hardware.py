@@ -545,6 +545,12 @@ def test_bridge_upload_requires_board():
     assert "Board FQBN is required" in result["stderr"]
 
 
+def test_bridge_normalizes_serial_monitor_bytes():
+    assert HardwareBridge._serial_text(b"KYROZEN_SERIAL_PROBE heartbeat 1") == "KYROZEN_SERIAL_PROBE heartbeat 1"
+    assert HardwareBridge._serial_text("ready") == "ready"
+    assert HardwareBridge._serial_text(None) == ""
+
+
 def test_api_rejects_unverified_physical_acceptance_artifact(api_client: TestClient):
     project = api_client.post("/api/projects", json={"name": "Physical gate"}).json()
     response = api_client.post(f"/api/projects/{project['id']}/artifacts", json={

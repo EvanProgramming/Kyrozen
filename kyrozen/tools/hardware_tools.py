@@ -436,6 +436,9 @@ class HardwareBridgeTool(Tool):
                     ToolParameter(name="project_id", param_type="string", description="Project ID"),
                     ToolParameter(name="board", param_type="string", description="Board FQBN (for arduino-cli)", required=False),
                 ],
+                "prepare_serial_probe": [
+                    ToolParameter(name="project_id", param_type="string", description="Project ID"),
+                ],
                 "upload": [
                     ToolParameter(name="project_id", param_type="string", description="Project ID"),
                     ToolParameter(name="board", param_type="string", description="Board FQBN (for arduino-cli)", required=False),
@@ -476,6 +479,8 @@ class HardwareBridgeTool(Tool):
                     board=parameters.get("board"),
                     port=parameters.get("port"),
                 )
+            elif action == "prepare_serial_probe":
+                result = bridge.prepare_serial_probe()
             elif action == "compile":
                 result = bridge.compile(board=parameters.get("board"))
             elif action == "upload":

@@ -1104,14 +1104,35 @@ async function reconnectWithFreshWebSocketToken(): Promise<boolean> {
   return websocketTokenRefreshPromise;
 }
 
+const API_REQUEST_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, endpoint: string): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`请求超时（${API_REQUEST_TIMEOUT_MS / 1000} 秒）：${endpoint}`);
+    }
+    throw new Error(`请求失败（${endpoint}）：${err?.message || String(err)}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function apiGet(endpoint: string, auth = true) {
   const headers: Record<string, string> = {};
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  let response = await fetch(`${serverUrl}${endpoint}`, { headers });
+  let response = await fetchWithTimeout(`${serverUrl}${endpoint}`, { headers }, endpoint);
   if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
-    response = await fetch(`${serverUrl}${endpoint}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    response = await fetchWithTimeout(
+      `${serverUrl}${endpoint}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+      endpoint,
+    );
   }
   if (!response.ok) {
     // Token expired or invalid — clear it so we don't keep using it.

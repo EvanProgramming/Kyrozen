@@ -491,6 +491,17 @@ def test_bridge_compile_requires_board():
     assert "Board FQBN is required" in result["stderr"]
 
 
+def test_bridge_prepares_gpio_free_serial_probe(tmp_path):
+    result = HardwareBridge(tmp_path).prepare_serial_probe()
+    probe = tmp_path / "kyrozen_serial_probe.ino"
+    assert result["success"] is True
+    assert result["status"] == "PASSED"
+    assert probe.exists()
+    source = probe.read_text(encoding="utf-8")
+    assert "KYROZEN_SERIAL_PROBE heartbeat" in source
+    assert "pinMode" not in source
+
+
 def test_bridge_upload_requires_board():
     bridge = HardwareBridge()
     result = bridge.upload()

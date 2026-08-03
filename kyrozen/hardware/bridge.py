@@ -250,6 +250,38 @@ class HardwareBridge:
             }
         return self.run(["arduino-cli", "compile", "--fqbn", board, "."])
 
+    def prepare_serial_probe(self) -> dict[str, Any]:
+        """Create the approved, GPIO-free ESP32 serial probe sketch."""
+        probe_file = self.firmware_dir / "kyrozen_serial_probe.ino"
+        source = "\n".join([
+            "// Kyrozen hardware acceptance serial probe; no GPIO or product protocol assumptions.",
+            "#include <Arduino.h>",
+            "",
+            "unsigned long heartbeat = 0;",
+            "",
+            "void setup() {",
+            "  Serial.begin(115200);",
+            "  delay(200);",
+            "  Serial.println(\"KYROZEN_SERIAL_PROBE ready\");",
+            "}",
+            "",
+            "void loop() {",
+            "  Serial.print(\"KYROZEN_SERIAL_PROBE heartbeat \");",
+            "  Serial.println(heartbeat++);",
+            "  delay(1000);",
+            "}",
+            "",
+        ])
+        probe_file.write_text(source, encoding="utf-8")
+        return {
+            "success": True,
+            "status": "PASSED",
+            "probe_file": str(probe_file),
+            "probe_name": "KYROZEN_SERIAL_PROBE",
+            "baud": 115200,
+            "note": "GPIO-free serial heartbeat probe; it does not define BLE/GATT/OTA or product behavior.",
+        }
+
     def upload(self, board: str | None = None, port: str | None = None) -> dict[str, Any]:
         """Upload compiled firmware to the board."""
         if (self.firmware_dir / "platformio.ini").exists():

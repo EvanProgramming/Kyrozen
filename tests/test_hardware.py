@@ -407,6 +407,33 @@ def test_bridge_list_ports_without_tools():
     assert result["toolchain"]["arduino_cli"]["installed"] is False
 
 
+def test_bridge_list_ports_uses_bundled_tool_path_when_not_on_path(tmp_path, monkeypatch):
+    bridge = HardwareBridge(tmp_path)
+    bundled_cli = tmp_path / "arduino-cli"
+    bundled_cli.write_text("bundled cli", encoding="utf-8")
+    monkeypatch.setenv("KYROZEN_ARDUINO_CLI_PATH", str(bundled_cli))
+    monkeypatch.setattr(shutil, "which", lambda _command: None)
+
+    def fake_run(args, timeout=120):
+        if args[1:] == ["version"]:
+            return {"success": True, "stdout": "arduino-cli 1.0.4", "stderr": ""}
+        if args[1:] == ["core", "list"]:
+            return {"success": True, "stdout": "esp32:esp32 3.3.10", "stderr": ""}
+        return {
+            "success": True,
+            "stdout": "/dev/cu.usbserial-10 serial Serial Port Unknown\\n",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(bridge, "run", fake_run)
+    result = bridge.list_ports()
+
+    assert result["toolchain"]["arduino_cli"]["installed"] is True
+    assert result["success"] is True
+    assert result["status"] == "BLOCKED"
+    assert result["block_reason"] == "board_not_connected"
+
+
 def test_bridge_list_ports_does_not_claim_unknown_serial_ports_are_a_board():
     bridge = HardwareBridge()
     output = "Port Protocol Type Board Name FQBN Core\n/dev/cu.debug serial Serial Port Unknown\n"
@@ -641,6 +668,30 @@ def test_hardware_bridge_tool_requires_project():
     result = tool.execute("list_ports", {"project_id": "x"})
     assert not result.success
     assert "Project manager not available" in result.error
+
+
+def test_hardware_bridge_tool_forwards_board_and_port_for_discovery(project_manager):
+    project = project_manager.create(name="Test", goal="G")
+    tool = HardwareBridgeTool(project_manager)
+    with patch.object(
+        HardwareBridge,
+        "list_ports",
+        return_value={"success": True, "status": "PASSED", "board_detected": True},
+    ) as list_ports:
+        result = tool.execute(
+            "list_ports",
+            {
+                "project_id": project.id,
+                "board": "esp32:esp32:esp32",
+                "port": "/dev/cu.usbserial-10",
+            },
+        )
+
+    assert result.success, result.error
+    list_ports.assert_called_once_with(
+        board="esp32:esp32:esp32",
+        port="/dev/cu.usbserial-10",
+    )
 
 
 # ---------------------------------------------------------------------------

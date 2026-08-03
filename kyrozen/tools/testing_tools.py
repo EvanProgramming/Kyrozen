@@ -503,6 +503,8 @@ class RunHardwareTestTool(Tool):
                 ],
                 "list_ports": [
                     ToolParameter(name="project_id", param_type="string", description="Project ID"),
+                    ToolParameter(name="board", param_type="string", description="Confirmed board FQBN", required=False),
+                    ToolParameter(name="port", param_type="string", description="Confirmed serial port", required=False),
                 ],
             },
         )
@@ -520,7 +522,10 @@ class RunHardwareTestTool(Tool):
 
         try:
             if action == "list_ports":
-                result = bridge.list_ports()
+                result = bridge.list_ports(
+                    board=parameters.get("board"),
+                    port=parameters.get("port"),
+                )
             elif action == "compile":
                 result = bridge.compile(board=parameters.get("board"))
             elif action == "upload":

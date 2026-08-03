@@ -84,3 +84,21 @@
 | 2026-08-03 | 测试后清理：移除临时副本 | Computer Use 键名 `super+delete` 不被当前动作接口识别（keyNotFound）；临时副本仍被精确选中，改用 Finder 文件菜单的 Move to Trash | RETRY | 不影响正式安装 |
 | 2026-08-03 | 测试后清理：移除临时副本 | Finder 提示 `Kyrozen 2` 仍处于打开状态，拒绝移到废纸篓；先核对并关闭临时副本进程后重试 | RETRY | 正式安装不受影响 |
 | 2026-08-03 | 测试后清理完成 | 退出临时副本、弹出 3 个 Kyrozen DMG 卷、将 `/Applications/Kyrozen 2.app` 移到废纸篓；核对后仅保留 `/Applications/Kyrozen.app`，无 Kyrozen DMG 挂载卷、无 Kyrozen 运行进程 | PASS | 后续每轮 DMG 复测后执行同样清理 |
+| 2026-08-03 | 重新开始 ESP32 实物验收 | 启动正式安装时 Computer Use 当前动作接口不提供 `double_click`；已记录，改用 Finder 选中后 File → Open | RETRY | 不影响正式安装 |
+| 2026-08-03 | 正式安装重启恢复 | 打开项目画布后首次刷新真实失败，界面显示 `上次操作失败：刷新项目工作台` / `fetch failed`；按界面提供的重试入口继续 | RETRY | 需要确认重试是否恢复，暂不判定为通过 |
+| 2026-08-03 | 正式安装重启恢复重试 | 通过界面“重试：刷新项目工作台”再次请求后仍显示 `fetch failed`，工作台资料未恢复 | FAIL | 需检查本地 API/Agent 服务状态后修复或继续有限重试 |
+| 2026-08-03 | 正式安装硬件发现 | 点击“只读发现设备”后，最近一次硬件运行持久化为 `success false`、`board detected false`、`BLOCKED / toolchain_unavailable`；同屏硬件资料却显示 Arduino CLI 与 ESP32 核心已安装，工具链状态不一致 | FAIL | 通过桌面端“检查工具链”复核 |
+| 2026-08-03 | 工具链路径修复 | 定位为 `HardwareBridge` 的发现/状态/串口判断忽略 Electron 传入的 bundled 工具路径，只检查 PATH；统一使用环境变量或 PATH 解析，并新增回归测试 | FIXED | 59 个硬件测试通过，需在重新打包的正式 DMG 中复测 |
+| 2026-08-03 | 安装新 DMG | Finder“前往文件夹”对话框中 Computer Use 不识别 `return` 键名；已记录，改用对话框中的路径建议项打开 DMG | RETRY | 不影响 DMG 文件 |
+| 2026-08-03 | DMG 安装命令 | Finder 已启动 DMG 内置 `Install Kyrozen.command`，但 Computer Use 安全策略禁止读取 Terminal 窗口；改用文件系统只读核对安装结果 | RETRY | 不读取或输入任何终端命令 |
+| 2026-08-03 | 正式安装串口确认 | 实际存在 `/dev/cu.usbserial-10`，但界面输入后重试仍持久化 `board detected false` / `board_not_connected`；Arduino CLI 只列出 USB 串口而未给出 FQBN，显式板卡+端口确认未被接受 | FAIL | 修复显式串口确认判定后重新打包复测；未编译、上传或读取串口 |
+| 2026-08-03 | Computer Use 输入调用 | 误调用不存在的 `sky.type` 方法，返回 `sky.type is not a function`，未改变应用数据 | RETRY | 改用点击输入框后 `sky.type_text`，继续完成串口确认 |
+| 2026-08-03 | 串口确认参数传递修复 | 定位到桌面端虽传入板卡/FQBN与串口，Agent 的 `HardwareBridgeTool` 在 `list_ports` 分支丢弃了这两个参数，导致显式确认永远无法生效 | FIXED | 修复硬件工具与测试工具参数传递，需重新打包并复测 |
+| 2026-08-03 | 启动修复版应用的 Computer Use 索引 | 未重新读取 Finder“前往”对话框就使用旧索引设置路径，返回 `Cannot set a value for an element that is not settable`；没有改变文件 | RETRY | 重新读取对话框后继续启动 |
+| 2026-08-03 | 修复版登录按钮首次点击 | Kyrozen 启动后使用刚才的界面索引点击登录，Computer Use 返回 `The element ID is no longer valid`，未执行登录 | RETRY | 重新读取启动页后再点击 |
+| 2026-08-03 | 修复版 DMG 硬件复测 | 显式填写 `/dev/cu.usbserial-10` 后仍为 `board detected false`；进一步定位为 `list_ports` 工具 schema 未声明 board/port，Agent 参数校验丢弃了用户确认值 | FAIL | 补齐 schema 声明后重新打包复测 |
+| 2026-08-03 | 第三次打包命令路径 | 在仓库根目录执行桌面端 npm 命令，返回 `ENOENT ... /Kyrozen/package.json`；未修改项目 | RETRY | 改在 `desktop/` 目录重新执行 |
+| 2026-08-03 | Finder 最新挂载卷定位 | Finder 前往对话框在连续挂载卷切换时返回 `The element ID is no longer valid`，未改变应用；当前新增卷为 `/Volumes/Kyrozen 0.1.0-arm64 1` | RETRY | 重新读取对话框后继续 |
+| 2026-08-03 | 启动第三次修复版 | Finder File→Open 操作返回 `cannotClickOffscreenElement`，未启动新操作 | RETRY | 重新读取 Finder 菜单后继续 |
+| 2026-08-03 | 最终修复版工作台加载 | 登录恢复后进入采购中心，等待约 17 秒仍显示“项目资料较多，仍在整理中…”，无结果、错误或重试入口 | FAIL | 通过工作台“刷新”做一次有限重试；不绕过桌面端 |
+| 2026-08-03 | 最终修复版工作台刷新重试 | 点击桌面端“刷新”并等待约 10 秒后仍停留在“项目资料较多，仍在整理中…”，没有恢复入口，未进入硬件发现 | FAIL | 本轮真实 DMG 测试阻塞在工作台数据加载，未执行编译/上传/串口观察 |

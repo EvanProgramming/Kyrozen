@@ -61,13 +61,24 @@ class HardwareBridge:
     def _check_tool(self, command: str) -> str:
         # Desktop client may pass pre-resolved tool paths via environment
         # variables so that bundled toolchains can be used.
-        env_override = os.environ.get(f"KYROZEN_{command.upper().replace('-', '_')}_PATH")
-        if env_override and Path(env_override).is_file():
-            return env_override
-        tool_path = shutil.which(command)
+        tool_path = self._tool_path(command)
         if tool_path is None:
             raise HardwareBridgeError(f"Tool not found: {command}")
         return tool_path
+
+    def _tool_path(self, command: str) -> str | None:
+        """Resolve a system or desktop-bundled tool consistently.
+
+        Packaged Electron launches the Python Agent with explicit paths for
+        bundled tools.  Those paths are intentionally not added to PATH, so
+        every capability check must use the same resolver as command
+        execution; checking only ``shutil.which`` makes a packaged tool appear
+        installed while discovery reports ``toolchain_unavailable``.
+        """
+        env_override = os.environ.get(f"KYROZEN_{command.upper().replace('-', '_')}_PATH")
+        if env_override and Path(env_override).is_file():
+            return env_override
+        return shutil.which(command)
 
     def _validate_args(self, args: list[str]) -> None:
         if not args:
@@ -144,7 +155,7 @@ class HardwareBridge:
     ) -> dict[str, Any]:
         """List available serial ports using the first available tool."""
         toolchain = self.toolchain_status()
-        if shutil.which("arduino-cli"):
+        if self._tool_path("arduino-cli"):
             result = self.run(["arduino-cli", "board", "list"])
             result["toolchain"] = toolchain
             cli_identified = bool(re.search(
@@ -172,7 +183,7 @@ class HardwareBridge:
                 if not result["board_detected"]:
                     result["block_reason"] = "board_not_connected"
             return result
-        if shutil.which("pio"):
+        if self._tool_path("pio"):
             result = self.run(["pio", "device", "list"])
             result["toolchain"] = toolchain
             # PlatformIO lists ports but cannot identify an ESP32 board without
@@ -196,7 +207,7 @@ class HardwareBridge:
     def toolchain_status(self) -> dict[str, Any]:
         """Return read-only tool and board-core discovery for the workbench."""
         status: dict[str, Any] = {}
-        if shutil.which("arduino-cli"):
+        if self._tool_path("arduino-cli"):
             version = self.run(["arduino-cli", "version"])
             cores = self.run(["arduino-cli", "core", "list"])
             status["arduino_cli"] = {
@@ -207,7 +218,7 @@ class HardwareBridge:
             }
         else:
             status["arduino_cli"] = {"installed": False}
-        if shutil.which("pio"):
+        if self._tool_path("pio"):
             version = self.run(["pio", "--version"])
             status["platformio"] = {
                 "installed": True,
@@ -264,6 +275,6 @@ class HardwareBridge:
 
     def monitor(self, port: str, baud: int = 115200) -> dict[str, Any]:
         """Open serial monitor."""
-        if shutil.which("arduino-cli"):
+        if self._tool_path("arduino-cli"):
             return self.run(["arduino-cli", "monitor", "--port", port, "--config", f"baudrate={baud}"])
         return self.run(["pio", "device", "monitor", "--port", port, "--baud", str(baud)])

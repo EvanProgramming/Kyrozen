@@ -161,3 +161,5 @@
 | 2026-08-03 | 协议交换与六种模拟场景 | 通过桌面端 Fake 模拟器执行版本化 telemetry/ack 交换；normal、offline、reconnect、duplicate、error、version_incompatible 六场景全部返回 PASSED，并持久化 protocol version 1。 | PASS | 进行真实拔插恢复 |
 | 2026-08-03 | 串口采样字节流修复回归 | 串口观察首次在 USB CDC 已启用后暴露 `can't concat str to bytes`；修复 `TimeoutExpired` 字节/文本合并并新增回归测试，硬件测试 `64 passed`。重新打包安装后，桌面端串口观察返回 `success true`、`probe_seen true`，真实心跳被捕获。 | FIXED AND PASS | 等待用户确认物理拔插后执行最终确认 |
 | 2026-08-03 | 重启后拔插发现恢复 | 退出并重新打开已安装 DMG 后，工作台恢复 37 份项目资料、协议六场景 `ready true`、历史硬件记录；填写 ESP32-S3 与 `/dev/cu.usbmodem101` 执行“拔插后重新发现”，Arduino CLI 返回 `board detected true`、`status PASSED` 并持久化。 | PASS（重新发现） | 仍需用户确认实际拔插与串口行为后保存实物确认 |
+| 2026-08-03 | 重启后远端硬件状态回归 | 再次重启并恢复工作台后，桌面日志重新出现 `/api/projects/proj_b9e7dd3f/hardware/state` `500 Internal server error`，同时有多个历史 Artifact 请求超时；界面仍显示历史记录但最终“保存实物确认”禁用。 | ISSUE（远端不稳定） | 通过桌面端刷新重试，必要时修复并重新部署远端 API |
+| 2026-08-03 | 远端版本核对 | 只读 SSH 检查确认 `kyrozen-backend.service` 的工作树仍在提交 `605833b`，而本地已推送 `main` 为 `e11d81d`；远端 `/hardware/state` 500 的直接原因是服务未运行最新兼容修复。 | BLOCKED（需部署授权） | 更新远端 main、重启 backend，再继续 DMG 最终验收 |

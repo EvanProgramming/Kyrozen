@@ -29,7 +29,7 @@ const dict = {
     next: '下一步',
     pythonTitle: '准备 Python 运行时',
     pythonReady: 'Python 运行时已就绪',
-    pythonNotReady: '尚未安装 Python 运行时',
+    pythonNotReady: '未检测到可用的 Python 运行时',
     pythonCheck: '检查状态',
     pythonDownload: '下载并安装',
     pythonOffline: '离线安装',
@@ -49,7 +49,7 @@ const dict = {
     next: 'Next',
     pythonTitle: 'Prepare Python Runtime',
     pythonReady: 'Python runtime is ready',
-    pythonNotReady: 'Python runtime is not installed',
+    pythonNotReady: 'No usable Python runtime was detected',
     pythonCheck: 'Check Status',
     pythonDownload: 'Download & Install',
     pythonOffline: 'Offline Install',
@@ -130,6 +130,20 @@ function PythonStep({
     });
     return () => {
       unsubscribe();
+    };
+  }, [kyrozen, setState]);
+
+  // Check automatically when this step is opened.
+  useEffect(() => {
+    let mounted = true;
+    void kyrozen.checkPythonRuntime().then((result) => {
+      if (!mounted) return;
+      if (result.ready && result.path) {
+        setState((prev) => ({ ...prev, pythonStatus: 'ready', pythonPath: result.path }));
+      }
+    });
+    return () => {
+      mounted = false;
     };
   }, [kyrozen, setState]);
 

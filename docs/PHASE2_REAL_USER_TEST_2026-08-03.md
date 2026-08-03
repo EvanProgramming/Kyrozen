@@ -102,3 +102,5 @@
 | 2026-08-03 | 启动第三次修复版 | Finder File→Open 操作返回 `cannotClickOffscreenElement`，未启动新操作 | RETRY | 重新读取 Finder 菜单后继续 |
 | 2026-08-03 | 最终修复版工作台加载 | 登录恢复后进入采购中心，等待约 17 秒仍显示“项目资料较多，仍在整理中…”，无结果、错误或重试入口 | FAIL | 通过工作台“刷新”做一次有限重试；不绕过桌面端 |
 | 2026-08-03 | 最终修复版工作台刷新重试 | 点击桌面端“刷新”并等待约 10 秒后仍停留在“项目资料较多，仍在整理中…”，没有恢复入口，未进入硬件发现 | FAIL | 本轮真实 DMG 测试阻塞在工作台数据加载，未执行编译/上传/串口观察 |
+| 2026-08-03 | 最终测试清理首次尝试 | 退出主窗口后 Kyrozen Agent/Helper 仍存活，两个 DMG 卷提示 volume in use，未强制弹出 | RETRY | 针对当前 Kyrozen 进程做定向退出后再次核对，不影响唯一应用文件 |
+| 2026-08-03 | 最终测试清理完成 | 定向退出 Kyrozen 主进程、Helper 与 Agent，并弹出两个明确的 Kyrozen DMG 卷；核对结果仅有 `/Applications/Kyrozen.app`，无 Kyrozen 进程、无 Kyrozen 挂载卷 | PASS | 没有保留额外 Kyrozen 应用副本 |

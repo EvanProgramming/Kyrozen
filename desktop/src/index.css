@@ -232,7 +232,7 @@
   .text-warning { color: var(--warning); }
   .text-danger { color: var(--danger); }
 
-  .markdown-body { @apply text-sm leading-relaxed; color: inherit; }
+  .markdown-body { @apply text-sm leading-relaxed; color: inherit; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
   .markdown-body > :first-child { margin-top: 0; }
   .markdown-body > :last-child { margin-bottom: 0; }
   .markdown-body p { margin: 0.45rem 0; }

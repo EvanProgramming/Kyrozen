@@ -145,14 +145,14 @@ function Value({ value }: { value: unknown }) {
   }
   const cleaned = sanitize(value) as Row;
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="grid gap-3 lg:grid-cols-2">
       {Object.entries(cleaned).filter(([key, item]) =>
         !key.endsWith('_id') && !['id', 'user_id', 'created_at', 'updated_at'].includes(key)
         && !BLOCKED_KEYS.has(key) && !empty(item)
       ).map(([key, item]) => (
         <div key={key} className="min-w-0">
           <div className="text-xs font-medium text-ink-faint mb-1">{readableKey(key)}</div>
-          <div className="text-sm text-ink-soft"><Value value={item} /></div>
+          <div className="min-w-0 break-words text-sm text-ink-soft"><Value value={item} /></div>
         </div>
       ))}
     </div>
@@ -204,7 +204,7 @@ function EvidenceReferences({
     </div>
   );
   return (
-    <div className="grid gap-3 md:grid-cols-3" data-testid="problem-brief-evidence-references">
+    <div className="grid gap-3 lg:grid-cols-3" data-testid="problem-brief-evidence-references">
       {group('支持证据（点击查看原始记录）', support, true)}
       {group('反对证据（点击查看原始记录）', counter, true)}
       {group('未解决问题', unresolved, false)}
@@ -338,7 +338,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
       if (!preserveNotice) setNotice('');
     } else {
       setNotice(result.error || '项目画布加载失败');
-      setRetryAction({ label: '刷新项目工作台', run: () => load(true) });
+      setRetryAction({ label: '刷新项目工作台', run: () => load(false) });
     }
     setLoading(false);
     setLoadingSlow(false);
@@ -953,7 +953,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
       {notice && <div role="status" className="px-4 py-2 text-xs bg-accent-soft text-accent border-b border-line">{notice}</div>}
       <main id="workbench-tab-panel" role="tabpanel" aria-labelledby={`workbench-tab-${tab}`} className="flex-1 overflow-y-auto p-5">
         {!data ? <div className="text-sm text-ink-faint">{loadingSlow ? '项目资料较多，仍在整理中…' : '正在整理项目资料…'}</div> : (
-          <div className="max-w-5xl mx-auto space-y-4">
+          <div className="w-full max-w-5xl min-w-0 mx-auto space-y-4">
             {loading && <div className="text-xs text-ink-faint" aria-live="polite">{loadingSlow ? '正在刷新项目资料…' : '正在刷新…'}</div>}
             <div className="mb-2">
               <h3 className="font-display text-2xl">{TABS.find(([key]) => key === tab)?.[1]}</h3>
@@ -976,7 +976,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                   />
                 </section>
                 <Section title="第二阶段验收状态" description="只有自动化、用户验证和（硬件项目）实物证据齐全后，项目才允许完成。" value={data.phase2?.phase2_completion || { ready: false, missing: ['尚未读取验收状态'] }} />
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 lg:grid-cols-3">
                   <div className="panel p-4">
                     <h3 className="font-display text-xl">项目类型</h3>
                     <p className="text-xs text-ink-faint mt-1 mb-3">问题探索完成前可调整；确认后按对应流程推进。</p>
@@ -988,7 +988,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                   <Section title="证据与研究" value={{ active_count: (data.phase2?.evidence as Row)?.active_count, source_count: (data.phase2?.research as Row)?.source_count }} />
                   <Section title="方案候选" value={(data.phase2?.solutions as Row)?.count || 0} />
                 </div>
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-4 lg:grid-cols-2">
                   <div className="panel p-4 space-y-3">
                     <h3 className="font-display text-xl">记录问题证据</h3>
                     <p className="text-xs text-ink-faint">保存原文和来源；没有证据时不会生成替代研究结果。</p>
@@ -1037,8 +1037,8 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                           <div className="border border-line rounded p-3 space-y-2" data-testid="research-source-list">
                             <h4 className="text-sm font-medium">已保存来源</h4>
                             {sources.length ? sources.map((source, index) => (
-                              <div key={String(source.artifact_id || source.url || index)} className="border-l-2 border-l-accent pl-3 text-sm">
-                                {source.url ? <a className="text-accent underline underline-offset-2" href={String(source.url)} target="_blank" rel="noreferrer">{String(source.title || source.url)}</a> : <span>{String(source.title || '未命名来源')}</span>}
+                              <div key={String(source.artifact_id || source.url || index)} className="min-w-0 border-l-2 border-l-accent pl-3 text-sm break-words">
+                                {source.url ? <a className="block min-w-0 break-all text-accent underline underline-offset-2" href={String(source.url)} target="_blank" rel="noreferrer">{String(source.title || source.url)}</a> : <span>{String(source.title || '未命名来源')}</span>}
                                 <div className="text-xs text-ink-faint">{String(source.source_type || 'web_page')} · {String(source.fact_type || 'unknown')} · {String(source.polarity || 'unknown')} · {String(source.publish_date || source.published_at || source.access_date || '日期未知')}</div>
                               </div>
                             )) : <p className="text-sm text-ink-ghost">尚无真实研究结果；未配置或失败来源不会生成替代数据。</p>}
@@ -1061,7 +1061,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                     }) : <p className="text-sm text-ink-faint">尚无证据记录。</p>;
                   })()}
                 </div>
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 lg:grid-cols-3">
                   <Section title="当前阶段" value={localSummary(data.local)['当前阶段'] || String(data.project?.current_stage || '未知')} />
                   <Section title="已形成资料" value={`${artifactCount()} 份`} />
                   <Section title="执行任务" value={`${data.tasks?.length || 0} 个`} />

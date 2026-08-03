@@ -115,3 +115,6 @@
 | 2026-08-03 | 新 DMG 启动登录恢复 | 新安装版本启动后显示“登录已过期，请重新登录”，未直接进入项目；按普通用户流程重新点击 GitHub 登录 | RETRY | 通过默认 Dia 浏览器完成授权回调后继续 |
 | 2026-08-03 | 新项目问题探索消息 | 普通用户发送“我想验证一块 ESP32 的串口通信，先帮我梳理目标”后，助手只返回“我检查了当前项目，但没有找到可执行的测试目录或测试脚本”，没有澄清问题、确认目标或引导下一步 | FAIL | 记录用户可见的探索 Agent 偏题，打开项目画布继续验证硬件垂直切片入口 |
 | 2026-08-03 | 新 DMG 准备串口探针 | 项目类型确认和采购中心加载通过；点击新增“准备串口探针”后远端返回 `Unsupported hardware action: prepare_serial_probe`，界面出现重试入口，未生成源码 | FAIL | 记录桌面包与远端 Agent 版本不一致，先同步后端实现，再通过原生重试入口继续 |
+| 2026-08-03 | 生产后端同步重建 | 服务器已快进到提交 `605833b`，但 `docker compose up -d --build --remove-orphans` 因 Docker socket `permission denied` 失败；仅有 compose `version` 弃用警告，无服务变更确认 | FAIL | 记录部署失败，改用服务器授权的 sudo Docker 入口后核对健康状态 |
+| 2026-08-03 | 生产后端 sudo 重建 | sudo compose 成功构建并启动新版 backend，健康检查通过；随后 frontend 因宿主机 `0.0.0.0:80` 已被占用而启动失败，compose 命令整体返回 1 | FAIL | 核对 backend 与公网健康状态；不把前端端口冲突误判为串口探针动作通过 |
+| 2026-08-03 | 新 DMG 本地 Agent 根因定位 | `Unsupported hardware action: prepare_serial_probe` 实际来自桌面包内 `desktop/python_agent/main.py`，该本地分支遗漏了新增动作；后端健康但无法修复本地 Agent | FIXING | 补齐本地 Agent 分支并重新打包安装，保留原生重试证据 |

@@ -1210,6 +1210,8 @@ class DesktopAgentRuntime:
                     board=str(params.get("board") or "") or None,
                     port=str(params.get("port") or "") or None,
                 )
+            elif action == "prepare_serial_probe":
+                result = bridge.prepare_serial_probe()
             elif action == "compile":
                 result = bridge.compile(board=str(params.get("board") or "") or None)
             elif action == "upload":

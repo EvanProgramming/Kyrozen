@@ -78,3 +78,9 @@
 当前阻塞：修复版隔离 DMG 副本已重新验证工作台、刷新恢复、窄窗口布局和键盘导航；只读发现仍确认 Arduino CLI 1.5.1 和 ESP32 核心已安装，但未发现 ESP32 N16R8 设备，硬件状态为 `BLOCKED / board_not_connected`，因此尚未在本次 DMG 流程中执行编译、上传、串口观察和拔插恢复。
 
 结论：本次不能宣称第二阶段完成。重新连接 ESP32 N16R8 后，需要从只读发现继续真实硬件验收；反馈中心的真实目标用户记录也未伪造，仍需真实参与者数据或明确验收豁免。
+
+| 2026-08-03 | 测试后清理：Finder 弹出 DMG | 第二次操作时 Finder 挂载卷列表刷新，Computer Use 报元素失效（-10005）；已记录并准备重新读取状态后重试 | RETRY | 不影响正式安装，继续清理剩余临时卷 |
+| 2026-08-03 | 测试后清理：Finder 搜索 | Computer Use 键名 `ENTER` 不被当前动作接口识别（keyNotFound）；已记录，改用搜索按钮/当前界面继续 | RETRY | 不影响正式安装 |
+| 2026-08-03 | 测试后清理：移除临时副本 | Computer Use 键名 `super+delete` 不被当前动作接口识别（keyNotFound）；临时副本仍被精确选中，改用 Finder 文件菜单的 Move to Trash | RETRY | 不影响正式安装 |
+| 2026-08-03 | 测试后清理：移除临时副本 | Finder 提示 `Kyrozen 2` 仍处于打开状态，拒绝移到废纸篓；先核对并关闭临时副本进程后重试 | RETRY | 正式安装不受影响 |
+| 2026-08-03 | 测试后清理完成 | 退出临时副本、弹出 3 个 Kyrozen DMG 卷、将 `/Applications/Kyrozen 2.app` 移到废纸篓；核对后仅保留 `/Applications/Kyrozen.app`，无 Kyrozen DMG 挂载卷、无 Kyrozen 运行进程 | PASS | 后续每轮 DMG 复测后执行同样清理 |

@@ -126,3 +126,4 @@
 | 2026-08-03 | 第二次切换项目状态读取脚本 | Computer Use 输出包装器再次误写 `type` 未定义，返回 `ReferenceError: type is not defined`；未依据该次脚本判断项目状态 | RETRY | 只用正确回调重新读取一次 |
 | 2026-08-03 | 修复版已有项目工作台恢复 | 打开“桌面硬件灵感助手”项目画布后显示 `请求失败（/api/projects/proj_91b90df1/artifacts/art_29e2356c）：fetch failed`，并停在“正在整理项目资料…”；未进入硬件操作 | FAIL | 通过界面“重试：刷新项目工作台”做一次有限重试 |
 | 2026-08-03 | 已有项目工作台有限重试 | 重试后仍显示 `请求失败（/api/projects/proj_91b90df1/artifacts/art_a268f1c9）：fetch failed`，且继续停在“正在整理项目资料…”；未进入硬件操作 | FAIL | 记录第二次失败，进行一次只读公网健康核对后停止重复点击 |
+| 2026-08-03 | 本轮测试环境清理 | 退出 Kyrozen 主进程与本地 Agent，移除安装器生成的备份到废纸篓；核对结果仅保留 `/Applications/Kyrozen.app`，无 Kyrozen 进程、无 Kyrozen DMG 挂载卷 | PASS | 未留下额外 Kyrozen 安装副本 |

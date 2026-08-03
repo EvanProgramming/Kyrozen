@@ -491,6 +491,42 @@ def test_bridge_compile_requires_board():
     assert "Board FQBN is required" in result["stderr"]
 
 
+def test_bridge_enables_usb_cdc_for_esp32s3_probe(monkeypatch):
+    bridge = HardwareBridge()
+    calls: list[list[str]] = []
+
+    def fake_run(args, timeout=120):
+        calls.append(args)
+        return {"success": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(bridge, "run", fake_run)
+    bridge.compile(board="esp32:esp32:esp32s3")
+    bridge.upload(board="esp32:esp32:esp32s3", port="/dev/cu.usbmodem101")
+
+    assert calls == [
+        [
+            "arduino-cli",
+            "compile",
+            "--fqbn",
+            "esp32:esp32:esp32s3",
+            "--board-options",
+            "USBMode=hwcdc,CDCOnBoot=cdc",
+            ".",
+        ],
+        [
+            "arduino-cli",
+            "upload",
+            "--fqbn",
+            "esp32:esp32:esp32s3",
+            "--board-options",
+            "USBMode=hwcdc,CDCOnBoot=cdc",
+            "--port",
+            "/dev/cu.usbmodem101",
+            ".",
+        ],
+    ]
+
+
 def test_bridge_prepares_gpio_free_serial_probe(tmp_path):
     result = HardwareBridge(tmp_path).prepare_serial_probe()
     probe = tmp_path / "kyrozen_serial_probe.ino"

@@ -248,7 +248,17 @@ class HardwareBridge:
                 "command": "arduino-cli compile",
                 "error_category": "board_error",
             }
-        return self.run(["arduino-cli", "compile", "--fqbn", board, "."])
+        args = ["arduino-cli", "compile", "--fqbn", board]
+        args.extend(self._serial_probe_board_options(board))
+        args.append(".")
+        return self.run(args)
+
+    @staticmethod
+    def _serial_probe_board_options(board: str) -> list[str]:
+        """Enable the native USB CDC console used by ESP32-S3 probe boards."""
+        if board == "esp32:esp32:esp32s3":
+            return ["--board-options", "USBMode=hwcdc,CDCOnBoot=cdc"]
+        return []
 
     def prepare_serial_probe(self) -> dict[str, Any]:
         """Create the approved, GPIO-free ESP32 serial probe sketch."""
@@ -315,6 +325,7 @@ class HardwareBridge:
                 "error_category": "board_error",
             }
         args = ["arduino-cli", "upload", "--fqbn", board]
+        args.extend(self._serial_probe_board_options(board))
         if port:
             args.extend(["--port", port])
         args.append(".")

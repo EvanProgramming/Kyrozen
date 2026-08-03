@@ -147,3 +147,10 @@
 | 2026-08-03 | 普通用户提问回归 | 直接点击在第一次尝试未触发；按普通用户方式聚焦输入框并回车后，显示“正在理解你的需求”，约 50 秒后收到可见回复“我检查了当前项目，但没有找到可执行的测试目录或测试脚本。”并显示“回复已完成”。 | PASS（慢） | 继续工作台与硬件流程；记录响应耗时偏长但未阻断 |
 | 2026-08-03 | 反馈中心切换 | 七个工作中心逐一切换时，反馈中心显示“请求失败（/api/projects/proj_b9e7dd3f/artifacts）：fetch failed”，同时出现可见重试入口“刷新项目工作台”；反馈保存按钮保持禁用。 | ISSUE | 检查云端/API 恢复后重试，并保留失败证据 |
 | 2026-08-03 | 硬件状态接口修复回归 | 远端 `/api/projects/{id}/hardware/state` 稳定返回 500；本地新增 malformed legacy Artifact 回归时首次发现容错日志调用参数错误，修正后 `tests/test_hardware.py` 全部通过（62 passed），证明异常旧 Artifact 会降级为空模型而不阻断读取。 | FIXED LOCALLY | 重新打包 DMG，验证桌面重试；远端部署状态仍需通过真实桌面请求确认 |
+| 2026-08-03 | 修复版 DMG 反馈中心回归 | 修复后重新打包、安装并恢复登录；项目画布加载 24 份资料，反馈中心再次打开时不再出现 `/artifacts` fetch failed，真实反馈表单可见且按未填写状态禁用保存。 | PASS | 继续真实 ESP32 物理闭环；不伪造三名用户反馈 |
+| 2026-08-03 | 修复版 DMG 真实设备发现 | 重新启动后从采购中心执行“只读发现设备”；系统无串口，按钮执行后保持后续编译/上传/观察/拔插按钮禁用，工作台明确保留“尚缺：串口观察”，没有把历史上传记录误判为当前设备在线。 | BLOCKED（真实设备未连接） | 等待用户重新插拔 ESP32 后继续 |
+| 2026-08-03 | ESP32 重新连接后只读发现 | 用户重新连接设备；桌面端填写 `esp32:esp32:esp32s3` 与 `/dev/cu.usbmodem101` 后执行只读发现，Arduino CLI 确认 ESP32-S3 与串口，工具链版本可读，结果持久化为 PASSED。 | PASS | 继续准备串口探针 |
+| 2026-08-03 | ESP32 串口探针编译 | 桌面端执行“准备串口探针”后执行“编译固件”，使用 ESP32-S3 FQBN、`/dev/cu.usbmodem101`、115200；Arduino CLI 返回 `success true returncode 0`，结果持久化为 PASSED。 | PASS | 继续上传固件 |
+| 2026-08-03 | ESP32 串口探针上传 | 桌面端执行“上传固件”，Arduino CLI 返回 `success true returncode 0`，ESP32-S3、`/dev/cu.usbmodem101`、115200 信息与运行证据持久化，状态 PASSED。 | PASS | 继续串口观察 |
+| 2026-08-03 | ESP32 串口观察首次执行与重试 | 桌面端执行“串口观察”，8 秒有界采样返回 `success false`、`returncode -15`、`probe_seen false`、`monitor_ended_by_timeout true`；设备仍能被 Arduino CLI 枚举，随后从桌面端重试一次，仍未捕获探针输出。失败状态和重试入口均可见，未伪造硬件通过。 | BLOCKED | 需要确认设备实际串口行为，并继续排查串口占用/启动时序 |
+| 2026-08-03 | ESP32-S3 USB CDC 修复版 DMG | 针对 ESP32-S3 原生 USB CDC 默认未启用的问题，源码已将编译/上传选项固定为 `USBMode=hwcdc,CDCOnBoot=cdc`，硬件回归测试 `63 passed`；重新打包并安装 DMG 后，桌面端仍连接远端 `kyrozen.chat`，工作台日志继续出现 `/hardware/state` `500`，导致修复版编译请求无法完成。 | BLOCKED（远端服务未更新） | 先更新远端 API，再从此 DMG 继续物理串口验收 |

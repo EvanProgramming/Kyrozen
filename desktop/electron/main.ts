@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, safeStorage, shell, Tray } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -971,7 +971,7 @@ async function refreshAccessToken(): Promise<boolean> {
         refreshTokenInvalid = true;
         return false;
       }
-      const response = await fetch(`${serverUrl}/api/auth/refresh`, {
+      const response = await desktopFetch(`${serverUrl}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: credentials.refreshToken }),
@@ -1054,14 +1054,28 @@ async function reconnectWithFreshWebSocketToken(): Promise<boolean> {
   return websocketTokenRefreshPromise;
 }
 
+/**
+ * Use Chromium's network stack for packaged desktop API calls. On Windows it
+ * uses the system certificate/TLS handling and avoids Node fetch's opaque
+ * `TypeError: fetch failed` for an otherwise reachable HTTPS server.
+ */
+async function desktopFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await net.fetch(input, init);
+  } catch (electronError) {
+    logWarn(`Electron network request failed for ${new URL(input).hostname}; retrying with Node fetch: ${String(electronError)}`);
+    return fetch(input, init);
+  }
+}
+
 async function apiGet(endpoint: string, auth = true) {
   const headers: Record<string, string> = {};
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  let response = await fetch(`${serverUrl}${endpoint}`, { headers });
+  let response = await desktopFetch(`${serverUrl}${endpoint}`, { headers });
   if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
-    response = await fetch(`${serverUrl}${endpoint}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    response = await desktopFetch(`${serverUrl}${endpoint}`, { headers: { Authorization: `Bearer ${accessToken}` } });
   }
   if (!response.ok) {
     // Token expired or invalid — clear it so we don't keep using it.
@@ -1081,13 +1095,13 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  let response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await desktopFetch(`${serverUrl}${endpoint}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
   });
   if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
-    response = await fetch(`${serverUrl}${endpoint}`, {
+    response = await desktopFetch(`${serverUrl}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
@@ -1106,7 +1120,7 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
 }
 
 async function apiPatch(endpoint: string, body: unknown) {
-  let response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await desktopFetch(`${serverUrl}${endpoint}`, {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
@@ -1115,7 +1129,7 @@ async function apiPatch(endpoint: string, body: unknown) {
     body: JSON.stringify(body),
   });
   if ((response.status === 401 || response.status === 403) && await refreshAccessToken()) {
-    response = await fetch(`${serverUrl}${endpoint}`, {
+    response = await desktopFetch(`${serverUrl}${endpoint}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
@@ -1126,7 +1140,7 @@ async function apiPatch(endpoint: string, body: unknown) {
 }
 
 async function apiPut(endpoint: string, body: unknown) {
-  let response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await desktopFetch(`${serverUrl}${endpoint}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -1135,7 +1149,7 @@ async function apiPut(endpoint: string, body: unknown) {
     body: JSON.stringify(body),
   });
   if ((response.status === 401 || response.status === 403) && await refreshAccessToken()) {
-    response = await fetch(`${serverUrl}${endpoint}`, {
+    response = await desktopFetch(`${serverUrl}${endpoint}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
@@ -1146,12 +1160,12 @@ async function apiPut(endpoint: string, body: unknown) {
 }
 
 async function apiDelete(endpoint: string) {
-  let response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await desktopFetch(`${serverUrl}${endpoint}`, {
     method: 'DELETE',
     headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
   });
   if ((response.status === 401 || response.status === 403) && await refreshAccessToken()) {
-    response = await fetch(`${serverUrl}${endpoint}`, {
+    response = await desktopFetch(`${serverUrl}${endpoint}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -1448,7 +1462,7 @@ ipcMain.handle('kyrozen:login', async (_event, email: string, password: string, 
 ipcMain.handle('kyrozen:start-pairing', async (_event, url: string) => {
   try {
     const baseUrl = url.replace(/\/$/, '');
-    const response = await fetch(`${baseUrl}/api/desktop/pairing-code`, { method: 'POST' });
+    const response = await desktopFetch(`${baseUrl}/api/desktop/pairing-code`, { method: 'POST' });
     if (!response.ok) {
       const text = await response.text();
       throw new Error(text || `HTTP ${response.status}`);
@@ -1463,7 +1477,7 @@ ipcMain.handle('kyrozen:start-pairing', async (_event, url: string) => {
 ipcMain.handle('kyrozen:poll-pairing', async (_event, url: string, code: string) => {
   try {
     const baseUrl = url.replace(/\/$/, '');
-    const response = await fetch(`${baseUrl}/api/desktop/poll-pairing`, {
+    const response = await desktopFetch(`${baseUrl}/api/desktop/poll-pairing`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
@@ -2203,7 +2217,10 @@ ipcMain.handle('kyrozen:start-github-login', async () => {
     }
     return { success: false, error: 'No authorize URL returned' };
   } catch (err: any) {
-    return { success: false, error: err.message || String(err) };
+    const cause = err?.cause?.code || err?.cause?.message;
+    const detail = cause ? ` (${cause})` : '';
+    logError(`GitHub login start failed at ${serverUrl}: ${err.message || String(err)}${detail}`);
+    return { success: false, error: `无法连接 Kyrozen 服务器：${err.message || String(err)}${detail}` };
   }
 });
 
@@ -2236,7 +2253,7 @@ ipcMain.handle('kyrozen:get-github-status', async () => {
   if (!githubAccessToken) return base;
   // Validate the token and surface the user's identity (3.5 #2) + expiry (3.5 #1).
   try {
-    const resp = await fetch('https://api.github.com/user', {
+    const resp = await desktopFetch('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${githubAccessToken}`, Accept: 'application/vnd.github+json' },
     });
     if (resp.status === 401) {
@@ -2316,7 +2333,7 @@ ipcMain.handle('kyrozen:create-github-repo', async (_event, owner: string, name:
     return { success: false, error: '未绑定 GitHub 账号' };
   }
   try {
-    const resp = await fetch('https://api.github.com/user/repos', {
+    const resp = await desktopFetch('https://api.github.com/user/repos', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${githubAccessToken}`,
@@ -2569,7 +2586,7 @@ ipcMain.handle('kyrozen:get-user-profile', async () => {
   let githubName = '';
   if (githubAccessToken) {
     try {
-      const response = await fetch('https://api.github.com/user', {
+      const response = await desktopFetch('https://api.github.com/user', {
         headers: { Authorization: `Bearer ${githubAccessToken}`, Accept: 'application/vnd.github+json' },
       });
       if (response.ok) {

@@ -160,3 +160,4 @@
 | 2026-08-03 | USB CDC 修复版串口观察 | 通过重新安装的 DMG 执行“串口观察”；结果为 `success true`、`probe_seen true`、`monitor_ended_by_timeout true`、8 秒采样，状态 PASSED。设备真实输出已被探针识别；`returncode -15` 是有界采样主动终止监视器的结果。 | PASS | 继续协议六场景与拔插恢复 |
 | 2026-08-03 | 协议交换与六种模拟场景 | 通过桌面端 Fake 模拟器执行版本化 telemetry/ack 交换；normal、offline、reconnect、duplicate、error、version_incompatible 六场景全部返回 PASSED，并持久化 protocol version 1。 | PASS | 进行真实拔插恢复 |
 | 2026-08-03 | 串口采样字节流修复回归 | 串口观察首次在 USB CDC 已启用后暴露 `can't concat str to bytes`；修复 `TimeoutExpired` 字节/文本合并并新增回归测试，硬件测试 `64 passed`。重新打包安装后，桌面端串口观察返回 `success true`、`probe_seen true`，真实心跳被捕获。 | FIXED AND PASS | 等待用户确认物理拔插后执行最终确认 |
+| 2026-08-03 | 重启后拔插发现恢复 | 退出并重新打开已安装 DMG 后，工作台恢复 37 份项目资料、协议六场景 `ready true`、历史硬件记录；填写 ESP32-S3 与 `/dev/cu.usbmodem101` 执行“拔插后重新发现”，Arduino CLI 返回 `board detected true`、`status PASSED` 并持久化。 | PASS（重新发现） | 仍需用户确认实际拔插与串口行为后保存实物确认 |

@@ -943,11 +943,15 @@ class DesktopAgentRuntime:
         os.environ["KYROZEN_WORKSPACE"] = str(workspace)
 
         command: str | None = None
+        # Use the interpreter that is actually running the Agent.  The old
+        # hard-coded `python3` command is not present on most Windows
+        # installations (including installations that expose only `py.exe`).
+        python_command = f'"{sys.executable}"'
         if (workspace / "tests").is_dir():
             if (workspace / "pytest.ini").exists() or (workspace / "pyproject.toml").exists():
-                command = "python3 -m pytest -q"
+                command = f"{python_command} -m pytest -q"
             else:
-                command = "python3 -m unittest discover -s tests -p 'test_*.py' -v"
+                command = f"{python_command} -m unittest discover -s tests -p 'test_*.py' -v"
         elif (workspace / "package.json").exists():
             try:
                 package = json.loads((workspace / "package.json").read_text(encoding="utf-8"))

@@ -14,6 +14,40 @@ interface RuntimeInfo {
   ready: boolean;
 }
 
+/**
+ * Return the command names that are normally available for a system Python.
+ * Windows installations commonly expose `python.exe`, or only the Python
+ * Launcher (`py.exe`), while macOS/Linux conventionally use `python3`.
+ */
+export function getSystemPythonCandidates(
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  return platform === 'win32' ? ['python.exe', 'python'] : ['python3', 'python'];
+}
+
+async function getWindowsInstallCandidates(): Promise<string[]> {
+  if (process.platform !== 'win32') return [];
+  const roots = [
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Python') : null,
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Python') : null,
+    process.env.ProgramW6432 ? path.join(process.env.ProgramW6432, 'Python') : null,
+  ].filter((root): root is string => Boolean(root));
+  const candidates: string[] = [];
+  for (const root of roots) {
+    try {
+      const entries = await fs.readdir(root, { withFileTypes: true });
+      for (const entry of entries) {
+        if (/^Python\d+$/i.test(entry.name) && entry.isDirectory()) {
+          candidates.push(path.join(root, entry.name, 'python.exe'));
+        }
+      }
+    } catch {
+      // The directory is optional; continue with the other installation roots.
+    }
+  }
+  return candidates;
+}
+
 function getReleaseUrl(): { url: string; filename: string } | null {
   const platform = process.platform;
   const arch = process.arch;
@@ -121,7 +155,7 @@ async function extractTarball(tarPath: string, extractDir: string): Promise<void
 async function runCommand(
   exe: string,
   args: string[],
-  options?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     let stdout = '';
@@ -136,7 +170,28 @@ async function runCommand(
     child.stderr?.on('data', (d) => {
       stderr += d.toString();
     });
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
+    let settled = false;
+    let timeout: NodeJS.Timeout | undefined;
+    const finish = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      resolve({ code, stdout, stderr });
+    };
+    child.on('error', (error) => {
+      stderr += error.message;
+      finish(null);
+    });
+    child.on('close', (code) => finish(code));
+    if (options?.timeoutMs) {
+      timeout = setTimeout(() => {
+        if (!settled) {
+          child.kill();
+          stderr += 'Command timed out';
+          finish(null);
+        }
+      }, options.timeoutMs);
+    }
   });
 }
 
@@ -160,11 +215,42 @@ async function installDependencies(pythonExe: string, repoRoot: string): Promise
 }
 
 async function verifyPython(pythonExe: string): Promise<string> {
-  const result = await runCommand(pythonExe, ['--version']);
+  const result = await runCommand(pythonExe, ['--version'], { timeoutMs: 5_000 });
   if (result.code !== 0 || !result.stdout.includes('Python')) {
     throw new Error(`Python verification failed: ${result.stderr || result.stdout}`);
   }
   return result.stdout.trim() || result.stderr.trim();
+}
+
+/** Find a user-installed Python interpreter, including Windows py.exe. */
+export async function findSystemPython(): Promise<string | null> {
+  const candidates = [
+    ...getSystemPythonCandidates(),
+    ...(await getWindowsInstallCandidates()),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await verifyPython(candidate);
+      return candidate;
+    } catch {
+      // Try the next command/path.
+    }
+  }
+  if (process.platform === 'win32') {
+    const launcher = await runCommand('py.exe', ['-3', '-c', 'import sys; print(sys.executable)'], { timeoutMs: 5_000 });
+    if (launcher.code === 0) {
+      const discovered = launcher.stdout.trim().split(/\r?\n/).pop()?.trim();
+      if (discovered) {
+        try {
+          await verifyPython(discovered);
+          return discovered;
+        } catch {
+          // Continue if the launcher points at an unavailable interpreter.
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -174,13 +260,21 @@ async function verifyPython(pythonExe: string): Promise<string> {
  * extracts it, installs requirements.txt, and verifies it works. Subsequent
  * launches reuse the cached runtime.
  *
- * Returns the path to the python executable, or null if a portable runtime
- * cannot be provisioned (callers should fall back to the system python3).
+ * Returns the path to the Python executable, or null if neither a portable nor
+ * a system runtime can be provisioned.
  */
 export async function ensurePythonRuntime(
   repoRoot: string,
   onProgress?: (message: string) => void,
 ): Promise<string | null> {
+  const cached = await getCachedPythonRuntime();
+  if (cached) return cached;
+  const systemPython = await findSystemPython();
+  if (systemPython) {
+    onProgress?.(`Using installed Python: ${await verifyPython(systemPython)}`);
+    return systemPython;
+  }
+
   const release = getReleaseUrl();
   if (!release) {
     onProgress?.('Unsupported platform/architecture for bundled Python');

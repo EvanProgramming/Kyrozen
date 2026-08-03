@@ -25,7 +25,7 @@ import {
 } from './hardwareToolchain';
 import { startExtensionServer, ClipPayload, TestReportPayload } from './extensionServer';
 import { registerNativeMessagingHost } from './nativeMessagingRegistry';
-import { ensurePythonRuntime, getCachedPythonRuntime } from './pythonRuntime';
+import { ensurePythonRuntime, findSystemPython, getCachedPythonRuntime } from './pythonRuntime';
 import {
   ensureProjectVenv,
   getProjectVenv,
@@ -2381,7 +2381,10 @@ ipcMain.handle('kyrozen:ensure-project-venv', async () => {
   if (!root) {
     return { success: false, pythonPath: null, error: '未选择项目工作区' };
   }
-  const basePython = pythonRuntimePath || (await getCachedPythonRuntime()) || 'python3';
+  const basePython = pythonRuntimePath || (await getCachedPythonRuntime()) || (await findSystemPython());
+  if (!basePython) {
+    return { success: false, pythonPath: null, error: '未找到可用的 Python 运行时' };
+  }
   const result = await ensureProjectVenv(root, basePython, (msg) => sendTaskActivity({ description: msg }));
   if (result.error) {
     return { success: false, pythonPath: result.pythonPath, error: result.error };
@@ -2449,7 +2452,14 @@ ipcMain.handle('kyrozen:check-python-runtime', async () => {
     if (cached) {
       return { ready: true, path: cached };
     }
-    return { ready: false, path: null };
+    const systemPython = await findSystemPython();
+    if (systemPython) {
+      pythonRuntimePath = systemPython;
+      pythonRuntimeReady = true;
+      setPythonExe(systemPython);
+      return { ready: true, path: systemPython };
+    }
+    return { ready: false, path: null, error: '未找到可用的 Python 运行时（支持 Python 3.10 及以上）' };
   } catch (err: any) {
     return { ready: false, path: null, error: err.message || String(err) };
   }
@@ -3092,7 +3102,10 @@ async function startPythonAgentInternal() {
         pythonRuntimeReady = true;
       }
     }
-    pythonPath = pythonRuntimePath || 'python3';
+    pythonPath = pythonRuntimePath || (await findSystemPython()) || undefined;
+    if (!pythonPath) {
+      throw new Error('未找到可用的 Python 运行时');
+    }
   }
 
   const extraEnv: Record<string, string> = {

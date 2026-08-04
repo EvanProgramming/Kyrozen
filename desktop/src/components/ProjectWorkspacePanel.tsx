@@ -177,7 +177,7 @@ function Section({ title, description, value }: { title: string; description?: s
 }
 
 function artifactSection(artifacts: Row[] | undefined, type: string): unknown {
-  const matches = (artifacts || []).filter((artifact) => artifact.type === type);
+  const matches = (artifacts || []).filter((artifact): artifact is Row => Boolean(artifact) && artifact.type === type);
   if (!matches.length) return undefined;
   return matches.map((artifact) => {
     let content: unknown = artifact.content;
@@ -192,8 +192,10 @@ function artifactSection(artifacts: Row[] | undefined, type: string): unknown {
 }
 
 function workspaceArtifacts(data: WorkspaceData | null): Row[] {
-  if (Array.isArray(data?.phase2?.artifacts)) return data.phase2!.artifacts as Row[];
-  return Array.isArray(data?.artifacts) ? data.artifacts : [];
+  const artifacts = Array.isArray(data?.phase2?.artifacts)
+    ? data.phase2!.artifacts
+    : Array.isArray(data?.artifacts) ? data.artifacts : [];
+  return artifacts.filter((artifact): artifact is Row => Boolean(artifact) && typeof artifact === 'object');
 }
 
 function EvidenceReferences({
@@ -350,9 +352,14 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     successfulHardwareRuns.some((run) => run.action === 'monitor') ? '' : '串口观察',
   ].filter(Boolean);
   const physicalAcceptanceReady = physicalAcceptanceMissing.length === 0;
-  const improvementSection = !empty(data?.sections?.improvement)
-    ? data?.sections?.improvement
-    : artifactSection(workspaceArtifacts(data), 'improvement_suggestion');
+  const improvementLearningState = data?.sections?.improvement as Row | undefined;
+  const improvementSuggestions = Array.isArray(improvementLearningState?.suggestions)
+    ? improvementLearningState.suggestions
+    : [];
+  const improvementArtifactSection = artifactSection(workspaceArtifacts(data), 'improvement_suggestion');
+  const improvementSection = improvementSuggestions.length
+    ? improvementSuggestions
+    : improvementArtifactSection || improvementLearningState;
 
   const load = useCallback(async (preserveNotice = false) => {
     setLoading(true);

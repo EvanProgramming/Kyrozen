@@ -289,3 +289,4 @@
 | 2026-08-04 22:15 | 安装副本签名审计失败 | 最终安装版退出后对 `/Applications/Kyrozen.app` 执行 `codesign --verify --deep --strict`，返回 `a sealed resource is missing or invalid`；DMG 构建目录中的 arm64 App 先前已通过校验。未继续使用或发布该不合格安装副本。 | BLOCKED | 比较构建包、DMG 和 Applications 副本的资源/扩展属性，修复安装完整性后再做一次签名和启动审计 |
 | 2026-08-04 22:16 | 签名失效根因与修复 | 对比构建包和退出后的安装副本发现，运行时在签名 Resources 下新增 `kyrozen/**/__pycache__`；已让打包 Python Agent 设置 `PYTHONDONTWRITEBYTECODE=1`，避免运行污染 App sealed resources。 | FIXING | 重新构建、唯一安装、启动/退出并复核构建包与安装副本签名 |
 | 2026-08-04 22:18 | 最终签名修复安装被锁屏阻塞 | 新 DMG 已构建并通过构建目录签名校验；准备在 Finder 移入旧安装并复制新 DMG 时，Computer Use 返回“Mac is locked and automatic unlock could not unlock it”，未改变 `/Applications`、未执行绕过锁屏的 UI 操作。 | BLOCKED | 用户解锁 Mac 后，从 Finder 完成唯一安装，再启动/退出并执行 `/Applications/Kyrozen.app` sealed-resource 校验 |
+| 2026-08-04 22:19 | 签名失效副本与 DMG 安全清理 | 因 Mac 仍锁定，未继续 UI 安装；已将签名失效的 `/Applications/Kyrozen.app` 可恢复移入废纸篓，并卸载唯一挂载的最终 DMG。未清空废纸篓、未删除项目数据。 | CLEANUP | 用户解锁后从新 DMG 重新完成一次 Finder 安装和签名/启动/退出复核 |

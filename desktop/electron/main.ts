@@ -1152,17 +1152,17 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  let response = await fetch(`${serverUrl}${endpoint}`, {
+  let response = await fetchWithTimeout(`${serverUrl}${endpoint}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-  });
+  }, endpoint);
   if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
-    response = await fetch(`${serverUrl}${endpoint}`, {
+    response = await fetchWithTimeout(`${serverUrl}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
-    });
+    }, endpoint);
   }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {

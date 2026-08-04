@@ -19,9 +19,13 @@ class HardwareBridgeError(Exception):
     """Raised when the hardware bridge cannot execute a command safely."""
 
 
-def classify_upload_error(stderr: str) -> str:
-    """Normalize common upload failures for user-facing recovery actions."""
-    text = (stderr or "").lower()
+def classify_upload_error(output: str) -> str:
+    """Normalize common upload failures for user-facing recovery actions.
+
+    Arduino CLI/esptool writes useful transport diagnostics to stdout as well
+    as stderr, so callers must pass both streams when classifying a failure.
+    """
+    text = (output or "").lower()
     if not text:
         return "unknown"
     if (
@@ -49,6 +53,8 @@ def classify_upload_error(stderr: str) -> str:
 
 class HardwareBridge:
     """Execute whitelisted Arduino CLI / PlatformIO commands locally."""
+
+    DISCOVERY_TIMEOUT_SECONDS = 15
 
     ALLOWED_COMMANDS = {
         "arduino-cli",
@@ -118,6 +124,7 @@ class HardwareBridge:
                 command_line,
                 cwd=self.firmware_dir,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 timeout=timeout,
             )
@@ -127,7 +134,7 @@ class HardwareBridge:
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "command": command,
-                "error_category": classify_upload_error(result.stderr) if result.returncode != 0 else "",
+                "error_category": classify_upload_error(f"{result.stdout}\n{result.stderr}") if result.returncode != 0 else "",
             }
         except subprocess.TimeoutExpired as exc:
             return {
@@ -156,7 +163,10 @@ class HardwareBridge:
         """List available serial ports using the first available tool."""
         toolchain = self.toolchain_status()
         if self._tool_path("arduino-cli"):
-            result = self.run(["arduino-cli", "board", "list"])
+            result = self.run(
+                ["arduino-cli", "board", "list"],
+                timeout=self.DISCOVERY_TIMEOUT_SECONDS,
+            )
             result["toolchain"] = toolchain
             cli_identified = bool(re.search(
                 r"\b[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+\b",
@@ -208,8 +218,14 @@ class HardwareBridge:
         """Return read-only tool and board-core discovery for the workbench."""
         status: dict[str, Any] = {}
         if self._tool_path("arduino-cli"):
-            version = self.run(["arduino-cli", "version"])
-            cores = self.run(["arduino-cli", "core", "list"])
+            version = self.run(
+                ["arduino-cli", "version"],
+                timeout=self.DISCOVERY_TIMEOUT_SECONDS,
+            )
+            cores = self.run(
+                ["arduino-cli", "core", "list"],
+                timeout=self.DISCOVERY_TIMEOUT_SECONDS,
+            )
             status["arduino_cli"] = {
                 "installed": True,
                 "version": (version.get("stdout") or version.get("stderr") or "").strip(),
@@ -219,7 +235,10 @@ class HardwareBridge:
         else:
             status["arduino_cli"] = {"installed": False}
         if self._tool_path("pio"):
-            version = self.run(["pio", "--version"])
+            version = self.run(
+                ["pio", "--version"],
+                timeout=self.DISCOVERY_TIMEOUT_SECONDS,
+            )
             status["platformio"] = {
                 "installed": True,
                 "version": (version.get("stdout") or version.get("stderr") or "").strip(),
@@ -328,6 +347,10 @@ class HardwareBridge:
         args.extend(self._serial_probe_board_options(board))
         if port:
             args.extend(["--port", port])
+        # CH340/USB-UART bridges and long wires are often unreliable at the
+        # Arduino CLI default of 921600. Keep the probe upload conservative and
+        # make the selected speed visible in the persisted command evidence.
+        args.extend(["--upload-property", "upload.speed=115200"])
         args.append(".")
         return self.run(args)
 

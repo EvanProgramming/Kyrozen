@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from typing import Any
 from unittest.mock import patch
 
@@ -473,6 +474,30 @@ def test_bridge_list_ports_accepts_user_confirmed_board_on_usb_uart(tmp_path, mo
     assert result["status"] == "PASSED"
 
 
+def test_bridge_discovery_commands_are_bounded(tmp_path, monkeypatch):
+    bridge = HardwareBridge(tmp_path)
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda command: "/usr/bin/arduino-cli" if command == "arduino-cli" else None,
+    )
+    calls: list[tuple[list[str], int]] = []
+
+    def fake_run(args, timeout=120):
+        calls.append((args, timeout))
+        if args[1:] == ["version"]:
+            return {"success": True, "stdout": "arduino-cli 1.5.1", "stderr": ""}
+        if args[1:] == ["core", "list"]:
+            return {"success": True, "stdout": "esp32:esp32 3.3.10", "stderr": ""}
+        return {"success": True, "stdout": "Port\n", "stderr": ""}
+
+    monkeypatch.setattr(bridge, "run", fake_run)
+    bridge.list_ports()
+
+    assert calls
+    assert all(timeout == bridge.DISCOVERY_TIMEOUT_SECONDS for _args, timeout in calls)
+
+
 def test_bridge_list_ports_recognizes_an_arduino_cli_fqbn():
     bridge = HardwareBridge()
     output = "Port Protocol Type Board Name FQBN Core\n/dev/cu.usb serial Serial Port ESP32 Dev Module esp32:esp32:esp32 esp32\n"
@@ -522,6 +547,8 @@ def test_bridge_enables_usb_cdc_for_esp32s3_probe(monkeypatch):
             "USBMode=hwcdc,CDCOnBoot=cdc",
             "--port",
             "/dev/cu.usbmodem101",
+            "--upload-property",
+            "upload.speed=115200",
             ".",
         ],
     ]
@@ -898,6 +925,39 @@ def test_six_layer_connection_model_preserves_protocol_impact_without_device_ass
 )
 def test_upload_failures_have_distinct_recovery_categories(stderr: str, expected: str):
     assert classify_upload_error(stderr) == expected
+
+
+def test_bridge_run_classifies_upload_speed_reported_on_stdout(monkeypatch, tmp_path):
+    bridge = HardwareBridge(tmp_path)
+
+    class Result:
+        returncode = 2
+        stdout = "Changed baud rate to 921600\\nUnable to verify flash chip connection"
+        stderr = ""
+
+    monkeypatch.setattr("kyrozen.hardware.bridge.subprocess.run", lambda *args, **kwargs: Result())
+    result = bridge.run(["arduino-cli", "upload", "--fqbn", "esp32:esp32:esp32", "."])
+
+    assert result["error_category"] == "upload_speed_too_high"
+
+
+def test_bridge_run_does_not_inherit_agent_stdin(monkeypatch, tmp_path):
+    bridge = HardwareBridge(tmp_path)
+    captured: dict[str, object] = {}
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(*args, **kwargs):
+        captured.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr("kyrozen.hardware.bridge.subprocess.run", fake_run)
+    bridge.run(["arduino-cli", "version"])
+
+    assert captured["stdin"] is subprocess.DEVNULL
 
 
 # ---------------------------------------------------------------------------

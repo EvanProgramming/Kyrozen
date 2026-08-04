@@ -663,21 +663,28 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     const root = String(data?.local?.workspace_root || '');
     if (action !== 'protocol_scenarios' && !root) { setNotice('请先为项目选择本地工作区'); return; }
     setHardwareBusy(true);
-    const result = action === 'protocol_scenarios'
-      ? await kyzon.runProtocolScenarios(projectId)
-      : await kyzon.runLocalHardware(projectId, root, action, { board: hardwareBoard, port: hardwarePort, baud: 115200, ...extra });
-    setHardwareBusy(false);
-    setHardwareResult((result.data as Row) || null);
-    const blocked = result.data?.status === 'BLOCKED' || Boolean(result.data?.block_reason);
-    const operationSucceeded = result.success && !blocked;
-    if (operationSucceeded && action === 'protocol_scenarios' && result.data) {
-      setNotice(result.data.status === 'PASSED' ? '协议六场景已通过并持久化' : '协议场景未全部通过');
-    } else {
-      setNotice(operationSucceeded ? `${action} 已完成并记录本地硬件证据` : result.error || '硬件操作失败，可修复后重试');
+    try {
+      const result = action === 'protocol_scenarios'
+        ? await kyzon.runProtocolScenarios(projectId)
+        : await kyzon.runLocalHardware(projectId, root, action, { board: hardwareBoard, port: hardwarePort, baud: 115200, ...extra });
+      setHardwareResult((result.data as Row) || null);
+      const blocked = result.data?.status === 'BLOCKED' || Boolean(result.data?.block_reason);
+      const operationSucceeded = result.success && !blocked;
+      if (operationSucceeded && action === 'protocol_scenarios' && result.data) {
+        setNotice(result.data.status === 'PASSED' ? '协议六场景已通过并持久化' : '协议场景未全部通过');
+      } else {
+        setNotice(operationSucceeded ? `${action} 已完成并记录本地硬件证据` : result.error || '硬件操作失败，可修复后重试');
+      }
+      if (operationSucceeded) setRetryAction(null);
+      else setRetryAction({ label: `重试硬件操作：${action}`, run: () => runHardware(action, extra) });
+      await load(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotice(`${action} 失败：${message}，可重试`);
+      setRetryAction({ label: `重试硬件操作：${action}`, run: () => runHardware(action, extra) });
+    } finally {
+      setHardwareBusy(false);
     }
-    if (operationSucceeded) setRetryAction(null);
-    else setRetryAction({ label: `重试硬件操作：${action}`, run: () => runHardware(action, extra) });
-    await load(true);
   };
 
   const runProtocolMessage = async () => {

@@ -1256,7 +1256,12 @@ class DesktopAgentRuntime:
                 result = run_fake_protocol_scenarios()
             else:
                 raise ValueError(f"Unsupported hardware action: {action}")
-            stderr = str(result.get("stderr") or "")
+            command_output = "\n".join(
+                part for part in (
+                    str(result.get("stdout") or ""),
+                    str(result.get("stderr") or ""),
+                ) if part
+            )
             result["action"] = action
             result["project_id"] = project_id
             result["board"] = str(params.get("board") or "")
@@ -1279,7 +1284,7 @@ class DesktopAgentRuntime:
                 result["status"] = "PASSED" if result.get("success") and result.get("board_detected") else "BLOCKED"
             else:
                 result["status"] = "PASSED" if result.get("success") else "FAILED"
-            result["error_category"] = classify_upload_error(stderr) if not result.get("success") else ""
+            result["error_category"] = classify_upload_error(command_output) if not result.get("success") else ""
             history_path = root / ".kyrozen" / "hardware_runs.json"
             history_path.parent.mkdir(parents=True, exist_ok=True)
             try:

@@ -392,6 +392,12 @@ def build_workbench_snapshot(project: Any, project_manager: Any) -> dict[str, An
     }
     return {
         "project": project.to_dict(),
+        # Keep the immutable latest artifact projection available to desktop
+        # clients.  Work centers render specialized sections, but a few
+        # centers (notably improvements) also need the original versioned
+        # payload so a refresh/reopen can show records that have no dedicated
+        # read-model section yet.
+        "artifacts": [artifact.to_dict() for artifact in sorted(artifacts, key=lambda item: (item.type, item.title, item.version))],
         "next_action": {
             **_default_next_action(project),
             "blocked_reason": project.blocked_reason or None,

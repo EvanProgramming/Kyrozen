@@ -321,6 +321,8 @@ def test_phase2_workbench_projects_structured_hardware_artifacts(api_client: Tes
     hardware = api_client.get(f"/api/projects/{pid}/phase2/workbench").json()["hardware"]
     assert hardware["bom"]["items"][0]["model"] == "ESP32-DEV"
     assert hardware["wiring"]["connections"][0]["target"] == "GPIO2"
+    artifacts = api_client.get(f"/api/projects/{pid}/phase2/workbench").json()["artifacts"]
+    assert {item["type"] for item in artifacts} == {"bom", "wiring_design"}
 
 
 def test_hybrid_workbench_exposes_independent_parallel_tracks(api_client: TestClient):

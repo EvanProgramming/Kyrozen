@@ -59,6 +59,13 @@ const TRACK_NAMES: Record<string, string> = {
   software: '软件', hardware: '硬件', protocol: '协议', integration: '集成',
 };
 
+const EVIDENCE_CLAIM_TYPES = new Set(['fact', 'opinion', 'inference', 'unknown']);
+
+function normalizeEvidenceClaimType(value: unknown): string {
+  const candidate = String(value || '');
+  return EVIDENCE_CLAIM_TYPES.has(candidate) ? candidate : 'unknown';
+}
+
 function empty(value: unknown) {
   return value == null || value === '' || (Array.isArray(value) && value.length === 0)
     || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0);
@@ -167,6 +174,21 @@ function Section({ title, description, value }: { title: string; description?: s
       <Value value={value} />
     </section>
   );
+}
+
+function artifactSection(artifacts: Row[] | undefined, type: string): unknown {
+  const matches = (artifacts || []).filter((artifact) => artifact.type === type);
+  if (!matches.length) return undefined;
+  return matches.map((artifact) => {
+    let content: unknown = artifact.content;
+    if (typeof content === 'string') {
+      try { content = JSON.parse(content); } catch { /* keep the original text */ }
+    }
+    if (content && typeof content === 'object' && !Array.isArray(content)) {
+      return { title: artifact.title, version: artifact.version, ...(content as Row) };
+    }
+    return { title: artifact.title, version: artifact.version, content };
+  });
 }
 
 function EvidenceReferences({
@@ -323,6 +345,9 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     successfulHardwareRuns.some((run) => run.action === 'monitor') ? '' : '串口观察',
   ].filter(Boolean);
   const physicalAcceptanceReady = physicalAcceptanceMissing.length === 0;
+  const improvementSection = !empty(data?.sections?.improvement)
+    ? data?.sections?.improvement
+    : artifactSection(data?.artifacts, 'improvement_suggestion');
 
   const load = useCallback(async (preserveNotice = false) => {
     setLoading(true);
@@ -542,7 +567,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     const evidencePayload = {
       claim: evidenceClaim.trim(), original_text: evidenceOriginal.trim(),
       summary: evidenceClaim.trim(), source: evidenceType === 'public_source' ? 'external_evidence' : 'user_statement', source_name: evidenceSource.trim(),
-      evidence_type: evidenceType, verified: false, confidence: evidenceConfidence, claim_type: evidenceClaimType,
+      evidence_type: evidenceType, verified: false, confidence: evidenceConfidence, claim_type: normalizeEvidenceClaimType(evidenceClaimType),
       target_audience: evidenceAudience.trim(), related_question: evidenceQuestion.trim(),
       counter_evidence: evidenceCounter.split('\n').map((item) => item.trim()).filter(Boolean),
       source_url: evidenceSourceUrl.trim(),
@@ -566,7 +591,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     setEvidenceSourceUrl(String(item.source_url || ''));
     setEvidenceObservedAt(String(item.observed_at || '').slice(0, 16));
     setEvidenceConfidence(String(item.confidence || 'medium'));
-    setEvidenceClaimType(String(item.claim_type || 'unknown'));
+    setEvidenceClaimType(normalizeEvidenceClaimType(item.claim_type));
     setEvidenceAudience(String(item.target_audience || ''));
     setEvidenceQuestion(String(item.related_question || ''));
     setEvidenceCounter(Array.isArray(item.counter_evidence) ? (item.counter_evidence as unknown[]).join('\n') : '');
@@ -1007,7 +1032,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                       <input className="input" value={evidenceSourceUrl} onChange={(event) => setEvidenceSourceUrl(event.target.value)} placeholder="来源链接（公开资料可填）" aria-label="证据来源链接" />
                       <input className="input" type="datetime-local" value={evidenceObservedAt} onChange={(event) => setEvidenceObservedAt(event.target.value)} aria-label="证据观察时间" />
                       <select className="input" value={evidenceConfidence} onChange={(event) => setEvidenceConfidence(event.target.value)} aria-label="证据可信度"><option value="low">可信度：低</option><option value="medium">可信度：中</option><option value="high">可信度：高</option></select>
-                      <select className="input" value={evidenceClaimType} onChange={(event) => setEvidenceClaimType(event.target.value)} aria-label="证据分类"><option value="fact">事实</option><option value="opinion">用户观点</option><option value="inference">Agent 推断</option><option value="unknown">未知</option></select>
+                      <select className="input" value={normalizeEvidenceClaimType(evidenceClaimType)} onChange={(event) => setEvidenceClaimType(normalizeEvidenceClaimType(event.target.value))} aria-label="证据分类"><option value="fact">事实</option><option value="opinion">用户观点</option><option value="inference">Agent 推断</option><option value="unknown">未知</option></select>
                       <input className="input" value={evidenceAudience} onChange={(event) => setEvidenceAudience(event.target.value)} placeholder="目标人群" aria-label="目标人群" />
                       <input className="input" value={evidenceQuestion} onChange={(event) => setEvidenceQuestion(event.target.value)} placeholder="关联问题" aria-label="关联问题" />
                     </div>
@@ -1160,7 +1185,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
             )}
             {tab === 'improvements' && (
               <>
-                <Section title="现有改进建议" value={data.sections?.improvement} />
+                <Section title="现有改进建议" value={improvementSection} />
                 <div className="panel p-4 space-y-3"><h3 className="font-display text-xl">记录改进建议</h3><textarea className="input" value={improvement} onChange={(event) => setImprovement(event.target.value)} placeholder="建议、证据、预期收益、风险、工作量和接受/延期理由" rows={3} /><button type="button" className="btn-primary text-sm" disabled={!improvement.trim()} onClick={() => void saveImprovement()}>保存改进建议</button><p className="text-xs text-ink-faint">当前状态：{improvementStatus}</p><div className="flex gap-2 flex-wrap"><button type="button" className="btn-secondary text-xs" disabled={!improvement.trim()} onClick={() => void saveImprovement('accepted')}>接受</button><button type="button" className="btn-secondary text-xs" disabled={!improvement.trim()} onClick={() => void saveImprovement('ignored')}>忽略</button><button type="button" className="btn-secondary text-xs" disabled={!improvement.trim()} onClick={() => void saveImprovement('deferred')}>延期</button><button type="button" className="btn-secondary text-xs" disabled={!improvement.trim()} onClick={() => void saveImprovement('hidden')}>隐藏</button><button type="button" className="btn-secondary text-xs" disabled={!improvement.trim()} onClick={() => void saveImprovement('deleted')}>删除</button></div></div>
               </>
             )}

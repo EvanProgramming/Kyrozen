@@ -3401,6 +3401,10 @@ async function startPythonAgentInternal() {
     KYROZEN_RESOURCE_ROOT: getRepoRoot(),
     KYROZEN_LOG_DIR: path.join(app.getPath('userData'), 'logs'),
     KYROZEN_TASK_STORE_PATH: path.join(app.getPath('userData'), 'kyrozen_tasks.json'),
+    // Packaged Python modules live inside the signed app bundle. Prevent the
+    // interpreter from creating __pycache__ files in Contents/Resources,
+    // otherwise a normal desktop run invalidates the app's sealed resources.
+    PYTHONDONTWRITEBYTECODE: '1',
   };
 
   if (pythonRuntimePath) {

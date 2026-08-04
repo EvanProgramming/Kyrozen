@@ -163,3 +163,5 @@
 | 2026-08-03 | 重启后拔插发现恢复 | 退出并重新打开已安装 DMG 后，工作台恢复 37 份项目资料、协议六场景 `ready true`、历史硬件记录；填写 ESP32-S3 与 `/dev/cu.usbmodem101` 执行“拔插后重新发现”，Arduino CLI 返回 `board detected true`、`status PASSED` 并持久化。 | PASS（重新发现） | 仍需用户确认实际拔插与串口行为后保存实物确认 |
 | 2026-08-03 | 重启后远端硬件状态回归 | 再次重启并恢复工作台后，桌面日志重新出现 `/api/projects/proj_b9e7dd3f/hardware/state` `500 Internal server error`，同时有多个历史 Artifact 请求超时；界面仍显示历史记录但最终“保存实物确认”禁用。 | ISSUE（远端不稳定） | 通过桌面端刷新重试，必要时修复并重新部署远端 API |
 | 2026-08-03 | 远端版本核对 | 只读 SSH 检查确认 `kyrozen-backend.service` 的工作树仍在提交 `605833b`，而本地已推送 `main` 为 `e11d81d`；远端 `/hardware/state` 500 的直接原因是服务未运行最新兼容修复。 | BLOCKED（需部署授权） | 更新远端 main、重启 backend，再继续 DMG 最终验收 |
+| 2026-08-04 | 远端服务更新 | 获得用户授权后，远端工作树安全快进到 `558d69c`，重启 `kyrozen-backend.service`；服务新 PID `518907` 启动完成，桌面 WebSocket 已重新连接。 | PASS | 重新刷新已安装 DMG 工作台并继续最终实物确认 |
+| 2026-08-04 | 远端更新后重新发现失败 | 在远端修复生效后，已安装 DMG 重新填写 ESP32-S3 与 `/dev/cu.usbmodem101` 并执行“只读发现”；本次返回 `board_detected false`、`status BLOCKED`、`block reason board_not_connected`，与历史 PASSED 记录不混用。 | BLOCKED（当前设备未被 Agent 发现） | 核对本机端口/设备连接后重试 |

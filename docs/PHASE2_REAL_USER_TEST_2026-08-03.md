@@ -165,3 +165,4 @@
 | 2026-08-03 | 远端版本核对 | 只读 SSH 检查确认 `kyrozen-backend.service` 的工作树仍在提交 `605833b`，而本地已推送 `main` 为 `e11d81d`；远端 `/hardware/state` 500 的直接原因是服务未运行最新兼容修复。 | BLOCKED（需部署授权） | 更新远端 main、重启 backend，再继续 DMG 最终验收 |
 | 2026-08-04 | 远端服务更新 | 获得用户授权后，远端工作树安全快进到 `558d69c`，重启 `kyrozen-backend.service`；服务新 PID `518907` 启动完成，桌面 WebSocket 已重新连接。 | PASS | 重新刷新已安装 DMG 工作台并继续最终实物确认 |
 | 2026-08-04 | 远端更新后重新发现失败 | 在远端修复生效后，已安装 DMG 重新填写 ESP32-S3 与 `/dev/cu.usbmodem101` 并执行“只读发现”；本次返回 `board_detected false`、`status BLOCKED`、`block reason board_not_connected`，与历史 PASSED 记录不混用。 | BLOCKED（当前设备未被 Agent 发现） | 核对本机端口/设备连接后重试 |
+| 2026-08-04 | 设备端口复核 | 用户继续请求真实测试后再次检查 `arduino-cli board list`；仍只有 Bluetooth/debug-console，未出现 `/dev/cu.usbmodem101`，因此未启动编译/上传，保持 BLOCKED。 | BLOCKED（设备仍未连接） | 等待 ESP32 重新插入后继续 |

@@ -136,7 +136,7 @@ contextBridge.exposeInMainWorld('kyrozen', {
     return () => ipcRenderer.removeListener('kyrozen:open-settings', handler);
   },
 
-  sendChat: (message: string) => ipcRenderer.invoke('kyrozen:send-chat', message),
+  sendChat: (message: string, mode?: string) => ipcRenderer.invoke('kyrozen:send-chat', message, mode),
   cancelTask: () => ipcRenderer.send('kyrozen:cancel-task'),
   startPairing: (serverUrl: string) => ipcRenderer.invoke('kyrozen:start-pairing', serverUrl),
   pollPairing: (serverUrl: string, code: string) => ipcRenderer.invoke('kyrozen:poll-pairing', serverUrl, code),

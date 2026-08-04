@@ -2851,7 +2851,7 @@ ipcMain.handle('kyrozen:get-user-profile', async () => {
   };
 });
 
-ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
+ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMode?: string) => {
   logInfo(`Chat send requested: project=${currentProjectId || '<none>'}, ws=${wsClient?.readyState ?? 'none'}`);
   if (!accessToken) return { success: false, error: '未登录' };
   if (!currentProjectId) return { success: false, error: '请先选择项目' };
@@ -2889,7 +2889,7 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string) => {
       testing: 'testing',
       iteration: 'learning',
     };
-    const mode = modeByStage[String(projectState.stage || '')] || 'discovery';
+    const mode = requestedMode || modeByStage[String(projectState.stage || '')] || 'discovery';
     // P0-04: 开发阶段注入本地 PRD / TECH_DESIGN 上下文，Agent 不必依赖 Supabase artifacts。
     let enrichedMessage = message;
     if (mode === 'development') {

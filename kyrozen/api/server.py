@@ -2056,6 +2056,31 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             }
             pm.save_chat_message(user_message)
 
+            # Planning requests originate from the desktop decision center.
+            # Route them to the already-connected local Agent before building
+            # the large cloud context.  Context construction can require many
+            # artifact reads and exceed the desktop's request timeout even
+            # though the desktop is online and able to execute the task.  The
+            # local agent receives the project id and rebuilds its own scoped
+            # context, while the task remains observable through WebSocket.
+            if request.mode == "planning":
+                task = agent.task_manager.create(
+                    title=request.message[:60],
+                    description=request.message,
+                    project_id=request.project_id,
+                    mode=request.mode,
+                    requires_local_client=True,
+                )
+                routed = await _route_task_to_desktop(task, current_user.user_id)
+                if routed:
+                    return {
+                        "task_id": task.id,
+                        "status": task.status,
+                        "project_id": request.project_id,
+                        "mode": request.mode,
+                        "dispatched_to_desktop": True,
+                    }
+
             # For discovery mode, capture the latest Q&A and update the Problem Brief
             # BEFORE building context so the agent sees the freshest state.
             if request.mode == "discovery":

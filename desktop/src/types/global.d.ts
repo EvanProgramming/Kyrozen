@@ -257,7 +257,7 @@ export interface KyrozenAPI {
   onSessionEnded: (callback: () => void) => () => void;
   onSessionExpired: (callback: (message: string) => void) => () => void;
   onOpenSettings: (callback: () => void) => () => void;
-  sendChat: (message: string) => Promise<{
+  sendChat: (message: string, mode?: string) => Promise<{
     success: boolean;
     taskId?: string;
     dispatched?: boolean;

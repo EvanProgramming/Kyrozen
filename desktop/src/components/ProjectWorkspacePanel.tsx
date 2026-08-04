@@ -429,6 +429,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     setNotice(regenerate ? '正在请求方案 Agent，重新评估当前证据和研究结果…' : '正在请求方案 Agent，先检查当前证据和研究结果…');
     const result = await kyzon.sendChat(
       `${regenerate ? '请重新生成一组真正不同、且能解释变化原因的候选方案；不要仅递增旧 Artifact 版本。' : ''}请基于当前项目已经保存的真实证据、市场研究和 Problem Brief，完成方案设计闭环：只在证据和研究结果足够时生成并保存恰好三个候选方案（保守、平衡、激进），统一比较时间、成本、用户价值、技术风险、维护成本、数据风险、验证难度七个维度，并保存引用证据、推荐理由、关键假设、放弃内容和失败条件。不得编造外部研究结果；如果资料不足，请明确说明缺少哪些证据或研究来源，不要保存看似真实的替代结果。`,
+      'planning',
     );
     if (!result.success) {
       setNotice(result.error || '方案 Agent 请求失败，可重试');

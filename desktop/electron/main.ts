@@ -2072,22 +2072,25 @@ async function loadProjectWorkspace(projectId: string): Promise<Record<string, u
     failure_knowledge: failureKnowledge,
     success_knowledge: successKnowledge,
   };
-  const [project, state, decisions, artifactSummaries, tasks] = await Promise.all([
+  const [project, state, decisions, artifactSummaries, tasks, phase2] = await Promise.all([
     apiGet(`/api/projects/${projectId}`),
     apiGet(`/api/projects/${projectId}/state`),
     apiGet(`/api/projects/${projectId}/decisions`),
     apiGet(`/api/projects/${projectId}/artifacts`),
     apiGet(`/api/projects/${projectId}/tasks`),
-  ]);
-  const artifacts = await Promise.all(
-    (artifactSummaries as Array<Record<string, unknown>>).map((artifact) =>
-      optionalGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
-    ),
-  );
-  const [local, phase2] = await Promise.all([
-    loadLocalProjectSummary(projectId),
     optionalGet(`/api/projects/${projectId}/phase2/workbench`),
   ]);
+  const phase2Artifacts = phase2 && typeof phase2 === 'object' && Array.isArray((phase2 as Record<string, unknown>).artifacts)
+    ? (phase2 as Record<string, unknown>).artifacts as unknown[]
+    : [];
+  const artifacts = phase2Artifacts.length
+    ? phase2Artifacts
+    : await Promise.all(
+        (artifactSummaries as Array<Record<string, unknown>>).map((artifact) =>
+          optionalGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
+        ),
+      );
+  const local = await loadLocalProjectSummary(projectId);
   return { project, state, decisions, artifacts, tasks, sections, phase2, local };
 }
 

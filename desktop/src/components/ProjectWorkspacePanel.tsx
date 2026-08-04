@@ -191,6 +191,11 @@ function artifactSection(artifacts: Row[] | undefined, type: string): unknown {
   });
 }
 
+function workspaceArtifacts(data: WorkspaceData | null): Row[] {
+  if (Array.isArray(data?.phase2?.artifacts)) return data.phase2!.artifacts as Row[];
+  return Array.isArray(data?.artifacts) ? data.artifacts : [];
+}
+
 function EvidenceReferences({
   brief,
   items,
@@ -347,7 +352,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
   const physicalAcceptanceReady = physicalAcceptanceMissing.length === 0;
   const improvementSection = !empty(data?.sections?.improvement)
     ? data?.sections?.improvement
-    : artifactSection(data?.artifacts, 'improvement_suggestion');
+    : artifactSection(workspaceArtifacts(data), 'improvement_suggestion');
 
   const load = useCallback(async (preserveNotice = false) => {
     setLoading(true);
@@ -389,7 +394,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
           return s.startsWith('docs/') || /PROBLEM\.md|PRD\.md|MARKET\.md|TECH_DESIGN\.md|README\.md/i.test(s);
         }).length
       : 0;
-    return (data?.artifacts?.length || 0) + docs + (data?.local?.software ? 1 : 0);
+    return workspaceArtifacts(data).length + docs + (data?.local?.software ? 1 : 0);
   }, [data]);
 
   const saveDecision = async () => {

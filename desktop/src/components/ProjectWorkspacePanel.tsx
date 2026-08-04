@@ -437,7 +437,13 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     } else {
       setRetryAction(null);
       setNotice(result.content ? '方案 Agent 已完成，请检查三案及其证据引用' : '方案 Agent 已开始处理，完成后会自动刷新决策中心');
-      await load(true);
+      // A dispatched planning task is asynchronous. Do not immediately start
+      // another full workbench read while the Agent is rebuilding its scoped
+      // context and writing the solution Artifact; the chat completion handler
+      // below will refresh the workbench after the Agent replies. This also
+      // avoids turning a transient decisions read failure into a false
+      // planning failure immediately after a successful dispatch.
+      if (result.content) await load(true);
     }
     setPlanningBusy(false);
   };

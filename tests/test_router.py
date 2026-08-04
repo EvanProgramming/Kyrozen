@@ -120,6 +120,18 @@ class TestResolveMode:
         )
         assert mode == "hardware_development"
 
+    def test_explicit_planning_dispatch_beats_hardware_text(self, router: AgentRouter) -> None:
+        # The decision-center planning action sends a prompt containing ESP32
+        # context. The explicit planning mode must remain authoritative.
+        mode, reason, signals = router.resolve_mode(
+            requested_mode="planning",
+            stage="problem_discovery",
+            user_message="请基于 ESP32 证据生成保守、平衡、激进三案",
+        )
+        assert mode == "product_definition"
+        assert "requested:planning" in signals
+        assert "显式派发 planning" in reason
+
 
 # --------------------------------------------------------------------------
 # route() — agent selection for all 9 modes

@@ -330,8 +330,16 @@ class AgentRouter:
         # 3. Stage-derived mode.
         stage_mode = STAGE_TO_MODE.get((stage or "").strip().lower(), "")
 
-        mode = intent_mode or alias_mode or stage_mode or "problem_discovery"
-        if intent_mode:
+        # The decision-center planning action is an explicit workflow command,
+        # not ordinary free-form chat. Its prompt intentionally contains the
+        # project's hardware vocabulary, so hardware intent must not steal a
+        # planning task from the Product Planning Agent.
+        explicit_planning = (requested_mode or "").strip().lower() == "planning"
+        mode = alias_mode if explicit_planning and alias_mode else intent_mode or alias_mode or stage_mode or "problem_discovery"
+        if explicit_planning and alias_mode:
+            signals.append("requested:planning")
+            reasons.append("决策中心显式派发 planning，优先进入方案规划 Agent")
+        elif intent_mode:
             reasons.append(f"用户消息包含{MODE_LABELS[intent_mode]}意图信号（{signals[0].split(':', 1)[1]}）")
         elif alias_mode:
             reasons.append(f"云端派发模式 {requested_mode} → {MODE_LABELS[alias_mode]}")

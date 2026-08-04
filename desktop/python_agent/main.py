@@ -679,7 +679,10 @@ class DesktopAgentRuntime:
                         local_stage, stage or "<none>",
                     )
                     stage = local_stage
-                    requested_mode = ""  # let the stage decide the mode
+                    # An explicit server dispatch (for example the planning
+                    # workbench's solution request) is authoritative even if
+                    # the cloud stage is stale. An empty mode naturally falls
+                    # back to the local stage-derived mode below.
         except Exception:
             self.logger.debug("local stage probe failed", exc_info=True)
 
@@ -723,7 +726,6 @@ class DesktopAgentRuntime:
                             "Natural-language stage progression reached %s", intended,
                         )
                     stage = probe.current_stage
-                    requested_mode = ""
         except Exception:
             self.logger.debug("intent-based stage fast-forward failed", exc_info=True)
 
@@ -841,7 +843,7 @@ class DesktopAgentRuntime:
                 # question.  Run the deterministic evidence path first so a
                 # model cannot consume all rounds on file inspection and then
                 # return a static review without ever running the project.
-                if re.search(r"测试|运行|执行|验证|验收|回归|test|verify", message or "", re.IGNORECASE):
+                if decision.mode == "testing" and re.search(r"测试|运行|执行|验证|验收|回归|test|verify", message or "", re.IGNORECASE):
                     self.logger.info("Starting deterministic testing evidence path", extra={"task_id": self.current_task_id})
                     task = self.agent.task_manager.create(
                         title=message[:60],

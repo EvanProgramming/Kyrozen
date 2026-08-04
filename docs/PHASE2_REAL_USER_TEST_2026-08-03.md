@@ -254,3 +254,35 @@
 | 2026-08-04 21:24 | 远程容器诊断命令缺少 rg | 通过 SSH 读取健康容器日志时，远程镜像没有 `rg`，过滤命令返回 `bash: rg: command not found`；未修改远程服务。 | RETRY | 改用 POSIX `grep` 只读筛选日志，不执行破坏性远程操作 |
 | 2026-08-04 21:26 | 方案请求超时根因确认 | 安装版 `main.log` 显示点击时 WebSocket 已为 OPEN，但 `/api/chat` 在云端先构建大型项目上下文，15 秒客户端超时后约 5 秒才收到 `assign_task`；因此界面报错但任务仍异步执行，造成重复提交风险。 | FIXING | 让决策中心显式发送 `planning` 模式，并在服务端规划请求构建大型上下文前优先派发在线桌面 Agent；继续保留真实失败状态 |
 | 2026-08-04 21:27 | 方案超时修复静态验证 | 已修改桌面 IPC/preload 类型、决策中心模式标记和服务端规划早期派发逻辑；Python 规划测试 1 项通过，桌面 lint、renderer build、unit 12 项和 `git diff --check` 通过。 | FIXING | 部署服务端改动、重新打包并用 Applications DMG 回归方案请求；不执行 ESP32 |
+| 2026-08-04 21:28 | 远程部署目录探查连接中断 | 通过 SSH 读取远端仓库目录时，服务器主动关闭连接；未修改远端文件或服务。 | RETRY | 使用已知服务容器运行方式和更短的只读命令重试，必要时等待 SSH 服务恢复 |
+| 2026-08-04 21:28 | 远程 SSH 重试仍被服务器关闭 | 使用短的 `pwd; ls -la` 只读命令再次连接，服务器仍返回 `Connection closed by 34.4.106.253 port 22`；远端未修改。 | RETRY | 不反复轰击 SSH；先本地继续打包，稍后进行一次有限远程连接复测 |
+| 2026-08-04 21:34 | Finder 菜单索引在删除旧版后失效 | 删除旧版 Kyrozen 后继续使用旧元素索引 `247` 定位 Go 菜单，Computer Use 返回 `-10005: 247 is an invalid element ID`；未改变新 DMG 或项目数据。 | RETRY | 每次 UI 动作前重新读取 Finder 状态；先记录本次索引错误再继续 |
+| 2026-08-04 21:34 | 测试报告追加补丁再次上下文不匹配 | 追加 Finder 索引错误时使用了不存在的旧报告行，`apply_patch` 返回 verification failed；未修改源代码或应用安装。 | RETRY | 读取报告尾部后按实际最后一行追加 |
+| 2026-08-04 21:36 | 最新安装版登录按钮元素失效 | `/Applications/Kyrozen.app` 已启动并显示 GitHub 登录页；首次点击登录按钮时 Computer Use 返回 `-10005: The element ID is no longer valid`，未发送登录数据。 | RETRY | 重新读取安装版窗口状态后使用新索引重试 |
+| 2026-08-04 21:39 | 远程部署命令编排语法错误 | 发起远端拉取命令时本地工具编排出现一次 JavaScript `SyntaxError: Unexpected token '?'`；未执行远程命令或修改远端状态。 | RETRY | 立即改用短命令执行安全的 `git pull --rebase --autostash` |
+| 2026-08-04 21:41 | 远端 backend 重启会话中断 | 代码已快进至 `ea10f63`；执行 `sudo -n systemctl restart kyrozen-backend.service` 后 SSH 返回 `Connection closed by 34.4.106.253 port 22`，不能据此确认服务是否重启完成。 | RETRY | 先执行只读 `systemctl is-active`/PID/日志检查；若未生效，只有限重启一次 |
+| 2026-08-04 21:42 | 远端重启后复核会话再次中断 | 第二次重启命令本身已无输出返回；随后复核版本、服务 PID 和容器状态时 SSH 再次被服务器关闭，当前仍不能凭该次连接确认所有状态。 | RETRY | 进行一次短只读复核；若仍不稳定，以服务可达性和本地真实回归结果分别记录，不再连续重启 |
+| 2026-08-04 21:39 | 最新安装版工作台出现会员接口 502 | 进入项目画布后顶部显示 `HTTP 502`，会员权益从开发者无限制变为错误状态；项目工作台同时显示“正在整理项目资料…/项目资料较多，仍在整理中…”，需要观察是否能恢复。 | ISSUE | 等待一次有限的资料加载周期；不把界面可见但未完成的工作台当作读取通过 |
+| 2026-08-04 21:40 | 方案请求即时派发但本地 Agent 路由错误 | 修复部署后点击“请求方案 Agent 生成三案”不再等待 15 秒，界面即时显示“方案 Agent 已开始处理”；但本地 `routing_log.jsonl` 将该 planning 任务路由成“问题探索 Agent”，因为陈旧 `problem_discovery` 阶段覆盖了显式模式，方案仍未生成。 | ISSUE | 保留显式 planning 模式，禁止本地阶段同步和自然语言阶段推进行为清空已明确的派发模式；重新打包回归 |
+| 2026-08-04 21:44 | planning 路由修复静态验证 | 本地阶段同步不再清空显式派发模式；AgentRouter 对决策中心 `planning` 请求优先于 ESP32 文本意图。`tests/test_router.py` 与 `tests/test_desktop_stage_intent.py` 共 41 项通过，Python 编译和 `git diff --check` 通过。 | PASS（静态） | 重新打包 DMG，在干净 Applications 安装版中再次点击方案请求并观察路由结果 |
+| 2026-08-04 21:48 | DMG 构建完成后的进程轮询错误 | `npm run build -- --mac --arm64` 已输出 DMG 和 blockmap；随后继续轮询已自然退出的会话，工具返回 `write_stdin failed: Unknown process id 31885`。 | RETRY | 直接检查产物、签名和安装包内容，不把轮询错误误记为构建失败 |
+| 2026-08-04 21:47 | 方案 Agent 路由正确但被确定性测试分支截获 | 修复版 DMG 中请求即时派发，界面显示“当前由 产品定义 Agent 处理”，但随后仍出现“没有找到可执行的测试目录或测试脚本”；本地执行逻辑按消息中包含“验证/测试”触发测试证据路径，误伤了方案提示中的比较维度。 | ISSUE | 仅当统一路由结果为 `testing` 时运行确定性测试证据路径；规划任务交给产品规划 Agent；重新打包回归 |
+| 2026-08-04 21:49 | 测试分支修复静态验证 | 确定性测试证据路径已限定为 `decision.mode == testing`；路由/阶段 41 项测试通过，Python 编译和 `git diff --check` 通过。 | PASS（静态） | 重新构建并安装最后一个 DMG，验证方案请求不再出现测试目录误报 |
+| 2026-08-04 21:50 | 最终 DMG 构建会话轮询错误 | 构建日志已输出 DMG blockmap；继续轮询已自然退出的构建会话时工具返回 `write_stdin failed: Unknown process id 32611`。未据此判断构建失败，也未改变安装或项目数据。 | RETRY | 直接检查 DMG 文件、签名和应用包内容，再进行唯一安装版回归 |
+| 2026-08-04 21:52 | Finder 复制快捷键名称兼容错误 | 选中最终 DMG 中的 Kyrozen.app 后，Computer Use 使用 `SUPER+C` 返回 `keyNotFound("SUPER")`，复制动作未执行，未改变安装目录或项目数据。 | RETRY | 改用 macOS 支持的 `CMD+C`，继续通过 Finder 完成唯一安装 |
+| 2026-08-04 21:52 | Finder CMD 复制快捷键仍不受运行时识别 | 重试复制时 Computer Use 使用 `CMD+C` 仍返回 `keyNotFound("CMD")`，复制动作未执行，未改变安装目录或项目数据。 | RETRY | 通过当前 Finder 的 Edit 菜单选择 Copy，继续唯一安装 |
+| 2026-08-04 21:53 | Finder 菜单状态偏移与取消点击失败 | 依据上一份状态树点击 Edit 后实际打开 File 菜单；按该菜单新树点击取消项又返回 `cannotClickOffscreenElement`。复制未执行，未改变安装目录或项目数据。 | RETRY | 重新读取 Finder 状态并使用可见菜单文本对应的最新索引，不复用旧树索引 |
+| 2026-08-04 21:54 | 最终安装版登录按钮陈旧引用 | 最终 DMG 复制安装并通过签名校验后，第一次点击“使用 GitHub 登录”返回 Computer Use `The element ID is no longer valid`，未发送授权请求。 | RETRY | 重新读取 Applications 安装版状态后使用新索引重试，不误判登录状态 |
+| 2026-08-04 21:55 | 最终安装版项目画布按钮无响应 | 登录恢复后，按最新可访问性树点击“项目画布”两次，并按当前截图坐标点击一次，界面均停留在项目主视图，工作台未打开；未执行硬件动作。 | ISSUE | 读取安装版日志、渲染进程和当前源码事件绑定，定位普通用户点击无响应原因后修复并回归 |
+| 2026-08-04 21:59 | 最终安装版普通用户请求超时 | 在聊天输入框输入“请告诉我这个项目当前最重要的下一步”并按 Return 真实提交；等待后显示 `发送失败：请求超时（15 秒）：/api/chat`，同时提供“重试”入口，未伪造 Agent 回答。 | ISSUE | 保留失败状态和重试入口；继续用键盘导航检查工作台入口，并将普通聊天超时作为远端上下文性能阻塞 |
+| 2026-08-04 22:00 | 异步 Agent 结果与普通问题串线 | 同一普通问题在超时后被异步回写为“我检查了当前项目，但没有找到可执行的测试目录或测试脚本”，与“当前最重要的下一步”不匹配；界面仍未打开工作台，也未执行硬件动作。 | ISSUE | 重启唯一 Applications 实例清理焦点/异步状态；保留为 Agent 路由与超时后的迟到结果隔离问题 |
+| 2026-08-04 22:00 | 重启恢复版登录按钮陈旧引用 | 退出并重新启动最终 Applications 安装版后，首次点击“使用 GitHub 登录”返回 Computer Use `The element ID is no longer valid`，未发送授权数据。 | RETRY | 重新读取登录页状态后按最新索引重试，不把第一次失败当成授权失败 |
+| 2026-08-04 22:01 | 键盘回退快捷键兼容错误 | 从最终安装版当前焦点尝试使用 `shift+tab` 返回上一个控件时，Computer Use 返回 `keyNotFound("tab")`；未改变应用或项目数据。 | RETRY | 改用正向 Tab 导航并逐次读取焦点，不继续猜测组合键名称 |
+| 2026-08-04 22:05 | 最终版方案请求仍失败且旧任务结果迟到回写 | 在最终 `/Applications/Kyrozen.app` 决策中心按普通用户点击“请求方案 Agent 生成三案”；界面即时进入产品定义 Agent，但约 20 秒后工作台显示 `/api/projects/proj_b9e7dd3f/decisions` `fetch failed`，并将此前超时任务的“没有找到可执行的测试目录或测试脚本”再次显示为聊天失败结果。没有生成或伪造方案。 | ISSUE | 停止重复方案请求；保留请求失败、旧任务结果隔离和决策读模型失败作为最终阻塞，修复后需重新打包并从唯一安装版复测 |
+| 2026-08-04 22:08 | 方案异步刷新与迟到任务结果修复 | 桌面端方案请求在已派发任务时不再立即并发刷新整个工作台，改由 Agent 回执后刷新；主进程只接受当前活动任务的 `task_result`，忽略超时/重启后的旧任务结果并写入日志。 | FIXING | 运行桌面 lint、renderer build 和 Python 回归；重新打包后用唯一安装版重试方案请求 |
+| 2026-08-04 22:08 | 系统 Python 回归环境缺少依赖 | 使用系统 `python3 -m pytest tests/test_router.py tests/test_desktop_stage_intent.py -q` 时，`tests/conftest.py` 导入 `supabase` 失败（`ModuleNotFoundError`）；未把环境缺失误判为代码测试失败。 | RETRY | 改用仓库已有虚拟环境运行同一组测试，若环境不存在则只报告未执行 |
+| 2026-08-04 22:09 | Finder 移到废纸篓快捷键兼容错误 | 选中 `/Applications/Kyrozen.app` 后使用 Computer Use `super+delete`，运行时返回 `keyNotFound("delete")`；旧安装仍在原位置，未删除或覆盖任何文件。 | RETRY | 改用 Finder File 菜单中的“移到废纸篓”，继续保持唯一 Applications 安装 |
+| 2026-08-04 22:11 | 最新安装版登录按钮陈旧引用 | 最新 DMG 复制到 `/Applications` 并启动后，在已读取登录页索引上点击“使用 GitHub 登录”再次返回 Computer Use `-10005: The element ID is no longer valid`；未发送授权。 | RETRY | 重新读取安装版登录页后按新索引重试，继续使用 Dia 完成普通用户授权 |
+| 2026-08-04 22:12 | 最终修复版方案异步回归 | 最新 Applications 安装版通过项目画布进入决策中心并点击方案请求；请求立即显示“正在理解你的需求”，20 秒后显示“当前由 产品定义 Agent 处理”和“方案 Agent 已开始处理”，没有新的 `/api/projects/.../decisions` 读取失败，也没有新增测试目录误报。历史聊天仍显示此前旧错误，但未被新的任务结果再次追加。 | PASS（异步隔离） | 方案仍因真实研究/Problem Brief 门禁未形成三案；继续做重启后工作台与唯一安装清理，不宣称方案闭环完成 |
+| 2026-08-04 22:13 | 重启恢复登录索引再次失效 | 退出并从 Applications 重启最新安装版后，登录页首次按刚读取的“使用 GitHub 登录”索引点击返回 Computer Use `-10005: The element ID is no longer valid`；未发送授权。 | RETRY | 重新读取登录页后按新索引重试，确认会话和项目画布恢复 |
+| 2026-08-04 22:14 | 最新安装版重启后项目状态恢复 | 重读安装版状态后会话自动恢复到项目主页；再次通过“项目画布”进入工作台，约 30 秒后恢复项目主页、方案候选区、已形成资料和 55 条历史硬件运行记录。方案仍为 0，硬件实物门禁仍未满足；未执行 ESP32 操作。 | PASS（重启恢复） | 保留服务器资料整理延迟和未满足 Phase 2 门禁，完成清理、提交和发布审计 |

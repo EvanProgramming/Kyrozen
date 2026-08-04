@@ -3676,11 +3676,21 @@ function handlePythonAgentLine(line: string) {
         source: message.params.source || 'unknown',
       });
     } else if (message.method === 'task_result') {
+      const resultTaskId = String(message.params.task_id || '');
+      // A timed-out or restarted task can still emit a late result from the
+      // previous local Agent process. Only the currently active task may
+      // update the renderer; otherwise an unrelated old answer can appear in
+      // the user's current conversation (and can falsely clear its loading
+      // state).
+      if (!currentTaskRunning || !resultTaskId || (currentTaskId && resultTaskId !== currentTaskId)) {
+        logWarn(`Ignoring stale task result ${resultTaskId || '<missing>'}; active=${currentTaskId || '<none>'}`);
+        cancelledTaskIds.delete(resultTaskId);
+        return;
+      }
       currentTaskRunning = false;
       taskRetryCount = 0;
       clearTaskTimeout();
       void processNextQueuedTask();
-      const resultTaskId = String(message.params.task_id || currentTaskId || '');
       // Cancel race fix: if the user pressed stop, a late `completed` result
       // must be treated as cancelled and never appended to the chat.
       const wasCancelled = cancelledTaskIds.delete(resultTaskId);

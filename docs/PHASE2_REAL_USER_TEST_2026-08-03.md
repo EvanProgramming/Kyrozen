@@ -354,6 +354,16 @@
 | 2026-08-09 | 研究与方案桌面持久化路由修复 | 根因是桌面本地 Agent 注册工具时未提供 `ProjectManager`，而 API 对 planning 强制派发本地任务，导致研究/方案工具返回 Project manager 未配置；现改为研究/方案由 API Agent 持久化版本化 Artifact，开发/硬件/测试仍本地执行。`tests/test_router.py tests/test_question_normalizer.py` 46 passed；`tests/test_planning.py tests/test_planning_tools.py tests/test_report_deliverables.py` 44 passed。 | FIXED | 从新 DMG 安装版重新验证研究报告、三候选方案和决策写入 |
 | 2026-08-09 | 生产后端尚未包含研究/方案持久化修复 | 最新 DMG 的 Electron 意图推断已把报告请求识别为 `market_research`；但生产日志仍显示服务器把任务派发给本地 MarketResearchAgent，`save_market_research_report` 返回 `Project manager not available`，说明后端源码修复尚未部署到生产。 | DEPLOY_REQUIRED | 将已通过 90 项回归测试的后端路由修复部署到 34.4.106.253，重启服务后重新执行普通用户研究/方案验收 |
 | 2026-08-09 | Git 提交首次重试遇到本地锁文件权限错误 | `git add` 无法创建 `.git/index.lock`，返回 `Operation not permitted`；未发生暂存或提交，也未修改用户的 `video/` 未跟踪目录。 | RETRY | 在不删除锁文件、不重置工作树的前提下，用已授权的本地 Git 操作重试并核对状态 |
+| 2026-08-09 | 生产 Compose 首次重建未形成新容器 | 远端 checkout 已快进到 `4f389c0`，但首次 `sudo docker compose up -d --build --remove-orphans` 输出在构建上下文阶段提前结束；只读核对显示 backend 容器仍为 5 天前创建，不能视为新代码已运行。 | RETRY | 单独重试 backend 构建/启动，并核对镜像与容器时间、健康状态和实际代码路由 |
+| 2026-08-09 | 生产构建并行诊断命令转义错误 | 只读 `awk` 检查因远端 shell 展开 `$2` 返回语法错误；未修改远端，也未影响正在运行的 Docker 构建进程。 | RETRY | 改用不依赖 shell 变量展开的进程检查命令 |
+| 2026-08-09 | 生产兼容 Docker 构建超时 | `DOCKER_BUILDKIT=0 docker build` 已运行约 20 分钟且没有新的阶段输出，客户端只等待 Docker daemon；旧 backend 容器保持健康。 | BLOCKED | 终止孤立构建客户端，采用仅覆盖运行容器代码的临时验证方式；正式镜像重建仍需生产机补装 buildx 或修复 Docker 构建链 |
+| 2026-08-09 | 终止超时构建会话返回 SSH 255 | 终止三个孤立构建进程后，原 SSH 会话以退出码 `255` 结束；这是会话被终止的结果，未影响现有健康 backend、数据卷或 checkout。 | RECORDED | 通过新的只读 SSH 会话核对进程和容器状态，再继续临时运行容器验证 |
+| 2026-08-09 | 只读 SSH 核对首次被当前权限策略拒绝 | 工具层拒绝带 `require_escalated` 的 SSH 调用并提示当前 approval policy 为 `Never`；命令未执行，远端未改变。 | RETRY | 去掉升级参数后重试同一只读核对 |
+| 2026-08-09 | Computer Use 应用标识出现多个安装副本 | 以 bundle id 读取状态时发现 `/Applications/Kyrozen.app` 与两个 `desktop/release` 构建副本同时存在，Computer Use 返回应用标识歧义；未操作任何副本。 | RETRY | 改用明确的 `/Applications/Kyrozen.app` 路径，后续清理只保留 Applications 安装版 |
+| 2026-08-09 | 最新安装版启动时网络与会话恢复失败 | Computer Use 截图显示 `net::ERR_INTERNET_DISCONNECTED`，工作区停在“正在准备项目工作区”，侧栏提示缓存 JWT 已过期；未把缓存数据或界面停留误判为真实刷新成功。 | RETRY | 重新读取状态并按普通用户可见入口刷新/重新登录；若仍失败，记录生产网络或认证阻塞 |
+| 2026-08-09 | Artifact 同步失败后聊天工作区保持忙碌 | 重新登录并打开项目后，生产接口对多个 Artifact 读取超时；Electron 只记录 `Artifact sync failed`，没有发送失败终态，界面持续显示“正在准备项目工作区”，聊天输入保持禁用。 | FIXING | 让同步 catch 发送失败终态并保留可见错误，再重新构建/安装和刷新验收 |
+| 2026-08-09 | Dia 登录标签的 AX 切换动作不支持 | 读取 Dia 当前状态后按 `Kyzrozen 登录` 标签索引切换返回 `AXError.actionUnsupported`；未改变当前标签或页面内容。 | RETRY | 使用截图坐标切换到已有 Kyrozen 登录标签，再重新读取状态 |
+| 2026-08-09 | Computer Use 等待工作区同步达到默认超时 | 为等待项目卡片触发的工作区同步，Node REPL 在 30 秒默认执行窗口后返回 `js execution timed out; kernel reset`；未改变应用数据或退出应用。 | RETRY | 使用显式更长的 Computer Use 执行超时重新初始化内核并读取状态 |
 | 2026-08-09 | 关闭旧安装的 Computer Use 坐标缺失 | 重新读取旧安装可访问性树后，关闭按钮显示为索引 246；按索引点击返回 `coordinate must include finite x and y coordinates`，未改变应用状态。 | RETRY | 使用受支持的快捷键退出并复核进程状态，再继续唯一 DMG 安装 |
 | 2026-08-09 | 旧安装快捷键退出未生效 | 按技能支持的 `super+q`（路径和显示名各一次）以及 `super+w` 后，Computer Use 无报错但 `com.kyrozen.desktop` 仍显示 `isRunning: true`；未强制杀进程或删除应用。 | RETRY | 用精确应用标识执行可逆的正常退出，再验证进程后重建安装 |
 | 2026-08-09 | 卸载旧 DMG 首次受沙箱限制 | 对精确挂载点 `/Volumes/Kyrozen 0.1.0-arm64` 执行 `hdiutil detach` 返回 `Operation not permitted`；未卸载、未删除文件、未影响其他磁盘。 | RETRY | 申请仅针对该挂载点的系统卸载权限 |

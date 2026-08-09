@@ -1378,7 +1378,12 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
     await fs.writeFile(path.join(contextDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     sendTaskActivity({ description: `已同步 ${artifacts.length} 个项目资料`, status: 'completed' });
   } catch (err: any) {
-    logWarn(`Artifact sync failed: ${err.message || err}`);
+    const message = err.message || String(err);
+    logWarn(`Artifact sync failed: ${message}`);
+    // Project selection marks the renderer busy before this sync starts. If
+    // an individual artifact fetch times out, always publish a terminal
+    // state so the composer is usable again and the user gets a retry path.
+    sendTaskActivity({ description: `项目资料同步失败：${message}`, status: 'failed' });
   }
 }
 

@@ -404,7 +404,15 @@ class MembershipService:
     def record_project_creation(self, user_id: str, project_id: str) -> None:
         owner = self._owner(user_id)
         if self._is_supabase:
-            self.db.client.table("project_creation_events").insert({"id": str(uuid.uuid4()), "owner_user_id": owner, "project_id": project_id, "created_at": _iso(_now())}).execute()
+            try:
+                self.db.client.table("project_creation_events").insert({"id": str(uuid.uuid4()), "owner_user_id": owner, "project_id": project_id, "created_at": _iso(_now())}).execute()
+            except Exception as exc:
+                # Older Supabase deployments may not have the additive
+                # membership ledger yet.  Project creation remains usable;
+                # once the migration is applied, this write resumes normally.
+                if self._is_missing_supabase_table(exc, "project_creation_events"):
+                    return
+                raise
             return
         self._execute(
             "INSERT INTO project_creation_events (id, owner_user_id, project_id, created_at) VALUES (?, ?, ?, ?)",
@@ -436,7 +444,15 @@ class MembershipService:
         if kind:
             sql += " AND kind = ?"
             params += (kind,)
-        row = self._query(sql, params)
+        try:
+            row = self._query(sql, params)
+        except Exception as exc:
+            # Usage history is an additive ledger.  Treat a not-yet-migrated
+            # Supabase deployment as having no recorded usage, but do not hide
+            # authorization, network, or unrelated database failures.
+            if self._is_supabase and self._is_missing_supabase_table(exc, "usage_events"):
+                return {"credits": 0.0, "cost": 0.0, "conversations": 0.0}
+            raise
         return {"credits": float(row["credits"] or 0), "cost": float(row["cost"] or 0), "conversations": float(row["conversations"] or 0)}
 
     def check(self, user_id: str, estimate: UsageEstimate | None = None, *, conversation: bool = False, plan_override: str | None = None) -> dict[str, Any]:
@@ -467,7 +483,15 @@ class MembershipService:
     def record_usage(self, user_id: str, estimate: UsageEstimate, *, project_id: str | None = None, task_id: str | None = None, kind: str = "model", provider: str = "", model: str = "", metadata: dict[str, Any] | None = None) -> None:
         owner = self._owner(user_id)
         if self._is_supabase:
-            self.db.client.table("usage_events").insert({"id": str(uuid.uuid4()), "owner_user_id": owner, "user_id": user_id, "project_id": project_id, "task_id": task_id, "kind": kind, "provider": provider, "model": model, "prompt_tokens": estimate.prompt_tokens, "completion_tokens": estimate.completion_tokens, "cache_hit_tokens": estimate.cache_hit_tokens, "tool_calls": estimate.tool_calls, "credits": estimate.credits, "cost_rmb": estimate.cost_rmb, "formula_version": self.formula_version, "metadata": metadata or {}, "created_at": _iso(_now())}).execute()
+            try:
+                self.db.client.table("usage_events").insert({"id": str(uuid.uuid4()), "owner_user_id": owner, "user_id": user_id, "project_id": project_id, "task_id": task_id, "kind": kind, "provider": provider, "model": model, "prompt_tokens": estimate.prompt_tokens, "completion_tokens": estimate.completion_tokens, "cache_hit_tokens": estimate.cache_hit_tokens, "tool_calls": estimate.tool_calls, "credits": estimate.credits, "cost_rmb": estimate.cost_rmb, "formula_version": self.formula_version, "metadata": metadata or {}, "created_at": _iso(_now())}).execute()
+            except Exception as exc:
+                # Keep the model path available during an additive migration;
+                # the missing ledger is reported in deployment diagnostics and
+                # does not become fabricated usage data.
+                if self._is_missing_supabase_table(exc, "usage_events"):
+                    return
+                raise
             return
         self._execute(
             """INSERT INTO usage_events

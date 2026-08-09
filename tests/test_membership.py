@@ -1,5 +1,7 @@
 """Membership rules for complete-project access in the desktop client."""
 
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 
 from kyrozen.config import KyrozenConfig
@@ -34,6 +36,29 @@ class _MissingMembershipSeatsDb:
 def test_supabase_without_optional_seat_table_uses_user_as_owner():
     service = MembershipService(_MissingMembershipSeatsDb())
     assert service._owner("user-1") == "user-1"
+
+
+class _MissingUsageEventsQuery(_MissingMembershipSeatsQuery):
+    def execute(self):
+        raise RuntimeError("{'code': 'PGRST205', 'message': \"Could not find the table 'public.usage_events' in the schema cache\"}")
+
+
+class _MissingUsageEventsSupabase:
+    def table(self, _name):
+        return _MissingUsageEventsQuery()
+
+
+class _MissingUsageEventsDb:
+    client = _MissingUsageEventsSupabase()
+
+
+def test_supabase_without_optional_usage_table_treats_history_as_empty():
+    service = MembershipService(_MissingUsageEventsDb())
+    assert service._sum("user-1", datetime.now(timezone.utc)) == {
+        "credits": 0.0,
+        "cost": 0.0,
+        "conversations": 0.0,
+    }
 
 
 def _client(temp_dir: str, *, developer: bool = False) -> TestClient:

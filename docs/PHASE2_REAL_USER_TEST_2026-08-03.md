@@ -323,3 +323,11 @@
 | 2026-08-09 | 本地 Git 暂存首次被沙箱拒绝 | 为按用户要求提交本次修复，`git add` 无法创建 `.git/index.lock`，返回 `Operation not permitted`；未改变索引或未跟踪的 `video/`。 | RETRY | 申请仅限当前仓库 Git 写权限后重试暂存、提交和推送 |
 | 2026-08-09 | 提交命令编排首次语法错误 | 已暂存文件后，第一次调用提交工具的本地 JavaScript 参数编排出现 `SyntaxError: Unexpected identifier 'max_output_tokens'`；未执行 `git commit`，索引和工作树内容未被改变。 | RETRY | 修正工具编排后重试同一提交 |
 | 2026-08-09 | 补交验收记录命令编排再次语法错误 | 为补交上一条报告记录，第二次调用 Git 暂存/提交工具的本地 JavaScript 参数编排再次出现同类 `SyntaxError`；未执行该次 Git 操作。 | RETRY | 使用精简参数重试，并继续保护未跟踪的 `video/` |
+| 2026-08-09 | DMG 构建完成后的进程复读失败 | 构建日志已到达 arm64/x64 DMG 和 blockmap 完成阶段；随后复读已结束的进程返回 `Unknown process id`，未将该工具错误当作构建失败，改用产物签名、哈希和文件存在性复核。 | RETRY | 只读验证最新 DMG 与构建 App，再进行唯一安装 |
+| 2026-08-09 | 安装清理的系统进程检查不可用 | 只读执行 `pgrep` 时 macOS 返回 `sysmon request failed: sysmond service not found`；未杀进程、未删除应用，DMG 挂载仍保持单一且 Applications 副本未改变。 | RETRY | 继续使用 Computer Use 和精确路径进行窗口/安装清理 |
+| 2026-08-09 | 新 DMG 卸载/挂载命令编排首次语法错误 | 准备清理旧挂载并挂载新 DMG 时，本地工具参数编排出现 `SyntaxError: Unexpected identifier 'require_escalated'`；未执行卸载、挂载或安装动作。 | RETRY | 使用精简参数重试，保持单一挂载目标 |
+| 2026-08-09 | Finder 键盘动作 API 名称错误 | 读取 Finder 最新状态后尝试用 `sky.key` 打开“前往文件夹”，Computer Use 返回 `sky.key is not a function`；未改变 Finder 或安装目录。 | RETRY | 按已安装 Computer Use 技能的实际键盘接口重试 |
+| 2026-08-09 | 新 DMG 复制被运行中的旧安装占用 | Finder 粘贴新应用并确认 Replace 后显示“`The operation can’t be completed because the item Kyrozen is in use`”；未覆盖运行中的 `/Applications/Kyrozen.app`，新 DMG 保持已挂载。 | RETRY | 先正常退出旧安装，再从 Finder 重试同一覆盖复制 |
+| 2026-08-09 | 新安装版登录按钮索引再次失效 | 新安装版显示 GitHub 登录页；按刚读取的登录按钮索引点击时 Computer Use 返回 `-10005: The element ID is no longer valid`，未发送授权。 | RETRY | 重新读取新安装版可访问性树后按新索引重试 |
+| 2026-08-09 | 会员兼容修复后问题探索仍超时 | 生产兼容修复部署后，安装版普通问题探索请求不再直接显示 AI 服务不可用，但最终显示“发送失败：请求超时（15 秒）：/api/chat”，仍未形成 Problem Brief；未执行硬件。 | ISSUE | 读取本次请求对应的生产日志，区分模型供应商超时、前端回执超时或 API 路由问题 |
+| 2026-08-09 | 会员兼容修复暴露使用记录表缺失 | 生产日志显示本次模型代理已越过缺失的 `membership_seats` 检查，但在额度统计阶段因 Supabase 缺少 `public.usage_events` 表返回 `PGRST205`；未进入有效模型回执。 | ISSUE | 扩展旧 Supabase 部署的可选使用记录兼容处理，保留真实失败状态并重新部署复测 |

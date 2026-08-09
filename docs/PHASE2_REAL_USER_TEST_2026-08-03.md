@@ -321,3 +321,5 @@
 | 2026-08-09 | 生产模型代理失败根因定位 | 只读检查 `https://kyrozen.chat/api/health` 返回 `status: ok`；生产日志显示桌面模型请求在会员检查阶段因 Supabase 缺少 `public.membership_seats` 表失败，未进入模型响应。 | ISSUE | 增加旧 Supabase 部署兼容处理或补齐已批准的幂等会员迁移，再重启安装版复测 |
 | 2026-08-09 | 生产模型供应商额度与请求大小不足 | 只读生产日志显示 Gemini 免费额度为 0，Groq 多次返回 TPM 413（请求约 13.6K、上限 12K）；这些是供应商/请求容量限制，不能伪造成功结果。 | ISSUE | 修复会员检查阻塞后复测；必要时压缩 Agent 上下文或切换已配置且可用的真实供应商 |
 | 2026-08-09 | 本地 Git 暂存首次被沙箱拒绝 | 为按用户要求提交本次修复，`git add` 无法创建 `.git/index.lock`，返回 `Operation not permitted`；未改变索引或未跟踪的 `video/`。 | RETRY | 申请仅限当前仓库 Git 写权限后重试暂存、提交和推送 |
+| 2026-08-09 | 提交命令编排首次语法错误 | 已暂存文件后，第一次调用提交工具的本地 JavaScript 参数编排出现 `SyntaxError: Unexpected identifier 'max_output_tokens'`；未执行 `git commit`，索引和工作树内容未被改变。 | RETRY | 修正工具编排后重试同一提交 |
+| 2026-08-09 | 补交验收记录命令编排再次语法错误 | 为补交上一条报告记录，第二次调用 Git 暂存/提交工具的本地 JavaScript 参数编排再次出现同类 `SyntaxError`；未执行该次 Git 操作。 | RETRY | 使用精简参数重试，并继续保护未跟踪的 `video/` |

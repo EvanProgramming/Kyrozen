@@ -431,3 +431,4 @@
 | 2026-08-10 | Finder 前往挂载卷快捷键名称错误 | 在 Finder“前往文件夹”对话框中设置 `/Volumes/Kyrozen` 后，Computer Use 发送 `ENTER` 返回 `Computer Use server error -10005: keyNotFound("ENTER")`；未改变文件或安装状态。 | RETRY | 使用 Computer Use 支持的 `RETURN` 键确认同一挂载路径，再继续 Finder 安装 |
 | 2026-08-10 | Finder 前往挂载卷第二次快捷键名称错误 | 按 Computer Use 技能文档要求尝试 `Return` 的大写变体前，实际调用仍使用了不受支持的 `RETURN`，返回 `Computer Use server error -10005: keyNotFound("RETURN")`；未改变文件或安装状态。 | RETRY | 改用技能文档明确支持的 `Return`，重新读取对话框后继续 |
 | 2026-08-10 | 本轮 Finder 启动安装版时 Mac 自动解锁失败 | 在 Finder 前往 `/Applications/Kyrozen.app` 后继续读取界面时，Computer Use 返回 `The Mac is locked and automatic unlock could not unlock it`；未改变项目、文件或设备状态。 | BLOCKED | 用户手动解锁 Mac 后再继续安装版启动和普通用户验收 |
+| 2026-08-10 | 继续验收时 Mac 仍处于锁屏 | 新一轮 Computer Use `list_apps` 首次调用仍返回 `The Mac is locked and automatic unlock could not unlock it`；未操作应用、项目或 ESP32。 | BLOCKED | 用户手动解锁 Mac 后再继续安装版登录与验收 |

@@ -1105,15 +1105,21 @@ async function reconnectWithFreshWebSocketToken(): Promise<boolean> {
 }
 
 const API_REQUEST_TIMEOUT_MS = 15000;
+// A project-scoped chat request may read a versioned Artifact chain and run a
+// real model call before returning.  Keep ordinary metadata requests at 15s,
+// but give the supported /api/chat compatibility path a bounded window so a
+// transient WebSocket reconnect does not turn a healthy request into a false
+// timeout.
+const CHAT_REQUEST_TIMEOUT_MS = 120000;
 
-async function fetchWithTimeout(url: string, init: RequestInit, endpoint: string): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit, endpoint: string, timeoutMs = API_REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (err: any) {
     if (err?.name === 'AbortError') {
-      throw new Error(`请求超时（${API_REQUEST_TIMEOUT_MS / 1000} 秒）：${endpoint}`);
+      throw new Error(`请求超时（${timeoutMs / 1000} 秒）：${endpoint}`);
     }
     throw new Error(`请求失败（${endpoint}）：${err?.message || String(err)}`);
   } finally {
@@ -1147,7 +1153,7 @@ async function apiGet(endpoint: string, auth = true) {
   return response.json();
 }
 
-async function apiPost(endpoint: string, body: unknown, auth = false) {
+async function apiPost(endpoint: string, body: unknown, auth = false, timeoutMs = API_REQUEST_TIMEOUT_MS) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
@@ -1156,13 +1162,13 @@ async function apiPost(endpoint: string, body: unknown, auth = false) {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-  }, endpoint);
+  }, endpoint, timeoutMs);
   if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
     response = await fetchWithTimeout(`${serverUrl}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
-    }, endpoint);
+    }, endpoint, timeoutMs);
   }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
@@ -2869,7 +2875,7 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMod
         project_id: currentProjectId,
         mode: 'discovery',
         stream: false,
-      }, true);
+      }, true, CHAT_REQUEST_TIMEOUT_MS);
       if (fallback?.content) {
         return { success: true, taskId: fallback.task_id, dispatched: false, content: String(fallback.content), operations: [] };
       }
@@ -2913,7 +2919,7 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMod
       project_id: currentProjectId,
       mode,
       stream: false,
-    }, true);
+    }, true, CHAT_REQUEST_TIMEOUT_MS);
     if (!task.dispatched_to_desktop && task.content) {
       const operations = Array.isArray(task.steps)
         ? task.steps.map((step: any) => ({

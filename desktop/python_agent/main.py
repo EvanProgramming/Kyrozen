@@ -885,13 +885,15 @@ class DesktopAgentRuntime:
                     # test.  Testing is a user-visible deliverable, so close
                     # that gap at the desktop boundary: every ordinary testing
                     # request must leave a local plan and a real command result.
-                    evidence_answer = self._ensure_testing_evidence(
-                        task=task,
-                        user_message=message,
-                        project_id=project_id,
-                        workspace_root=root_path,
-                        registry=effective_registry,
-                    )
+                    evidence_answer = None
+                    if decision.mode == "testing":
+                        evidence_answer = self._ensure_testing_evidence(
+                            task=task,
+                            user_message=message,
+                            project_id=project_id,
+                            workspace_root=root_path,
+                            registry=effective_registry,
+                        )
                     if evidence_answer:
                         result["answer"] = evidence_answer
                     if task.status == "failed" and not result.get("answer"):

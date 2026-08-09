@@ -290,3 +290,34 @@
 | 2026-08-04 22:16 | 签名失效根因与修复 | 对比构建包和退出后的安装副本发现，运行时在签名 Resources 下新增 `kyrozen/**/__pycache__`；已让打包 Python Agent 设置 `PYTHONDONTWRITEBYTECODE=1`，避免运行污染 App sealed resources。 | FIXING | 重新构建、唯一安装、启动/退出并复核构建包与安装副本签名 |
 | 2026-08-04 22:18 | 最终签名修复安装被锁屏阻塞 | 新 DMG 已构建并通过构建目录签名校验；准备在 Finder 移入旧安装并复制新 DMG 时，Computer Use 返回“Mac is locked and automatic unlock could not unlock it”，未改变 `/Applications`、未执行绕过锁屏的 UI 操作。 | BLOCKED | 用户解锁 Mac 后，从 Finder 完成唯一安装，再启动/退出并执行 `/Applications/Kyrozen.app` sealed-resource 校验 |
 | 2026-08-04 22:19 | 签名失效副本与 DMG 安全清理 | 因 Mac 仍锁定，未继续 UI 安装；已将签名失效的 `/Applications/Kyrozen.app` 可恢复移入废纸篓，并卸载唯一挂载的最终 DMG。未清空废纸篓、未删除项目数据。 | CLEANUP | 用户解锁后从新 DMG 重新完成一次 Finder 安装和签名/启动/退出复核 |
+| 2026-08-09 | 远程 HEAD 只读复核 DNS 失败 | 执行 `git ls-remote origin refs/heads/main` 时返回 `Could not resolve host: github.com`；未修改远程或本地代码。 | RETRY | 继续本地 DMG/Computer Use 验收；网络恢复后再复核远程 HEAD |
+| 2026-08-09 | 最新 DMG 首次挂载失败 | Finder 已解锁，但执行 `hdiutil attach -nobrowse desktop/release/Kyrozen-0.1.0-arm64.dmg` 返回 `Device not configured`；未开始安装，未改变 Applications。 | RETRY | 只读校验 DMG/磁盘状态后进行一次有限挂载重试 |
+| 2026-08-09 | macOS 磁盘管理框架暂不可用 | 只读执行 `hdiutil imageinfo` 同样返回 `Device not configured`，`diskutil list` 返回无法使用 DiskManagement framework；DMG 哈希、大小和构建 App 签名校验仍通过。未修改磁盘或安装目录。 | RETRY | 以用户授权的非破坏性方式重试磁盘管理命令；若系统框架仍不可用，保留为环境阻塞 |
+| 2026-08-09 | 最新安装版登录后额度读取超时 | Finder 安装并启动后，GitHub 会话恢复到 `本地项目 proj_b9e`；主界面同时显示 `请求超时（15 秒）：/api/desktop/quota`，未伪造会员/额度状态，也未执行硬件动作。 | ISSUE | 保留额度接口失败，继续验证项目画布与核心 Phase 2 门禁 |
+| 2026-08-09 | 最新安装版项目画布首次索引失效 | 登录恢复后的第一次“项目画布”点击使用刚读取的索引时，Computer Use 返回 `-10005: The element ID is no longer valid`，工作台未打开，未改变项目数据。 | RETRY | 重新读取安装版可访问性树后按新索引重试 |
+| 2026-08-09 | Dia 登录标签 AX 点击不支持 | 重新登录打开 Dia 的 `Kyzrozen 登录` 标签后，按最新可访问性树点击该标签返回 `AXError.actionUnsupported`；未提交授权、未输入凭据。 | RETRY | 读取 Dia 截图/地址栏状态，必要时用可见坐标或让用户接管授权确认 |
+| 2026-08-09 | OAuth 回调后登录未完成 | Dia 中确认打开 `kyrozen://auth/login` 协议链接后，安装版仍显示 `GitHub 登录尚未完成，请检查浏览器提示后重试。`；未伪造登录成功，也未执行硬件动作。 | BLOCKED | 检查 Dia 当前回调页面；若出现 GitHub 凭据输入或授权确认，立即交由用户完成 |
+| 2026-08-09 | 项目双击动作未获 Computer Use 批准 | 尝试用双击打开已选项目时，Computer Use 返回 `Computer Use was not approved to use Kyrozen`；未改变项目数据。 | RETRY | 改用普通单击和键盘导航复测，不重复请求双击动作 |
+| 2026-08-09 | 多个 Kyrozen 包导致 bundle 标识歧义 | 使用 `com.kyrozen.desktop` 操作时，Computer Use 发现 `/Applications`、构建目录和已挂载 DMG 共多个同 bundle 应用，拒绝执行；未改变项目数据。 | RETRY | 始终使用 `/Applications/Kyrozen.app` 精确目标，验收结束卸载 DMG 并保留唯一 Applications 安装 |
+| 2026-08-09 | 决策中心标签动作未获 Computer Use 批准 | 在项目画布中尝试打开“决策中心”标签时，Computer Use 返回 `Computer Use was not approved to use Kyrozen`；未改变方案或项目数据。 | RETRY | 先单独刷新安装版状态，再用最新标签索引重试 |
+| 2026-08-09 | 最新安装版方案请求后仍出现错误聊天回写 | 真实点击“请求方案 Agent 生成三案”后，界面显示已开始处理且未生成方案；聊天区又显示“发送失败：我检查了当前项目，但没有找到可执行的测试目录或测试脚本。”，与方案请求不匹配，未伪造方案。 | ISSUE | 保留方案 0 和错误状态；继续验证其余工作中心，方案确认前不执行硬件流程 |
+| 2026-08-09 | 采购中心标签动作未获 Computer Use 批准 | 在项目画布中尝试打开“采购中心”标签时，Computer Use 返回 `Computer Use was not approved to use Kyrozen`；未改变 BOM 或采购状态。 | RETRY | 单独刷新状态后按最新标签索引重试 |
+| 2026-08-09 | 真实市场研究运行部分失败并进入重试 | 普通用户输入“ESP32 串口通信方案”并启动研究后，安装版真实显示“上次操作失败：重试研究运行”；18 条来源中 web success，GitHub/community/Reddit failed，论文 rate_limited，专利/众筹 unconfigured，且重试队列仍有 rate-limited 项；未生成替代来源或方案。 | ISSUE | 保留来源级失败、限流、未配置和重试状态；方案候选仍为 0，不能确认方案或进入硬件流程 |
+| 2026-08-09 | 研究重试完成但外部来源仍不完整 | 点击“重试研究运行”后，安装版显示“研究运行已完成并保存来源状态”，来源增至 19；Web 成功，GitHub/community/Reddit 失败，论文限流，专利/众筹未配置，重试队列仍保留限流项。重试期间额度接口另显示 `/api/desktop/quota` `fetch failed`；未生成方案。 | PASS（恢复路径）/ ISSUE（覆盖不足） | 不伪造缺失来源；保持方案门禁，等待真实来源覆盖和 Problem Brief |
+| 2026-08-09 | 最新安装版问题探索请求超时并误路由 | 用普通用户短句“我想让 ESP32 通过 USB 串口输出心跳，并确认拔插后能恢复；先帮我明确目标用户和最小可验证问题。”提交后，界面显示 `请求超时（15 秒）：/api/chat`、重试入口；同时将当前处理者显示为“硬件开发 Agent”，未形成 Problem Brief。 | ISSUE | 保留超时和可重试状态；不把硬件 Agent 回显当作问题探索完成，方案与实物门禁继续保持阻塞 |
+| 2026-08-09 | 修复版 DMG 构建首次因 DNS 失败 | 路由修复与回归测试已通过，但 `npm run build -- --mac --arm64` 在 electron-builder 打包阶段请求 `github.com` 时返回 `getaddrinfo ENOTFOUND github.com`；未把网络失败误判为代码构建失败。 | RETRY | 网络恢复后重试同一构建，不改变安装目录或项目数据 |
+| 2026-08-09 | 退出旧安装版快捷键未获 Computer Use 批准 | 准备安装修复版前用 `super+q` 退出当前安装版时，Computer Use 返回 `Computer Use was not approved to use Kyrozen`；未改变项目数据。 | RETRY | 使用窗口关闭按钮退出，再卸载旧 DMG 并完成唯一安装 |
+| 2026-08-09 | 旧安装版关闭后 Computer Use 状态超时 | 点击窗口关闭按钮后，读取 Kyrozen 状态返回 Computer Use `-10005: timeoutReached`；未修改项目数据。 | RETRY | 用应用列表和系统级只读检查确认实例，再进行 DMG 清理 |
+| 2026-08-09 | 修复版首次登录按钮索引失效 | 新 DMG 唯一安装版启动并显示 GitHub 登录页；按刚读取的按钮索引点击时 Computer Use 返回 `-10005: The element ID is no longer valid`，未发送授权。 | RETRY | 重新读取安装版状态后按新索引重试 |
+| 2026-08-09 | 修复版路由正确但迟到结果仍串线 | 修复版安装后重新发送含 ESP32 关键词的短问题；界面正确显示“问题探索 Agent 处理”，但约 35 秒后仍回写“我检查了当前项目，但没有找到可执行的测试目录或测试脚本”，与最新问题不匹配。未形成 Problem Brief，也未执行硬件。 | ISSUE | 路由门禁修复已验证；继续隔离跨任务迟到结果，未把错误回写当作问题探索成功 |
+| 2026-08-09 | 问题探索误触测试兜底根因与修复 | 发现 Python Agent 在任务完成后无条件调用测试证据兜底；含“可验证”的问题探索消息会被错误返回“没有测试目录”。已将兜底限定为 `decision.mode == testing`；路由/桌面 Agent 回归 63 项通过。 | FIXING | 重新构建并安装 DMG，复测含“可验证”关键词的问题探索消息，确认不再出现测试目录误报 |
+| 2026-08-09 | 第二个修复版安装被锁屏阻塞 | 最新 DMG 已完成构建，旧版已可恢复移入废纸篓、旧 DMG 已卸载并重新挂载；准备通过 Finder 复制最新 Kyrozen.app 时，Computer Use 返回“Mac is locked and automatic unlock could not unlock it”。未继续安装，未改变项目数据。 | BLOCKED | 用户手动解锁 Mac 后，从当前 Finder 状态继续唯一安装和回归；不重复挂载或保留多个安装副本 |
+| 2026-08-09 | 解锁后续验收仍未获得桌面控制权 | 新一轮从当前 Finder 恢复时，Computer Use 再次返回“Mac is locked and automatic unlock could not unlock it”；Applications 仍无 Kyrozen，DMG 仍保持单一挂载，未修改项目数据。 | BLOCKED | 用户手动解锁 Mac 后回复，继续当前 Finder 安装，不重新生成或挂载副本 |
+| 2026-08-09 | 连续复核仍被锁屏阻塞 | 第三次从当前验收状态读取 Finder 时，Computer Use 仍返回“Mac is locked and automatic unlock could not unlock it”；未执行任何安装、登录或项目写入。 | BLOCKED | 需要用户先手动解锁 Mac；解锁后恢复任务将从当前唯一 DMG 挂载继续 |
+| 2026-08-09 | 最新修复版登录按钮首次索引失效 | Mac 解锁后完成最新 DMG 唯一安装并通过签名校验；首次按登录页索引点击“使用 GitHub 登录”时 Computer Use 返回 `-10005: The element ID is no longer valid`，未发送授权。 | RETRY | 重新读取最新安装版状态后按新索引重试 |
+| 2026-08-09 | 最新修复版问题探索不再误触测试但 AI 服务失败 | 最新 DMG 安装后提交含“可验证”关键词的问题探索消息；界面保持“问题探索 Agent 处理”，不再返回测试目录误报，但最终显示“AI 服务暂时不可用，请稍后重试”，未形成 Problem Brief。 | ISSUE | 保留真实失败和重试入口；继续进行一次有限重试并检查模型服务可达性 |
+| 2026-08-09 | 问题探索重试等待编排语法错误 | 点击界面“重试”后，等待并读取状态的本地工具编排出现一次 JavaScript `SyntaxError: Unexpected token ':'`；未改变应用或项目数据，重试任务仍在运行。 | RETRY | 立即改用正确的状态读取编排，不把工具编排错误误判为产品结果 |
+| 2026-08-09 | 问题探索有限重试仍返回 AI 服务不可用 | 正确读取重试结果后，安装版再次显示“AI 服务暂时不可用，请稍后重试”，且未形成 Problem Brief；路由仍为问题探索 Agent，未执行硬件。 | ISSUE | 检查云端模型服务/桌面 Agent 回执链路，保留失败状态，不伪造探索结论 |
+| 2026-08-09 | 生产模型代理失败根因定位 | 只读检查 `https://kyrozen.chat/api/health` 返回 `status: ok`；生产日志显示桌面模型请求在会员检查阶段因 Supabase 缺少 `public.membership_seats` 表失败，未进入模型响应。 | ISSUE | 增加旧 Supabase 部署兼容处理或补齐已批准的幂等会员迁移，再重启安装版复测 |
+| 2026-08-09 | 生产模型供应商额度与请求大小不足 | 只读生产日志显示 Gemini 免费额度为 0，Groq 多次返回 TPM 413（请求约 13.6K、上限 12K）；这些是供应商/请求容量限制，不能伪造成功结果。 | ISSUE | 修复会员检查阻塞后复测；必要时压缩 Agent 上下文或切换已配置且可用的真实供应商 |
+| 2026-08-09 | 本地 Git 暂存首次被沙箱拒绝 | 为按用户要求提交本次修复，`git add` 无法创建 `.git/index.lock`，返回 `Operation not permitted`；未改变索引或未跟踪的 `video/`。 | RETRY | 申请仅限当前仓库 Git 写权限后重试暂存、提交和推送 |

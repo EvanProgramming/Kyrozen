@@ -132,6 +132,20 @@ class TestResolveMode:
         assert "requested:planning" in signals
         assert "显式派发 planning" in reason
 
+    def test_problem_discovery_dispatch_beats_hardware_text(self, router: AgentRouter) -> None:
+        # A hardware-shaped problem statement is still discovery work until
+        # the Problem Brief gate is satisfied; it must not enter hardware
+        # execution before the user has a confirmed workflow.
+        mode, reason, signals = router.resolve_mode(
+            requested_mode="discovery",
+            stage="problem_discovery",
+            project_type="embedded",
+            user_message="我想让 ESP32 通过 USB 串口输出心跳，并确认拔插后能恢复",
+        )
+        assert mode == "problem_discovery"
+        assert "requested:problem_discovery" in signals
+        assert "生命周期阶段显式派发" in reason
+
 
 # --------------------------------------------------------------------------
 # route() — agent selection for all 9 modes

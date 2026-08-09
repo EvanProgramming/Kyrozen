@@ -8,6 +8,34 @@ from kyrozen.project import KyrozenDatabase
 from tests.conftest import MockModel, TEST_USER, make_authenticated_app
 
 
+class _MissingMembershipSeatsQuery:
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, *_args, **_kwargs):
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        raise RuntimeError("{'code': 'PGRST205', 'message': \"Could not find the table 'public.membership_seats' in the schema cache\"}")
+
+
+class _MissingMembershipSeatsSupabase:
+    def table(self, _name):
+        return _MissingMembershipSeatsQuery()
+
+
+class _MissingMembershipSeatsDb:
+    client = _MissingMembershipSeatsSupabase()
+
+
+def test_supabase_without_optional_seat_table_uses_user_as_owner():
+    service = MembershipService(_MissingMembershipSeatsDb())
+    assert service._owner("user-1") == "user-1"
+
+
 def _client(temp_dir: str, *, developer: bool = False) -> TestClient:
     config = KyrozenConfig(
         provider="ollama",

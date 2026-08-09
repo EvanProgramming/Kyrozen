@@ -330,15 +330,21 @@ class AgentRouter:
         # 3. Stage-derived mode.
         stage_mode = STAGE_TO_MODE.get((stage or "").strip().lower(), "")
 
-        # The decision-center planning action is an explicit workflow command,
-        # not ordinary free-form chat. Its prompt intentionally contains the
-        # project's hardware vocabulary, so hardware intent must not steal a
-        # planning task from the Product Planning Agent.
+        # Desktop sends the current lifecycle mode explicitly. Its prompt can
+        # intentionally contain hardware vocabulary while the project is still
+        # in a conversational gate, so intent must not steal the task from the
+        # stage-selected specialist (notably discovery before a Problem Brief
+        # exists). The decision-center planning action is the same kind of
+        # explicit workflow command.
         explicit_planning = (requested_mode or "").strip().lower() == "planning"
-        mode = alias_mode if explicit_planning and alias_mode else intent_mode or alias_mode or stage_mode or "problem_discovery"
+        explicit_stage_dispatch = bool(alias_mode and stage_mode and alias_mode == stage_mode)
+        mode = alias_mode if (explicit_planning or explicit_stage_dispatch) and alias_mode else intent_mode or alias_mode or stage_mode or "problem_discovery"
         if explicit_planning and alias_mode:
             signals.append("requested:planning")
             reasons.append("决策中心显式派发 planning，优先进入方案规划 Agent")
+        elif explicit_stage_dispatch:
+            signals.append(f"requested:{alias_mode}")
+            reasons.append(f"生命周期阶段显式派发 {alias_mode}，优先通过阶段门禁路由")
         elif intent_mode:
             reasons.append(f"用户消息包含{MODE_LABELS[intent_mode]}意图信号（{signals[0].split(':', 1)[1]}）")
         elif alias_mode:

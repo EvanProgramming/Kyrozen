@@ -220,6 +220,24 @@ class MembershipService:
     def _is_supabase(self) -> bool:
         return hasattr(self.db, "client") and not hasattr(self.db, "db_path")
 
+    @staticmethod
+    def _is_missing_supabase_table(exc: Exception, table: str) -> bool:
+        """Recognize an additive migration missing from an older Supabase deployment.
+
+        ``membership_seats`` is optional for ordinary accounts.  A deployment
+        that predates the membership migration must therefore behave as if no
+        seat mappings exist, while other database errors still surface and
+        preserve the failure state.
+        """
+        message = str(exc).lower()
+        table_name = table.lower()
+        return table_name in message and (
+            "pgrst205" in message
+            or "schema cache" in message
+            or "does not exist" in message
+            or "could not find the table" in message
+        )
+
     def _supabase_query(self, table: str, filters: list[tuple[str, Any]], *, order: str | None = None) -> list[dict[str, Any]]:
         query = self.db.client.table(table).select("*")
         for column, value in filters:
@@ -298,10 +316,18 @@ class MembershipService:
         raise RuntimeError("Supabase membership writes must use the typed store methods")
 
     def _owner(self, user_id: str) -> str:
-        row = self._query(
-            "SELECT owner_user_id FROM membership_seats WHERE member_user_id = ? AND status = 'active'",
-            (user_id,),
-        )
+        try:
+            row = self._query(
+                "SELECT owner_user_id FROM membership_seats WHERE member_user_id = ? AND status = 'active'",
+                (user_id,),
+            )
+        except Exception as exc:
+            # Seat sharing is an optional membership feature.  Keep existing
+            # Supabase deployments usable until the additive seat migration is
+            # applied; never hide unrelated database failures.
+            if self._is_supabase and self._is_missing_supabase_table(exc, "membership_seats"):
+                return user_id
+            raise
         return str(row["owner_user_id"]) if row else user_id
 
     def _ensure_account(self, user_id: str) -> dict[str, Any]:

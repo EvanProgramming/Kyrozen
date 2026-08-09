@@ -923,6 +923,29 @@ _LOCAL_FIRST_MODES = {
 }
 
 
+_SOLUTION_REQUEST_RE = re.compile(
+    r"方案确认|确认方案|候选方案|方案比较|生成三案|生成三个方案|方案设计闭环|保存方案",
+    re.IGNORECASE,
+)
+
+
+def _normalize_chat_mode(mode: str, message: str) -> str:
+    """Keep solution requests on the server-side planning path.
+
+    Older desktop clients sometimes submitted the decision-center prompt with
+    a stale lifecycle mode (for example ``product_definition`` or
+    ``market_research``).  Those modes can be routed to a local desktop task,
+    whose planning tools intentionally have no ``ProjectManager``.  The
+    decision-center wording is an explicit workflow command, so normalize it
+    before agent selection and task creation; the server-side planning agent
+    then receives the request-scoped manager needed to persist Artifacts.
+    """
+    requested = (mode or "").strip().lower()
+    if _SOLUTION_REQUEST_RE.search(message or ""):
+        return "planning"
+    return requested or "default"
+
+
 def _requires_local_client(mode: str) -> bool:
     """Return True for modes that prefer the local desktop client."""
     return mode in _LOCAL_FIRST_MODES
@@ -1991,6 +2014,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         request: ChatRequest,
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        chat_mode = _normalize_chat_mode(request.mode, request.message)
+        if chat_mode != request.mode:
+            get_logger(__name__).info(
+                "Normalized chat mode %s -> %s for solution workflow",
+                request.mode,
+                chat_mode,
+            )
         if not _is_developer_account(current_user):
             estimate = _get_membership_service().estimate(
                 prompt_tokens=max(1, len(request.message) // 4),
@@ -2013,19 +2043,19 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 _get_membership_service().estimate(prompt_tokens=0),
                 kind="conversation",
             )
-        if request.mode == "discovery":
+        if chat_mode == "discovery":
             agent = _get_discovery_agent()
-        elif request.mode == "market_research":
+        elif chat_mode == "market_research":
             agent = _get_research_agent()
-        elif request.mode == "planning":
+        elif chat_mode == "planning":
             agent = _get_planning_agent()
-        elif request.mode == "development":
+        elif chat_mode == "development":
             agent = _get_development_agent()
-        elif request.mode == "hardware":
+        elif chat_mode == "hardware":
             agent = _get_hardware_agent()
-        elif request.mode == "testing":
+        elif chat_mode == "testing":
             agent = _get_testing_agent()
-        elif request.mode == "learning":
+        elif chat_mode == "learning":
             agent = _get_learning_agent()
         else:
             agent = _get_agent()
@@ -2057,12 +2087,12 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             # though the desktop is online and able to execute the task.  The
             # local agent receives the project id and rebuilds its own scoped
             # context, while the task remains observable through WebSocket.
-            if request.mode == "planning" and _requires_local_client(request.mode):
+            if chat_mode == "planning" and _requires_local_client(chat_mode):
                 task = agent.task_manager.create(
                     title=request.message[:60],
                     description=request.message,
                     project_id=request.project_id,
-                    mode=request.mode,
+                    mode=chat_mode,
                     requires_local_client=True,
                 )
                 routed = await _route_task_to_desktop(task, current_user.user_id)
@@ -2071,13 +2101,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                         "task_id": task.id,
                         "status": task.status,
                         "project_id": request.project_id,
-                        "mode": request.mode,
+                        "mode": chat_mode,
                         "dispatched_to_desktop": True,
                     }
 
             # For discovery mode, capture the latest Q&A and update the Problem Brief
             # BEFORE building context so the agent sees the freshest state.
-            if request.mode == "discovery":
+            if chat_mode == "discovery":
                 last_question = _record_discovery_qa(
                     request.project_id,
                     current_user.user_id,
@@ -2099,25 +2129,25 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             builder = _get_context_builder()
             # Swap the context builder's memory backend to the project's memory file
             builder.memory = _project_memory(request.project_id)
-            if request.mode == "discovery":
+            if chat_mode == "discovery":
                 context = builder.build_discovery_context(project)
-            elif request.mode == "market_research":
+            elif chat_mode == "market_research":
                 context = builder.build_research_context(project)
-            elif request.mode == "planning":
+            elif chat_mode == "planning":
                 context = builder.build_planning_context(project)
-            elif request.mode == "development":
+            elif chat_mode == "development":
                 context = builder.build_development_context(project)
-            elif request.mode == "hardware":
+            elif chat_mode == "hardware":
                 context = builder.build_hardware_context(project)
-            elif request.mode == "testing":
+            elif chat_mode == "testing":
                 context = builder.build_testing_context(project)
-            elif request.mode == "learning":
+            elif chat_mode == "learning":
                 context = builder.build_learning_context(project)
             else:
                 context = builder.build(project)
             user_input = f"{context}\n{request.message}"
             # Ensure the agent uses the project's memory for this task
-            if request.mode == "learning":
+            if chat_mode == "learning":
                 agent.memory = _learning_repository
             else:
                 agent.memory = _project_memory(request.project_id)
@@ -2140,17 +2170,17 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                     title=user_input[:60],
                     description=user_input,
                     project_id=request.project_id,
-                    mode=request.mode,
-                    requires_local_client=_requires_local_client(request.mode),
+                    mode=chat_mode,
+                    requires_local_client=_requires_local_client(chat_mode),
                 )
-                if _requires_local_client(request.mode):
+                if _requires_local_client(chat_mode):
                     routed = await _route_task_to_desktop(task, current_user.user_id)
                     if routed:
                         return {
                             "task_id": task.id,
                             "status": task.status,
                             "project_id": request.project_id,
-                            "mode": request.mode,
+                            "mode": chat_mode,
                             "dispatched_to_desktop": True,
                         }
                 return StreamingResponse(
@@ -2162,17 +2192,17 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 title=user_input[:60],
                 description=user_input,
                 project_id=request.project_id,
-                mode=request.mode,
-                requires_local_client=_requires_local_client(request.mode),
+                mode=chat_mode,
+                requires_local_client=_requires_local_client(chat_mode),
             )
-            if _requires_local_client(request.mode):
+            if _requires_local_client(chat_mode):
                 routed = await _route_task_to_desktop(task, current_user.user_id)
                 if routed:
                     return {
                         "task_id": task.id,
                         "status": task.status,
                         "project_id": request.project_id,
-                        "mode": request.mode,
+                        "mode": chat_mode,
                         "dispatched_to_desktop": True,
                     }
 
@@ -2197,7 +2227,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 "task_id": task.id,
                 "status": task.status,
                 "project_id": request.project_id,
-                "mode": request.mode,
+                "mode": chat_mode,
                 "content": _assistant_content(task),
                 "steps": [step.to_dict() for step in task.steps],
             }

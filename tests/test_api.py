@@ -7,12 +7,20 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from kyrozen.api.server import create_app
+from kyrozen.api.server import _normalize_chat_mode, create_app
 
 from .conftest import MockModel
 
 
 from tests.conftest import make_authenticated_app
+
+
+def test_solution_prompt_normalizes_stale_client_mode():
+    prompt = "请完成方案设计闭环并保存保守、平衡、激进三案，不要编造结果。"
+    assert _normalize_chat_mode("product_definition", prompt) == "planning"
+    assert _normalize_chat_mode("market_research", prompt) == "planning"
+    assert _normalize_chat_mode("planning", prompt) == "planning"
+    assert _normalize_chat_mode("market_research", "搜索真实来源") == "market_research"
 
 
 @pytest.fixture

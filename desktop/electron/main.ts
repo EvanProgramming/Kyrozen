@@ -2904,7 +2904,7 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMod
     // sync is catching up. Short, ordinary-user intent must still reach the
     // correct server-side Agent so a stale problem_discovery value cannot
     // route a solution-confirmation request back to discovery.
-    const inferredMode = /方案确认|确认方案|候选方案|方案比较|生成三案|生成三个方案/i.test(message)
+    const inferredMode = /方案确认|确认方案|候选方案|方案比较|生成三案|生成三个方案|方案设计闭环|保存方案/i.test(message)
       ? 'planning'
       : /市场研究|市场调研|研究结果|研究报告|MARKET\.md|竞品分析/i.test(message)
         ? 'market_research'

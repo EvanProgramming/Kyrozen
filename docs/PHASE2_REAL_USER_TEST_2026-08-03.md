@@ -362,8 +362,67 @@
 | 2026-08-09 | Computer Use 应用标识出现多个安装副本 | 以 bundle id 读取状态时发现 `/Applications/Kyrozen.app` 与两个 `desktop/release` 构建副本同时存在，Computer Use 返回应用标识歧义；未操作任何副本。 | RETRY | 改用明确的 `/Applications/Kyrozen.app` 路径，后续清理只保留 Applications 安装版 |
 | 2026-08-09 | 最新安装版启动时网络与会话恢复失败 | Computer Use 截图显示 `net::ERR_INTERNET_DISCONNECTED`，工作区停在“正在准备项目工作区”，侧栏提示缓存 JWT 已过期；未把缓存数据或界面停留误判为真实刷新成功。 | RETRY | 重新读取状态并按普通用户可见入口刷新/重新登录；若仍失败，记录生产网络或认证阻塞 |
 | 2026-08-09 | Artifact 同步失败后聊天工作区保持忙碌 | 重新登录并打开项目后，生产接口对多个 Artifact 读取超时；Electron 只记录 `Artifact sync failed`，没有发送失败终态，界面持续显示“正在准备项目工作区”，聊天输入保持禁用。 | FIXING | 让同步 catch 发送失败终态并保留可见错误，再重新构建/安装和刷新验收 |
+| 2026-08-10 | 工作区修复后的 DMG 首次打包遇到 TLS 断开 | TypeScript、Vite、Electron main/preload 构建均通过；electron-builder 打包阶段返回 `Client network socket disconnected before secure TLS connection was established`，退出码 1，未据此生成新验收 DMG。 | RETRY | 在不改动源码的前提下有限重试同一 arm64 打包 |
+| 2026-08-10 | 工作区修复后的 DMG 打包网络重试仍失败 | 申请网络权限后第二次 arm64 构建仍在 electron-builder 下载/打包阶段返回同一 TLS socket 断开；TypeScript、Vite 和 Electron 资源构建均通过，未把旧 DMG 当作本次修复的验收证据。 | RETRY | 检查本机 electron-builder 缓存，避免重复下载后再进行一次有限构建 |
+| 2026-08-10 | 工作区修复后的手工 DMG 首次创建异常 | 最新 `.app` 已生成，但 `hdiutil create -srcfolder release/mac-arm64` 返回 `Device not configured`，未生成或安装该 DMG。 | RETRY | 重新执行同一镜像创建并随后独立复核签名与哈希 |
+| 2026-08-10 | 手工 DMG 创建参数重试仍异常 | 显式指定 200 MB、HFS+、UDZO 并以最新 `.app` 为源后，`hdiutil create` 仍返回 `Device not configured`；未改变现有挂载。 | RETRY | 对同一明确目标申请系统磁盘镜像权限后重试 |
+| 2026-08-10 | 手工 DMG 创建暴露磁盘空间不足 | 系统权限重试时在复制 `Electron Framework.../locale.pak` 处返回 `No space left on device`；未删除任何文件，镜像未生成。 | BLOCKED | 只读核对根卷和本项目 release 占用，仅清理本项目可重建的旧打包产物后重试 |
+| 2026-08-10 | DMG 容量不足根因已确认 | 只读核对显示根卷仍有约 38 GiB 可用，而最新 `release/mac-arm64/Kyrozen.app` 约 239 MB；上一轮手工镜像仅指定 200 MB，属于目标镜像容量不足，不是系统磁盘耗尽。 | RETRY | 使用 500 MB 镜像容量重新创建并复核 |
+| 2026-08-10 | 退出旧 Applications 安装首次 AppleScript 标识错误 | 对 bundle id 执行正常退出时 macOS 返回 `Can’t get application id "com.kyrozen.desktop" (-1728)`；未关闭、杀死或删除任何应用。 | RETRY | 使用显示名 `Kyrozen` 请求正常退出，并用 Computer Use 核对运行状态 |
+| 2026-08-10 | Computer Use 退出验证复用失效内核变量 | 旧 Node REPL 内核已重置，复用 `skyResume` 返回 `skyResume is not defined`；未启动或改变 Kyrozen。 | RETRY | 重新导入 `@oai/sky` 后重新读取应用列表 |
+| 2026-08-10 | 手工 DMG 通过 Finder 默认打开失败 | 对新建 DMG 执行 `open` 返回 `kLSExecutableIncorrectFormat`，系统未挂载镜像；未复制或安装应用。 | RETRY | 用系统 `hdiutil attach` 挂载该精确 DMG，再通过 Finder 执行安装 |
+| 2026-08-10 | Finder 直接打开挂载点默认处理器错误 | DMG 已挂载到 `/Volumes/Kyrozen`，但执行 `open /Volumes/Kyrozen` 仍返回 `kLSExecutableIncorrectFormat`；挂载和文件未改变。 | RETRY | 用 Finder 的“前往文件夹”进入挂载点并用 UI 复制应用 |
+| 2026-08-10 | 旧安装正常退出入口未生效 | 显示名 AppleScript 返回连接无效，Computer Use `super+q` 无报错但 `isRunning` 仍为 true；未覆盖或删除旧应用。 | RETRY | 读取精确 Applications 进程后只发送 TERM，随后核对退出状态 |
+| 2026-08-10 | 旧安装精确进程读取受系统权限拒绝 | `ps` 读取 `/Applications/Kyrozen.app` 进程时返回 `operation not permitted`，未发送终止信号或修改应用。 | RETRY | 改用 Computer Use 状态核对，并在需要时申请精确进程权限 |
 | 2026-08-09 | Dia 登录标签的 AX 切换动作不支持 | 读取 Dia 当前状态后按 `Kyzrozen 登录` 标签索引切换返回 `AXError.actionUnsupported`；未改变当前标签或页面内容。 | RETRY | 使用截图坐标切换到已有 Kyrozen 登录标签，再重新读取状态 |
 | 2026-08-09 | Computer Use 等待工作区同步达到默认超时 | 为等待项目卡片触发的工作区同步，Node REPL 在 30 秒默认执行窗口后返回 `js execution timed out; kernel reset`；未改变应用数据或退出应用。 | RETRY | 使用显式更长的 Computer Use 执行超时重新初始化内核并读取状态 |
 | 2026-08-09 | 关闭旧安装的 Computer Use 坐标缺失 | 重新读取旧安装可访问性树后，关闭按钮显示为索引 246；按索引点击返回 `coordinate must include finite x and y coordinates`，未改变应用状态。 | RETRY | 使用受支持的快捷键退出并复核进程状态，再继续唯一 DMG 安装 |
 | 2026-08-09 | 旧安装快捷键退出未生效 | 按技能支持的 `super+q`（路径和显示名各一次）以及 `super+w` 后，Computer Use 无报错但 `com.kyrozen.desktop` 仍显示 `isRunning: true`；未强制杀进程或删除应用。 | RETRY | 用精确应用标识执行可逆的正常退出，再验证进程后重建安装 |
 | 2026-08-09 | 卸载旧 DMG 首次受沙箱限制 | 对精确挂载点 `/Volumes/Kyrozen 0.1.0-arm64` 执行 `hdiutil detach` 返回 `Operation not permitted`；未卸载、未删除文件、未影响其他磁盘。 | RETRY | 申请仅针对该挂载点的系统卸载权限 |
+| 2026-08-10 | Finder 前往挂载点时 Computer Use 应用参数错误 | 在已打开的 Finder“前往文件夹”对话框提交 `/Volumes/Kyrozen` 时，Computer Use 返回 `Computer Use app approval requires app to be a plain data property`；未改变 Finder、挂载点或安装文件。 | RETRY | 按 Computer Use 要求使用明确的 Finder 应用数据参数重新读取并提交路径 |
+| 2026-08-10 | Finder 提交路径首次键名错误 | 按 Computer Use 发送 `RETURN` 时返回 `keyNotFound("RETURN")`；未改变 Finder 或挂载点。 | RETRY | 按技能规范改用 `Return` 键名重新提交 |
+| 2026-08-10 | Finder 路径建议项动作索引错误 | 对父列表元素 11 调用其子元素才暴露的 `open` 动作，Computer Use 返回 `open is not a valid secondary action for 11`；未改变 Finder 或挂载点。 | RETRY | 重新读取 Finder 状态并在实际暴露动作的文本元素上执行 |
+| 2026-08-10 | Finder 替换安装等待时 Computer Use 通道关闭 | 在 Finder 确认替换旧 `/Applications/Kyrozen.app` 后，等待复制完成的 Computer Use 原生通道返回 `Sky Computer Use native pipe closed before response`；未据此判断安装成功，先进行只读哈希核对。 | RETRY | 读取 Applications 安装包哈希、签名和运行状态，确认替换结果后继续 |
+| 2026-08-10 | 新安装登录按钮索引在动作前失效 | 新安装版已显示 GitHub 登录页，但点击旧状态中的登录按钮时 Computer Use 返回 `The element ID is no longer valid`；未发起授权或改变登录状态。 | RETRY | 重新读取 Kyrozen 状态后使用最新登录按钮索引 |
+| 2026-08-10 | 手工 DMG 安装版更新检查提示缺少 app-update.yml | 新安装应用启动后界面提示 `ENOENT: no such file or directory, open '/Applications/Kyrozen.app/Contents/Resources/app-update.yml'`；应用仍可登录、载入项目和使用工作区，未把提示忽略为成功。 | RECORDED | 后续补齐 electron-builder 更新配置或在无自动更新的手工验收包中关闭该检查 |
+| 2026-08-10 | 方案确认消息回车未提交 | 普通用户输入方案确认参数后按回车，输入框仍保留原文，未出现新消息或任务活动；未改变项目资料。 | RETRY | 使用当前状态中的“发送”按钮提交相同内容并核对可见结果 |
+| 2026-08-10 | 方案确认按钮点击后界面重渲染 | 点击“发送”后 Computer Use 返回 `The user changed '/Applications/Kyrozen.app'. Re-query the latest state`，未在旧状态上继续操作；先重新读取以确认提交结果。 | RETRY | 重新读取安装版状态并核对用户消息、任务活动和方案结果 |
+| 2026-08-10 | 方案确认任务长时间无终态 | 普通用户请求已提交，日志显示确认参数写入 Problem Brief 并继续调用产品定义 Agent；约 3 分钟后界面仍显示“正在查看文件：项目工作区”，输入框保持禁用，未生成候选方案或失败终态。 | BLOCKED | 先停止本次任务并核对 Agent/生产后端；修复项目管理或任务终态链路后再重试方案确认 |
+| 2026-08-10 | 方案确认最终以网络/Agent 超时失败 | 任务最终显示“网络连接异常，请检查网络后重试”；本地日志记录 `TimeoutError`，任务耗时约 317 秒，随后才收到一个迟到的模型流片段；未保存方案候选或决策。 | RETRY | 核对当前 WebSocket/API 网络与生产后端状态，恢复后只重试一次并验证持久化结果 |
+| 2026-08-10 | 工作台项目类型按钮无可点击 AX frame | 在决策中心可见“嵌入式”按钮，但按最新 AX 索引点击返回 `elementHasNoFrame`；未写入项目类型或推进流程。 | RETRY | 刷新工作台状态，若可见界面仍正常则使用截图坐标完成同一按钮点击 |
+| 2026-08-10 | 工作台硬件状态读取失败 | 工作台加载过程中 Electron 日志记录 `/api/projects/proj_b9e7dd3f/hardware/state` 返回 `fetch failed`；未把硬件状态缺失误判为设备未连接或物理验收通过。 | BLOCKED | 保持硬件证据为未完成，继续验收非硬件中心并在后端恢复后重试 |
+| 2026-08-10 | 决策中心 Agent 请求未持久化候选方案 | 点击“请求方案 Agent 生成三案”后，本地 Agent 仅返回“先浏览项目工作区”的短回复；只读 `/api/projects/proj_b9e7dd3f/planning/state` 显示 `solutions=[]`、无 comparison/decision/prd Artifact。 | BLOCKED | 修复方案 Agent 的真实工具调用/项目管理持久化链路后再请求三案；当前不允许进入硬件阶段 |
+| 2026-08-10 | 工作台采购标签 AX 切换失败 | 采购中心标签点击后仍停留在决策中心；对其 settable AX 值设为 `1` 返回 `AXError.cannotComplete`，未修改 BOM 或采购状态。 | RETRY | 读取工作台截图，用可见标签坐标切换并重新读取页面 |
+| 2026-08-10 | 工作台截图临时文件过期 | 为核对标签坐标时复用的 Computer Use 截图临时文件已被清理，读取返回 `ENOENT`；未改变应用状态或项目数据。 | RETRY | 重新获取状态并在同一调用中读取新截图 |
+| 2026-08-10 | 工作台验收期间意外回到登录页 | 工作台标签核对时，新安装版重新显示“使用 GitHub 登录”，项目与工作台状态不可见；未把会话丢失当作刷新恢复成功。 | RETRY | 按默认浏览器 Dia 完成 GitHub 登录回调，再重新读取项目和工作台 |
+| 2026-08-10 | 工作台改进标签首次坐标点击未切换 | 测试中心仍保持选中，点击改进中心坐标后没有切换到目标面板，也没有报错；未修改改进数据。 | RETRY | 重新读取状态后用截图校准标签坐标，再核对改进中心 |
+| 2026-08-10 | 工作台反馈标签首次 AX 点击未切换 | 改进中心仍保持选中，点击旧 AX 索引后没有切换到反馈中心，也没有报错；未修改反馈数据。 | RETRY | 重新读取完整工作台状态后用最新反馈标签索引或截图坐标切换 |
+| 2026-08-10 | 测试中心真实数据可见 | 安装版测试中心显示已有失败→缺陷→修复→原用例回归通过记录，包含 KYROZEN_SERIAL_PROBE heartbeat 0、1、2 和拔插后重新发现证据；表单在必填内容为空时保持禁用，未伪造新测试结果。 | PASS | 保留现有真实测试链路并在方案确认、实物验收后继续补充 |
+| 2026-08-10 | 改进中心真实数据可见 | 安装版改进中心显示已保存的 Desktop Improvement Suggestion（version 3、draft），包含证据、收益、风险和工作量；空表单写入按钮按预期禁用。 | PASS | 后续方案闭环后再决定接受/延期，不改变现有建议状态 |
+| 2026-08-10 | 反馈中心按要求跳过三名用户验收 | 安装版反馈中心显示 `participant count 0`、`minimum participants met false`；没有伪造用户、任务或满意度数据。 | PASS_WITH_LIMITATION | 按用户明确要求跳过三名真实用户验收，不能据此保存最终验证报告 |
+| 2026-08-10 | 工作台刷新后状态恢复 | 点击安装版项目画布“刷新”后，仍恢复同一项目、反馈中心选中状态和 `participant count 0`；未把刷新恢复误判为方案或硬件门禁通过。 | PASS_WITH_LIMITATION | 继续验证方案持久化和硬件证据 |
+| 2026-08-10 | 工作台 Tab 键首次未移动焦点 | 在反馈中心当前选中标签上按一次 Tab 后，Computer Use 报告可访问性树无变化，焦点仍在反馈中心标签；尚未把单次结果误判为完整键盘验收通过。 | RETRY | 先聚焦表单控件，再按 Tab 核对控件间导航 |
+| 2026-08-10 | 反馈表单 AX 索引聚焦到关闭按钮 | 按刚读取的反馈参与者字段索引点击后，焦点实际落到项目画布“关闭”按钮，未输入或提交任何反馈。 | RETRY | 重新获取截图，使用可见字段坐标聚焦后再检查 Tab 导航 |
+| 2026-08-10 | 反馈表单内 Tab 导航未移动 | 用截图坐标聚焦“参与者编号”输入框后按 Tab，Computer Use 仍报告焦点停留在同一字段；未输入或提交用户反馈。 | RETRY | 再进行一次 Tab 重试并核对是否为 Electron/渲染器键盘焦点问题 |
+| 2026-08-10 | 反馈表单 Tab 导航重试仍未移动 | 第二次 Tab 重试后焦点仍停留在“参与者编号”输入框，键盘导航验收未通过；未产生用户反馈数据。 | BLOCKED | 修复或定位 renderer 的表单焦点/Tab 处理后重新验收，当前不宣称七个中心键盘验收通过 |
+| 2026-08-10 | 窄窗口拖拽定位失败 | 尝试从缩放后窗口右下边缘拖窄时，Computer Use 返回 `windowNotFoundAtPosition`；未改变窗口尺寸或项目数据。 | BLOCKED | 采用应用可见缩放/系统窗口控件重新定位后再做窄窗口检查，当前不宣称窄窗口验收通过 |
+| 2026-08-10 | 后端重启后方案按钮旧索引未触发 | 生产 backend 已恢复 healthy 后，点击决策中心旧按钮索引没有产生忙碌状态或新任务；未把无变化误判为方案请求成功。 | RETRY | 重新读取完整 AX 树后使用最新按钮索引，再核对任务与 Artifact |
+| 2026-08-10 | 方案请求仍被本地 ProductPlanningAgent 接管 | 热更新 backend 后重新点击最新方案按钮，安装版日志仍显示 `assign_task` → `ProductPlanningAgent (mode=product_definition)`；107 秒后本地模型输出未执行的 DSML `file_read` 工具文本，没有候选方案或 Artifact 写入。 | BLOCKED | 继续修复方案请求路由/本地 Agent 边界；当前不允许进入硬件阶段 |
+| 2026-08-10 | 方案路由修复首次提交遇到 Git 锁权限错误 | `git add` 无法创建 `.git/index.lock`，返回 `Operation not permitted`；未暂存 source/test 文件，也未触碰 `video/`。 | RETRY | 不删除锁文件、不重置工作树，申请同一精确 Git 操作的权限后重试并核对暂存范围 |
+| 2026-08-10 | 部署后路由核对命令转义错误 | backend 重启后只读核对命令中的 Python 字符串转义错误，返回 `SyntaxError`；未改变服务或项目数据。 | RETRY | 改用不包含嵌套 Unicode 引号的只读核对命令，并单独确认 health 与模式归一结果 |
+| 2026-08-10 | 实际 backend 重启后短暂未监听 | systemd 已显示 `active`，但紧接着的本机 health curl 返回 `Could not connect to server`；journal 显示服务正在启动，未据此判断部署失败。 | RETRY | 等待启动完成后重新检查 health、日志和桌面端连接 |
+| 2026-08-10 | backend 重启后遗留方案任务仍被重放 | WebSocket 恢复后服务发送遗留 `assign_task`，本地 ProductPlanningAgent 运行 73 秒后只回复“请提供项目 ID”；没有候选方案或 Artifact 写入。 | RETRY | 让遗留任务收敛后，再由新服务端路由创建一条全新的方案请求并核对任务模式 |
+| 2026-08-10 | 服务端方案任务触发外部模型限流回退 | 新服务端任务已在 host backend 执行并调用真实 `list_dir`/`file_read`；journal 同时记录 Gemini 429、Groq 413 TPM 超限，随后回退 DeepSeek。未把回退中的中间结果当作方案成功。 | RETRY | 继续等待任务终态；若最终失败，保留限流状态并从失败入口重试，不生成替代方案 |
+| 2026-08-10 | 新服务端方案任务诚实阻塞但读取了错误资料边界 | 新任务已确认不再派给本地 Agent，耗时约 106 秒并正确拒绝编造方案；但服务端读取的 `memory.json`/`stagegate.json` 显示无证据、无 MARKET.md、仍在 problem_discovery，与工作台 API 已显示的真实 Problem Brief/市场报告不一致，因此未生成候选方案。 | BLOCKED | 修复服务端 planning context 与项目 Artifact/研究状态的一致性后再重试方案确认 |
+| 2026-08-10 | 本轮桥接版 DMG 目录打包遇到 GitHub DNS | 代码桥接已通过桌面 lint 与 TypeScript/Vite 构建；`npx electron-builder --mac --arm64 --dir` 在打包阶段访问 GitHub 返回 `getaddrinfo ENOTFOUND github.com`，退出码 1，尚未据此生成新的验收安装包。 | RETRY | 在不修改源码的前提下，对同一 arm64 目录打包执行一次有限网络重试；若成功再制作并安装单一 DMG |
+| 2026-08-10 | 本轮桥接版 DMG 已生成但独立 imageinfo 首次异常 | 网络权限重试后 arm64 目录打包成功，手工 DMG 已生成；`codesign --verify --deep --strict` 和 DMG/app.asar 哈希读取通过，但 `hdiutil imageinfo` 返回 `Device not configured`，未把该镜像复核误判为成功。 | RETRY | 重新执行同一精确 DMG 的镜像复核；若仍异常，使用 Finder/hdiutil attach 实际挂载作为安装前复核，并记录结果 |
+| 2026-08-10 | Finder 替换安装首次因旧 Kyrozen 正在使用而失败 | 通过本轮 DMG 在 Finder 选择“替换”时提示 `The operation can’t be completed because the item “Kyrozen” is in use`；未覆盖正在运行的应用、未创建第二个安装副本。 | RETRY | 关闭唯一 `/Applications/Kyrozen.app` 后重新执行同一 Finder 替换，并再次核对安装包哈希 |
+| 2026-08-10 | 桥接版安装后 GitHub 登录按钮索引首次失效 | 新 `/Applications/Kyrozen.app` 已启动并显示 GitHub 登录页；按初始状态中的按钮索引点击时 Computer Use 返回 `The element ID is no longer valid`，未发起授权。 | RETRY | 重新读取安装版登录页状态后使用新索引点击，并继续通过默认 Dia 浏览器完成授权回调 |
+| 2026-08-10 | 桥接版安装首次恢复项目资料时单个 Artifact 超时 | 安装版重新载入项目后，界面显示 `项目资料同步失败：请求超时（15 秒）：/api/projects/proj_b9e7dd3f/artifacts/art_3962bd58`，工作台暂时显示“正在整理项目资料”；未把部分恢复误判为完整刷新成功。 | RETRY | 等待后端读取恢复或点击工作台刷新，确认方案资料同步入口仍可用 |
+| 2026-08-10 | 桥接版首次点击方案按钮未获 Computer Use 授权 | 决策中心显示“请求方案 Agent 生成三案”，但点击时 Computer Use 返回 `Computer Use was not approved to use Kyrozen`；未提交方案请求或修改项目资料。 | RETRY | 重新读取明确 `/Applications/Kyrozen.app` 的当前状态，按新可访问性索引重试同一按钮 |
+| 2026-08-10 | 桥接版精确路径重试仍未获 Computer Use 授权 | 重新读取完整决策中心后，对 `/Applications/Kyrozen.app` 的同一“请求方案 Agent 生成三案”按钮重试，仍返回 `Computer Use was not approved to use Kyrozen`；未提交请求。 | BLOCKED | 需要恢复本次新安装应用的 Computer Use 操作授权后，才能继续普通用户方案确认；不绕过授权、不直接写入方案 Artifact |
+| 2026-08-10 | 关闭旧 Kyrozen 窗口首次复用失效 Computer Use 会话 | 读取状态后尝试按窗口关闭按钮时，Computer Use 返回 `Computer Use is not active for '/Applications/Kyrozen.app'`；未关闭、覆盖或删除应用。 | RETRY | 用当前显示名 Kyrozen 重新获取完整状态，再按新状态中的关闭动作重试 |
+| 2026-08-10 | 打开 Kyrozen 应用菜单超时 | 重新读取安装版状态后点击应用菜单时，Computer Use 返回 `-10005: timeoutReached`；未改变应用设置或项目数据。 | RETRY | 重新读取当前应用状态，优先使用当前窗口快捷键/关闭动作完成正常退出 |
+| 2026-08-10 | 旧 Kyrozen 退出前状态读取再次超时 | 对显示名 Kyrozen 请求新完整可访问性树时，Computer Use 再次返回 `-10005: timeoutReached`；未改变应用或文件。 | RETRY | 使用列表中已确认的应用实例执行一次精确正常退出，再只读核对运行状态 |
+| 2026-08-10 | Computer Use bundle id 重新定位发现构建副本歧义 | 使用 `com.kyrozen.desktop` 定位旧安装时，Computer Use 返回多个匹配：`/Applications/Kyrozen.app`、两个项目 release 构建副本和当前 DMG 挂载副本；未操作任何副本。 | RETRY | 继续使用明确的 `/Applications/Kyrozen.app` 路径，并在安装后清理 DMG 挂载，项目 release 目录只作为构建输入保留 |
+| 2026-08-10 | 精确 Applications Kyrozen 状态读取仍超时 | 对 `/Applications/Kyrozen.app` 的 Computer Use 状态读取返回 `-10005: timeoutReached`，旧应用当前未能通过可访问性树正常响应；未修改或删除应用。 | RETRY | 在不触碰其他匹配副本的前提下，使用应用级正常退出入口恢复可替换状态 |

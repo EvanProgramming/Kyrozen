@@ -1387,6 +1387,302 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
   }
 }
 
+interface Phase2JsonRecord {
+  [key: string]: unknown;
+}
+
+interface LocalPhase2PlanningInputs {
+  evidenceIds: string[];
+  researchSourceUrls: string[];
+  researchRunIds: string[];
+  context: string;
+}
+
+function isPhase2JsonRecord(value: unknown): value is Phase2JsonRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function limitPhase2Context(value: unknown, maxLength: number): string {
+  const text = String(value ?? '').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}\n…（内容已截断）` : text;
+}
+
+function planningModeForMessage(message: string): string {
+  if (/方案确认|确认方案|候选方案|方案比较|生成三案|生成三个方案|方案设计闭环|保存方案/i.test(message)) {
+    return 'planning';
+  }
+  if (/市场研究|市场调研|研究结果|研究报告|MARKET\.md|竞品分析/i.test(message)) {
+    return 'market_research';
+  }
+  return '';
+}
+
+/**
+ * Bridge the local desktop Phase 2 record stream into the server Artifact
+ * chain before a planning request. The local Python agent can complete a
+ * discovery/research run while offline, but the cloud planning agent must
+ * still receive project-scoped, durable evidence IDs and real source URLs.
+ * This imports only files already present in the selected project workspace;
+ * it never invents a result for a failed, rate-limited, or unconfigured
+ * provider.
+ */
+async function syncLocalPhase2PlanningInputs(
+  projectId: string,
+  root: string,
+): Promise<LocalPhase2PlanningInputs> {
+  const artifacts = (await apiGet(`/api/projects/${projectId}/artifacts`)) as ArtifactSummary[];
+  const knownTitles = new Set(artifacts.map((artifact) => `${artifact.type}:${artifact.title}`));
+  const evidenceIds: string[] = [];
+  const researchSourceUrls: string[] = [];
+  const researchRunIds: string[] = [];
+  const localEvidenceMap = new Map<string, string>();
+  const syncWarnings: string[] = [];
+
+  const evidenceDir = path.join(root, '.kyrozen', 'evidence');
+  let evidenceFiles: string[] = [];
+  try {
+    evidenceFiles = (await fs.readdir(evidenceDir))
+      .filter((name) => name.endsWith('.json'))
+      .sort();
+  } catch {
+    // A project is allowed to have no local evidence yet. The planning agent
+    // will see the absence in the context and must keep the gate blocked.
+  }
+
+  for (const fileName of evidenceFiles) {
+    const localId = fileName.replace(/\.json$/i, '');
+    let raw: string;
+    let parsed: unknown;
+    try {
+      raw = await fs.readFile(path.join(evidenceDir, fileName), 'utf-8');
+      parsed = JSON.parse(raw);
+    } catch (err: any) {
+      throw new Error(`本地证据无法读取 ${fileName}：${err?.message || String(err)}`);
+    }
+    if (!isPhase2JsonRecord(parsed)) {
+      syncWarnings.push(`忽略非对象证据 ${fileName}`);
+      continue;
+    }
+    const claim = String(parsed.claim || '').trim();
+    if (!claim) {
+      syncWarnings.push(`忽略缺少 claim 的证据 ${fileName}`);
+      continue;
+    }
+    const title = `Desktop Imported Evidence ${localId}`;
+    const key = `discovery_evidence:${title}`;
+    const existing = artifacts.find((artifact) => `${artifact.type}:${artifact.title}` === key);
+    if (existing) {
+      localEvidenceMap.set(localId, existing.id);
+      evidenceIds.push(existing.id);
+      continue;
+    }
+    const imported = {
+      ...parsed,
+      notes: [String(parsed.notes || '').trim(), `desktop-local-id:${localId}`]
+        .filter(Boolean)
+        .join('；'),
+    };
+    try {
+      const created = await apiPost(`/api/projects/${projectId}/artifacts`, {
+        type: 'discovery_evidence',
+        title,
+        content: JSON.stringify(imported, null, 2),
+        change_reason: 'Sync local Phase 2 evidence before solution planning',
+      }, true);
+      const artifactId = String(created?.id || '');
+      if (!artifactId) throw new Error('服务端未返回 Artifact ID');
+      artifacts.push({
+        id: artifactId,
+        type: 'discovery_evidence',
+        title,
+        version: Number(created.version || 1),
+        updated_at: String(created.updated_at || new Date().toISOString()),
+      });
+      knownTitles.add(key);
+      localEvidenceMap.set(localId, artifactId);
+      evidenceIds.push(artifactId);
+    } catch (err: any) {
+      throw new Error(`本地证据同步失败 ${fileName}：${err?.message || String(err)}`);
+    }
+  }
+
+  const researchDir = path.join(root, '.kyrozen', 'context');
+  let researchFiles: string[] = [];
+  try {
+    researchFiles = (await fs.readdir(researchDir))
+      .filter((name) => name.startsWith('Research_Run_') && name.endsWith('.md'))
+      .sort();
+  } catch {
+    // No local run files is valid; the context below will say so explicitly.
+  }
+
+  const sourceByUrl = new Map<string, Phase2JsonRecord>();
+  const researchRuns: Phase2JsonRecord[] = [];
+  for (const fileName of researchFiles) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fs.readFile(path.join(researchDir, fileName), 'utf-8'));
+    } catch (err: any) {
+      syncWarnings.push(`研究运行无法解析 ${fileName}：${err?.message || String(err)}`);
+      continue;
+    }
+    if (!isPhase2JsonRecord(parsed)) {
+      syncWarnings.push(`忽略非对象研究运行 ${fileName}`);
+      continue;
+    }
+    researchRuns.push(parsed);
+    const runId = String(parsed.run_id || fileName.replace(/^Research_Run_|\.md$/g, '')).trim();
+    if (!runId) continue;
+    const title = `Desktop Imported Research Run ${runId}`;
+    const key = `research_run:${title}`;
+    const existing = artifacts.find((artifact) => `${artifact.type}:${artifact.title}` === key);
+    if (existing) {
+      researchRunIds.push(runId);
+    } else {
+      try {
+        const created = await apiPost(`/api/projects/${projectId}/artifacts`, {
+          type: 'research_run',
+          title,
+          content: JSON.stringify(parsed, null, 2),
+          change_reason: 'Sync local Phase 2 research run before solution planning',
+        }, true);
+        const artifactId = String(created?.id || '');
+        if (!artifactId) throw new Error('服务端未返回 Artifact ID');
+        artifacts.push({
+          id: artifactId,
+          type: 'research_run',
+          title,
+          version: Number(created.version || 1),
+          updated_at: String(created.updated_at || new Date().toISOString()),
+        });
+        knownTitles.add(key);
+        researchRunIds.push(runId);
+      } catch (err: any) {
+        syncWarnings.push(`研究运行同步失败 ${runId}：${err?.message || String(err)}`);
+      }
+    }
+
+    const sources = Array.isArray(parsed.sources) ? parsed.sources : [];
+    for (const source of sources) {
+      if (!isPhase2JsonRecord(source)) continue;
+      const url = String(source.url || '').trim();
+      if (!/^https?:\/\/[^\s]+$/i.test(url)) {
+        syncWarnings.push(`忽略没有绝对 HTTP(S) URL 的研究来源：${String(source.title || '未命名来源')}`);
+        continue;
+      }
+      if (!sourceByUrl.has(url)) sourceByUrl.set(url, source);
+    }
+  }
+
+  for (const [url, source] of sourceByUrl) {
+    const title = `Research Source: ${url}`;
+    const key = `research_source:${title}`;
+    const existing = artifacts.find((artifact) => `${artifact.type}:${artifact.title}` === key);
+    try {
+      if (!existing) {
+        const created = await apiPost(`/api/projects/${projectId}/research/sources`, {
+          source,
+        }, true);
+        const artifactId = String(created?.artifact_id || '');
+        if (!artifactId) throw new Error('服务端未返回研究来源 Artifact ID');
+        artifacts.push({
+          id: artifactId,
+          type: 'research_source',
+          title,
+          version: Number(created.version || 1),
+          updated_at: new Date().toISOString(),
+        });
+        knownTitles.add(key);
+      }
+      researchSourceUrls.push(url);
+    } catch (err: any) {
+      // A single malformed or rejected source must not erase the remaining
+      // real research run. Keep the failure visible to the planning agent.
+      syncWarnings.push(`研究来源同步失败 ${url}：${err?.message || String(err)}`);
+    }
+  }
+
+  const problemPath = path.join(root, 'docs', 'PROBLEM.md');
+  const marketPath = path.join(root, 'docs', 'MARKET.md');
+  const briefPath = path.join(root, '.kyrozen', 'context', 'Problem_Brief.md');
+  const readOptional = async (filePath: string): Promise<string> => {
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch {
+      return '';
+    }
+  };
+  const problemMarkdown = await readOptional(problemPath);
+  const marketMarkdown = await readOptional(marketPath);
+  const briefRaw = await readOptional(briefPath);
+
+  // Make the server-side planning context aware of the real local brief when
+  // it has not been persisted there yet. Existing server content is preserved;
+  // the prompt still carries the local brief and mapped evidence IDs below.
+  const briefTitleKey = 'problem_brief:Problem Brief';
+  if (briefRaw.trim() && !artifacts.some((artifact) => `${artifact.type}:${artifact.title}` === briefTitleKey)) {
+    try {
+      const parsedBrief = JSON.parse(briefRaw) as unknown;
+      if (isPhase2JsonRecord(parsedBrief)) {
+        const localIds = Array.isArray(parsedBrief.evidence_ids) ? parsedBrief.evidence_ids.map(String) : [];
+        const mappedIds = localIds.map((id) => localEvidenceMap.get(id)).filter((id): id is string => Boolean(id));
+        const fallbackMappedIds = mappedIds.length > 0 ? mappedIds : evidenceIds;
+        const importedBrief = {
+          ...parsedBrief,
+          evidence_ids: fallbackMappedIds,
+          counter_evidence_ids: Array.isArray(parsedBrief.counter_evidence_ids)
+            ? parsedBrief.counter_evidence_ids.map(String).map((id) => localEvidenceMap.get(id) || id)
+            : [],
+        };
+        const created = await apiPost(`/api/projects/${projectId}/artifacts`, {
+          type: 'problem_brief',
+          title: 'Problem Brief',
+          content: JSON.stringify(importedBrief, null, 2),
+          change_reason: 'Sync local Problem Brief before solution planning',
+        }, true);
+        const artifactId = String(created?.id || '');
+        if (!artifactId) throw new Error('服务端未返回 Problem Brief Artifact ID');
+        artifacts.push({
+          id: artifactId,
+          type: 'problem_brief',
+          title: 'Problem Brief',
+          version: Number(created.version || 1),
+          updated_at: String(created.updated_at || new Date().toISOString()),
+        });
+      }
+    } catch (err: any) {
+      throw new Error(`本地 Problem Brief 同步失败：${err?.message || String(err)}`);
+    }
+  }
+
+  const providerStatus = researchRuns.map((run) => ({
+    run_id: String(run.run_id || ''),
+    query: String(run.query || ''),
+    status: String(run.status || 'unknown'),
+    provider_status: isPhase2JsonRecord(run.provider_status) ? run.provider_status : {},
+    source_count: Array.isArray(run.sources) ? run.sources.length : 0,
+  }));
+  const sourceSummary = Array.from(sourceByUrl.values()).map((source) =>
+    `- ${String(source.title || '未命名来源')} | ${String(source.url || '')} | ${limitPhase2Context(source.summary, 260)}`,
+  );
+  const context = [
+    '[Desktop local Phase 2 inputs synchronized]',
+    '这些内容来自当前项目工作区的真实本地记录，不得用模型记忆或占位结果替换。',
+    `Server evidence IDs available for solution citations: ${evidenceIds.join(', ') || 'none'}`,
+    `Imported research run IDs: ${researchRunIds.join(', ') || 'none'}`,
+    `Imported real research source URLs: ${researchSourceUrls.length}/${sourceByUrl.size}`,
+    `Provider status by local run: ${JSON.stringify(providerStatus, null, 2)}`,
+    syncWarnings.length > 0 ? `Sync warnings (preserve honestly):\n${syncWarnings.map((warning) => `- ${warning}`).join('\n')}` : '',
+    problemMarkdown ? `\n[Local docs/PROBLEM.md]\n${limitPhase2Context(problemMarkdown, 12000)}` : '\n[Local docs/PROBLEM.md]\n(none)',
+    briefRaw ? `\n[Local .kyrozen/context/Problem_Brief.md]\n${limitPhase2Context(briefRaw, 12000)}` : '',
+    marketMarkdown ? `\n[Local docs/MARKET.md]\n${limitPhase2Context(marketMarkdown, 22000)}` : '\n[Local docs/MARKET.md]\n(none)',
+    sourceSummary.length > 0 ? `\n[Real research source index]\n${sourceSummary.join('\n')}` : '\n[Real research source index]\n(none)',
+    '[End desktop local Phase 2 inputs]',
+  ].filter(Boolean).join('\n');
+
+  return { evidenceIds, researchSourceUrls, researchRunIds, context };
+}
+
 const KEY_FILE_RE = /(^|\/)(package\.json|readme[^/]*|\.env[^/]*|tsconfig\.json|vite\.config\.[jt]s|tailwind\.config\.[jt]s)$/i;
 const SOURCE_FILE_RE = /\.(js|jsx|ts|tsx|py|html|css|vue|svelte)$/i;
 const IGNORED_PATH_SEGMENTS = new Set(['.kyrozen', 'node_modules', '.git', 'dist', 'build']);
@@ -2866,6 +3162,7 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMod
   logInfo(`Chat send requested: project=${currentProjectId || '<none>'}, ws=${wsClient?.readyState ?? 'none'}`);
   if (!accessToken) return { success: false, error: '未登录' };
   if (!currentProjectId) return { success: false, error: '请先选择项目' };
+  const inferredPlanningMode = planningModeForMessage(message);
   // Project creation and WebSocket authentication happen concurrently during
   // the ordinary first-use journey.  Waiting briefly here avoids dropping a
   // valid user message into a transient "connecting" window.
@@ -2875,10 +3172,18 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMod
     // the server answer it and surface the result.  Local file generation and
     // hardware actions still use their explicit desktop Agent paths.
     try {
+      const fallbackMode = inferredPlanningMode || requestedMode || 'discovery';
+      let fallbackMessage = message;
+      if (fallbackMode === 'planning') {
+        const root = await getWorkspaceRoot(currentProjectId);
+        if (!root) return { success: false, error: '未找到项目工作区，无法同步方案资料' };
+        const synced = await syncLocalPhase2PlanningInputs(currentProjectId, root);
+        fallbackMessage = `${synced.context}\n\n${message}`;
+      }
       const fallback = await apiPost('/api/chat', {
-        message,
+        message: fallbackMessage,
         project_id: currentProjectId,
-        mode: 'discovery',
+        mode: fallbackMode,
         stream: false,
       }, true, CHAT_REQUEST_TIMEOUT_MS);
       if (fallback?.content) {
@@ -2904,14 +3209,29 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMod
     // sync is catching up. Short, ordinary-user intent must still reach the
     // correct server-side Agent so a stale problem_discovery value cannot
     // route a solution-confirmation request back to discovery.
-    const inferredMode = /方案确认|确认方案|候选方案|方案比较|生成三案|生成三个方案|方案设计闭环|保存方案/i.test(message)
+    const inferredMode = inferredPlanningMode;
+    // Solution intent wins over a stale renderer mode from an older desktop
+    // build. The server applies the same rule, but doing it here also ensures
+    // the local evidence/research bridge runs before the request is sent.
+    const mode = inferredMode === 'planning'
       ? 'planning'
-      : /市场研究|市场调研|研究结果|研究报告|MARKET\.md|竞品分析/i.test(message)
-        ? 'market_research'
-        : '';
-    const mode = requestedMode || inferredMode || modeByStage[String(projectState.stage || '')] || 'discovery';
+      : requestedMode || inferredMode || modeByStage[String(projectState.stage || '')] || 'discovery';
     // P0-04: 开发阶段注入本地 PRD / TECH_DESIGN 上下文，Agent 不必依赖 Supabase artifacts。
     let enrichedMessage = message;
+    if (mode === 'planning') {
+      try {
+        const root = await getWorkspaceRoot(currentProjectId);
+        if (!root) return { success: false, error: '未找到项目工作区，无法同步方案资料' };
+        const synced = await syncLocalPhase2PlanningInputs(currentProjectId, root);
+        enrichedMessage = `${synced.context}\n\n${message}`;
+        logInfo(`Synced local Phase 2 inputs: evidence=${synced.evidenceIds.length}, runs=${synced.researchRunIds.length}, sources=${synced.researchSourceUrls.length}`);
+      } catch (err: any) {
+        const error = err?.message || String(err);
+        logError(`Failed to sync local Phase 2 inputs: ${error}`);
+        sendTaskActivity({ description: `方案资料同步失败：${error}`, status: 'failed' });
+        return { success: false, error };
+      }
+    }
     if (mode === 'development') {
       try {
         const root = await getWorkspaceRoot(currentProjectId);

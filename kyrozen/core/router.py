@@ -103,6 +103,13 @@ STAGE_TO_MODE: dict[str, str] = {
 #: Order matters: the first match wins.
 INTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
+        "product_definition",
+        re.compile(
+            r"方案确认|确认方案|候选方案|方案比较|生成三案|生成三个方案",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "hardware_development",
         re.compile(
             r"arduino|esp32|esp8266|stm32|raspberry|platformio|\bpio\b|单片机|开发板|固件|"

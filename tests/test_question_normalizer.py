@@ -3,9 +3,9 @@
 1. ``DesktopAgentRuntime._normalize_question_blocks`` must guarantee that raw
    ``<kyrozen-question>`` protocol text never leaks into the chat area, in any
    of the malformed shapes the model has been observed to emit.
-2. ``_requires_local_client`` must prefer local (desktop) execution for every
-   project chat mode so save_* tools write deliverables into the user's real
-   workspace (docs/PROBLEM.md, docs/MARKET.md, PRD.md ...).
+2. ``_requires_local_client`` keeps device/workspace execution local while
+   sending research and planning to the server-side ProjectManager so their
+   versioned Artifacts are persisted from the desktop journey.
 """
 
 from __future__ import annotations
@@ -115,17 +115,11 @@ def test_multiple_blocks_collapse_to_one():
     assert "<kyrozen-question>" not in out
 
 
-def test_local_first_routing_covers_all_chat_modes():
+def test_local_first_routing_keeps_device_work_local_and_artifact_modes_server_side():
     from kyrozen.api.server import _requires_local_client
 
-    for mode in [
-        "discovery",
-        "market_research",
-        "planning",
-        "development",
-        "hardware",
-        "testing",
-        "learning",
-    ]:
+    for mode in ["discovery", "development", "hardware", "testing", "learning"]:
         assert _requires_local_client(mode), f"mode {mode} should prefer desktop"
+    for mode in ["market_research", "planning", "product_definition", "solution_design"]:
+        assert not _requires_local_client(mode), f"mode {mode} should persist through the API ProjectManager"
     assert not _requires_local_client("chat_only_nonexistent_mode")

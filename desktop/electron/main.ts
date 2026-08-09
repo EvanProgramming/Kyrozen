@@ -2895,7 +2895,16 @@ ipcMain.handle('kyrozen:send-chat', async (_event, message: string, requestedMod
       testing: 'testing',
       iteration: 'learning',
     };
-    const mode = requestedMode || modeByStage[String(projectState.stage || '')] || 'discovery';
+    // A cloud stage can lag while a local stage gate or a previous failed
+    // sync is catching up. Short, ordinary-user intent must still reach the
+    // correct server-side Agent so a stale problem_discovery value cannot
+    // route a solution-confirmation request back to discovery.
+    const inferredMode = /方案确认|确认方案|候选方案|方案比较|生成三案|生成三个方案/i.test(message)
+      ? 'planning'
+      : /市场研究|市场调研|研究结果|研究报告|MARKET\.md|竞品分析/i.test(message)
+        ? 'market_research'
+        : '';
+    const mode = requestedMode || inferredMode || modeByStage[String(projectState.stage || '')] || 'discovery';
     // P0-04: 开发阶段注入本地 PRD / TECH_DESIGN 上下文，Agent 不必依赖 Supabase artifacts。
     let enrichedMessage = message;
     if (mode === 'development') {

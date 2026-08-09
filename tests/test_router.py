@@ -132,6 +132,15 @@ class TestResolveMode:
         assert "requested:planning" in signals
         assert "显式派发 planning" in reason
 
+    def test_solution_confirmation_beats_hardware_keyword(self, router: AgentRouter) -> None:
+        mode, _, signals = router.resolve_mode(
+            stage="market_research",
+            project_type="embedded",
+            user_message="按以下参数继续方案确认：ESP32 N16R8，板载 USB-UART，115200，每秒心跳",
+        )
+        assert mode == "product_definition"
+        assert "intent:方案确认" in signals
+
     def test_problem_discovery_dispatch_beats_hardware_text(self, router: AgentRouter) -> None:
         # A hardware-shaped problem statement is still discovery work until
         # the Problem Brief gate is satisfied; it must not enter hardware

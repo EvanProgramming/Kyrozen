@@ -906,20 +906,14 @@ def _is_openable_external_url(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-#: Modes preferring local (desktop) execution. Phase 1 acceptance: when a
-#: desktop client is online, ALL project chat modes run locally so save_*
-#: tools write deliverables (docs/PROBLEM.md, docs/MARKET.md, PRD.md, ...)
-#: into the user's real workspace and the local stage gate can detect them.
-#: When no desktop client is online, the task still falls back to server-side
-#: execution (see the `routed` checks in /api/chat).
+#: Modes preferring local (desktop) execution. Development and hardware work
+#: stay local because they need the user's workspace, toolchain, or device.
+#: Research and planning deliberately remain server-side: their tools need the
+#: request-scoped ProjectManager to persist versioned research, solution, and
+#: decision Artifacts. The desktop still remains the primary user-facing
+#: client and receives the streamed/normal response from this endpoint.
 _LOCAL_FIRST_MODES = {
     "discovery",
-    "problem_discovery",
-    "market_research",
-    "research",
-    "planning",
-    "product_definition",
-    "solution_design",
     "development",
     "hardware",
     "hardware_development",
@@ -2063,7 +2057,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
             # though the desktop is online and able to execute the task.  The
             # local agent receives the project id and rebuilds its own scoped
             # context, while the task remains observable through WebSocket.
-            if request.mode == "planning":
+            if request.mode == "planning" and _requires_local_client(request.mode):
                 task = agent.task_manager.create(
                     title=request.message[:60],
                     description=request.message,

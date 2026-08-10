@@ -1381,8 +1381,10 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
     const message = err.message || String(err);
     logWarn(`Artifact sync failed: ${message}`);
     // Project selection marks the renderer busy before this sync starts. If
-    // an individual artifact fetch times out, always publish a terminal
-    // state so the composer is usable again and the user gets a retry path.
+    // an individual artifact fetch fails, publish a terminal state so the
+    // composer is usable again. A later successful sync supersedes this
+    // message; the renderer should not treat historical activity as a current
+    // workspace-load failure.
     sendTaskActivity({ description: `项目资料同步失败：${message}`, status: 'failed' });
   }
 }
@@ -2580,6 +2582,11 @@ async function loadProjectWorkspace(projectId: string): Promise<Record<string, u
         ),
       );
   const local = await loadLocalProjectSummary(projectId);
+  // A background artifact hydration failure can remain visible in the chat
+  // activity while the project workbench itself has since loaded successfully.
+  // Mark a successful refresh explicitly so ordinary users do not mistake a
+  // historical retry message for the current workspace state.
+  sendTaskActivity({ description: '项目工作台已刷新，数据已读取', status: 'completed' });
   return { project, state, decisions, artifacts, tasks, sections, phase2, local };
 }
 

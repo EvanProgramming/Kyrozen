@@ -354,6 +354,75 @@ class ProjectContextBuilder:
             lines.append("\n[Market Research Report]")
             lines.append("  (no market research report available)")
 
+        # Phase 2 planning must be grounded in the durable evidence/source
+        # registry, not only in the short Problem Brief and report counts.
+        # Without these IDs and claims the model cannot produce a comparison
+        # that the save tool can validate against the current project.
+        latest_phase2: dict[tuple[str, str], Any] = {}
+        for artifact in self.project_manager.list_artifacts(project.id):
+            key = (artifact.type, artifact.title)
+            previous = latest_phase2.get(key)
+            if previous is None or artifact.version > previous.version:
+                latest_phase2[key] = artifact
+
+        evidence_rows: list[tuple[Any, dict[str, Any]]] = []
+        research_rows: list[dict[str, Any]] = []
+        for artifact in latest_phase2.values():
+            try:
+                data = json.loads(artifact.content)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            if artifact.type == "discovery_evidence":
+                evidence_rows.append((artifact, data))
+            elif artifact.type == "research_source":
+                research_rows.append(data)
+            elif artifact.type == "market_research_report":
+                for source in data.get("sources", []):
+                    if isinstance(source, dict):
+                        research_rows.append(source)
+
+        lines.append("\n[Phase 2 Evidence Registry]")
+        lines.append(
+            "Problem Brief evidence_ids: "
+            + (", ".join(brief.evidence_ids) if brief.evidence_ids else "none")
+        )
+        lines.append(
+            "Problem Brief counter_evidence_ids: "
+            + (", ".join(brief.counter_evidence_ids) if brief.counter_evidence_ids else "none")
+        )
+        if evidence_rows:
+            for artifact, evidence in sorted(evidence_rows, key=lambda item: item[0].updated_at)[-50:]:
+                claim = str(evidence.get("claim") or evidence.get("statement") or "").strip()
+                source = str(evidence.get("source") or evidence.get("source_url") or "").strip()
+                classification = str(evidence.get("classification") or evidence.get("kind") or "unknown").strip()
+                status = str(evidence.get("status") or "active").strip()
+                lines.append(
+                    f"- evidence_id={artifact.id}; status={status}; classification={classification}; "
+                    f"claim={claim or '(not set)'}; source={source or '(not set)'}"
+                )
+        else:
+            lines.append("- no durable discovery evidence available")
+
+        lines.append("\n[Phase 2 Research Source Registry]")
+        if research_rows:
+            for source in research_rows[:80]:
+                source_type = str(source.get("source_type") or source.get("type") or "unknown").strip()
+                title = str(source.get("title") or source.get("name") or "(untitled)").strip()
+                url = str(source.get("url") or source.get("source_url") or "").strip()
+                summary = str(source.get("summary") or source.get("abstract") or source.get("claim") or "").strip()
+                lines.append(
+                    f"- source_type={source_type}; title={title}; url={url or '(not set)'}; "
+                    f"summary={summary or '(not set)'}"
+                )
+        else:
+            lines.append("- no durable market research source available")
+        lines.append(
+            "Only use the evidence and research rows listed above. If a required fact is absent, "
+            "keep it unknown and do not invent a candidate or citation."
+        )
+
         # Load existing Product Brief if any
         latest_product_brief = self.project_manager.get_latest_artifact(
             project.id, "product_brief", title="Product Brief"

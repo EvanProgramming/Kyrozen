@@ -16,6 +16,18 @@
 |---|---|---|---|---|
 | 2026-08-10 | 运行后端 focused pytest | 当前系统 Python 导入 `kyrozen.api.server` 失败：`ModuleNotFoundError: No module named 'supabase'` | P1 | 已记录；这是测试环境依赖缺失，不能视为业务通过，后续用项目虚拟环境或补齐依赖重试 |
 | 2026-08-10 | 首次运行 `npm run build:renderer` | TypeScript 报告解析字段为 `unknown`，且 `load()` 返回 `Promise<boolean>` 与重试回调要求的 `Promise<void>` 不兼容 | P1 | 已记录；正在补充类型收窄并分离内部刷新返回值与 UI 重试回调 |
+| 2026-08-10 | 远端代码快进至 `6441644` 后重启 `kyrozen-backend.service` | systemd 返回 `Failed to restart kyrozen-backend.service: Access denied` | P1 | 已记录；服务进程仍需只读确认，随后查找当前用户可用的非破坏性服务更新路径 |
+| 2026-08-10 | 使用授权的 `sudo systemctl restart` 后立即探测健康接口 | systemd 状态为 `active`，但 3 秒内 curl 返回 `Failed to connect to 127.0.0.1:8000`（退出 7） | P1 | 已记录；先读取启动日志判断是否为正常启动窗口，再进行一次有界健康检查 |
+| 2026-08-10 | 重启后的有界探针先访问 `/health` | 前几次连接处于启动窗口，服务就绪后 `/health` 返回 404；项目实际健康路由为 `/api/health` | P2 | 已记录；端口监听、根路径和 OpenAPI 已确认，改用 `/api/health` 继续验证 |
+| 2026-08-10 | 合并执行 `/api/health`、远端 commit 和 systemd 状态读取 | 健康接口已返回 `status: ok`，但命令在 commit 输出后 10 秒超时，未完成末尾状态读取 | P2 | 已记录；拆分为短只读命令，避免把已成功的健康结果误判为失败 |
+| 2026-08-10 | Computer Use 用 bundle ID 读取安装版窗口 | 系统发现 `/Applications`、release 目录和挂载 DMG 中有多个相同 bundle ID，返回 `Ambiguous app identifier` | P2 | 已记录；改用明确的 `/Applications/Kyrozen.app` 路径，保持只安装一个应用副本 |
+| 2026-08-10 | Finder 从新 DMG 拖拽 Kyrozen 到 Applications | DMG 已挂载，但 `/Applications/Kyrozen.app` 修改时间与 app.asar 哈希未变化，说明第一次拖拽未完成复制 | P1 | 已记录；改用 Finder 复制/粘贴流程，在同一个 `/Applications/Kyrozen.app` 上替换 |
+| 2026-08-10 | Finder 已显示“旧项目已存在，是否替换”后准备点击 Replace | Computer Use 脚本自身出现 `SyntaxError: Invalid or unexpected token`，点击未执行 | P2 | 已记录；重新读取确认框后单独执行 Replace |
+| 2026-08-10 | 新安装版启动后点击“使用 GitHub 登录” | Computer Use 返回 `-10005: The element ID is no longer valid`，未能确认本次点击是否执行 | P1 | 已记录；重新读取安装版登录页，使用新 AX 索引重试 |
+| 2026-08-10 | 新安装版打开项目并等待工作区同步 | 主进程日志显示 Artifact `art_dcac9d20` 请求超时 15 秒，随后 quota 和 project state 请求 `fetch failed`，界面持续“正在准备项目工作区” | P1 | 已记录；不重复点击项目卡片，改用工作台刷新/恢复入口进行一次有界重试 |
+| 2026-08-10 | 通过 Kyrozen 菜单退出卡住实例后重新启动 | Computer Use `get_app_state` 返回 `-10005: timeoutReached`，本次未获得窗口状态 | P1 | 已记录；重新读取同一安装路径并结合主日志确认是否已正常启动 |
+| 2026-08-10 | 重启后第二次通过项目卡片打开工作台 | 界面显示“项目资料同步失败：请求超时（15 秒）：`/api/projects/proj_b9e7dd3f/artifacts/art_ca9c6e10`”，仍未打开工作台 | P1 | 已记录；同类 Artifact 同步阻塞第二次出现，准备最后一次可见刷新重试并核对远端日志 |
+| 2026-08-10 | 远端只读日志筛选首次使用 `rg` | 服务器未安装 `rg`，返回 `rg: command not found`，本次诊断筛选未执行 | P2 | 已记录；改用服务器已有的 `grep`，不改变服务状态 |
 | 2026-08-03 | DMG 安装后首次点击“使用 GitHub 登录” | 应用显示“登录已过期，请重新登录”，未出现 GitHub 授权页面 | P1 | 已记录；继续一次可恢复性检查，暂未判定通过 |
 | 2026-08-03 | 第二次点击“使用 GitHub 登录” | 按钮变为“正在跳转 GitHub...”并保持禁用，仍未打开授权页面 | P1 | 已记录；准备通过关闭并重新启动应用检查恢复 |
 | 2026-08-03 | 关闭并重新启动 DMG 安装的应用 | Computer Use 返回 `timeoutReached`，未能把该次重启判定为成功 | P1 | 已记录；重新读取应用状态 |

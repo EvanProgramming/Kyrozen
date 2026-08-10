@@ -2087,7 +2087,13 @@ ipcMain.handle('kyrozen:set-current-project', async (_event, projectId: string) 
   if (root) {
     await ensureWorkspaceStructure(root);
     sendTaskActivity({ description: '正在准备项目工作区' });
-    await syncProjectArtifacts(projectId);
+    // Opening a project must not wait for the complete historical Artifact
+    // chain. Large projects can contain hundreds of versioned records and a
+    // single slow read used to leave ordinary users on "正在准备项目工作区"
+    // or fail the whole workbench. The workbench/API is project-scoped and
+    // available immediately; local Artifact hydration continues in the
+    // background and still reports a visible retryable status if it fails.
+    void syncProjectArtifacts(projectId);
     startWatchingProjectFiles(projectId, root);
   }
   wsClient?.send(JSON.stringify({ type: 'heartbeat', active_project_id: projectId }));

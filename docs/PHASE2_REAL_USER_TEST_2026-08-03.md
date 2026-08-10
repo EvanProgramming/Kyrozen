@@ -471,3 +471,4 @@
 | 2026-08-10 | OmniRoute 容器日志只读诊断无权限 | 尝试读取远端 OmniRoute 容器日志时 Docker socket 返回 `permission denied`，未读取到日志；未改变容器、服务或项目数据。 | BLOCKED | 不扩大权限范围，继续以 Kyrozen health、任务和 Artifact 读回作为验收证据 |
 | 2026-08-10 | 事件循环修复后模型任务仍无终态 | `task_46c02d6a` 在 05:18 启动后持续停在模型调用，桌面在 120 秒处超时；backend health 与项目状态读接口保持可用，但任务详情读回超时，方案 Artifact 仍为 0 个候选。 | BLOCKED | 增加模型提供商级硬超时/取消和长任务可观测性后再重试；本轮不确认方案、不推进阶段、不触碰 ESP32 |
 | 2026-08-10 | 安装版退出快捷键参数首次不符合 Computer Use 接口 | 清理安装版时传入了单独的 `modifiers` 参数，应用仍在运行；未改变项目数据。 | RETRY | 按技能要求使用单字段组合键 `super+q`，再核对 Kyrozen 运行状态 |
+| 2026-08-10 | 方案“保存成功”日志被 Artifact 读回纠正 | 初始任务日志包含模型输出和 `save_solution_comparison` 成功文字，但随后使用登录凭据直接 GET `/api/projects/proj_b9e7dd3f/solutions` 读回 `art_ef179dcf` v1，确认 `solutions: []`、验证错误仍存在；因此仅凭日志的“服务端最终保存成功”被降级为误报，未确认方案或进入硬件阶段。 | BLOCKED | 以后必须以认证后的 Artifact/API 读回和桌面刷新同时证明保存成功；先修复当前长模型任务与保存链路，再请求用户确认方案 |

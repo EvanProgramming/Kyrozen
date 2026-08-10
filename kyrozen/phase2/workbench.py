@@ -426,7 +426,21 @@ def build_workbench_snapshot(project: Any, project_manager: Any) -> dict[str, An
             ),
         },
         "decisions": [decision.to_dict() for decision in decisions],
-        "solutions": {"candidates": solution_candidates, "count": len(solution_candidates), "impacts": solution_impacts},
+        # Keep the complete comparison in the same project-scoped snapshot as
+        # the candidate count.  The desktop workbench previously rendered the
+        # count from this snapshot but fetched the comparison through a second
+        # request; when that request timed out or failed during the large
+        # refresh, the home tab showed three candidates while the decision tab
+        # incorrectly showed an empty state.  A single durable projection lets
+        # both tabs render the same versioned comparison, while the desktop
+        # client may still use the dedicated endpoint as a compatibility
+        # fallback for older servers.
+        "solutions": {
+            "comparison": comparison_data,
+            "candidates": solution_candidates,
+            "count": len(solution_candidates),
+            "impacts": solution_impacts,
+        },
         "hardware": hardware,
         "parallel_tracks": parallel_tracks,
         "testing": testing,

@@ -371,14 +371,27 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     if (result.success && result.data) {
       setData(result.data as WorkspaceData);
       setProjectType((result.data as WorkspaceData).project?.project_type as typeof projectType || 'software');
-      const solutions = await kyzon.getSolutions(projectId);
-      if (solutions.success && solutions.data?.comparison) {
-        const comparison = solutions.data.comparison as Row;
-        const candidateSolutions = comparison.solutions;
-        setSolutionComparison(comparison);
-        hasSolutionComparison = Array.isArray(candidateSolutions) && candidateSolutions.length === 3;
+      const workspacePhase2 = (result.data as WorkspaceData).phase2 as Row | undefined;
+      const workspaceSolutions = workspacePhase2?.solutions as Row | undefined;
+      const embeddedComparison = workspaceSolutions?.comparison as Row | undefined;
+      const embeddedCandidates = embeddedComparison?.solutions;
+      if (embeddedComparison && Array.isArray(embeddedCandidates) && embeddedCandidates.length === 3) {
+        setSolutionComparison(embeddedComparison);
+        hasSolutionComparison = true;
       } else {
-        setSolutionComparison(null);
+        // Compatibility fallback for a server that predates the complete
+        // workbench projection.  This request is no longer the primary source
+        // of truth, so a transient timeout cannot erase a comparison already
+        // read from the project-scoped snapshot.
+        const solutions = await kyzon.getSolutions(projectId);
+        if (solutions.success && solutions.data?.comparison) {
+          const comparison = solutions.data.comparison as Row;
+          const candidateSolutions = comparison.solutions;
+          setSolutionComparison(comparison);
+          hasSolutionComparison = Array.isArray(candidateSolutions) && candidateSolutions.length === 3;
+        } else {
+          setSolutionComparison(null);
+        }
       }
       if (!preserveNotice) setNotice('');
     } else {

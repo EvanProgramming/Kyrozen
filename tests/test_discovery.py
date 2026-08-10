@@ -325,6 +325,37 @@ def test_phase2_workbench_projects_structured_hardware_artifacts(api_client: Tes
     assert {item["type"] for item in artifacts} == {"bom", "wiring_design"}
 
 
+def test_phase2_workbench_exposes_complete_solution_comparison(api_client: TestClient):
+    pid = api_client.post("/api/projects", json={"name": "方案投影一致性"}).json()["id"]
+    dimensions = ["time", "cost", "user_value", "technical_risk", "maintenance_cost", "data_risk", "validation_difficulty"]
+    comparison = {
+        "solutions": [
+            {
+                "name": name,
+                "solution": name,
+                "dimension_scores": {dimension: 3 for dimension in dimensions},
+                "evidence_ids": [],
+            }
+            for name in ("保守方案", "平衡方案", "激进方案")
+        ],
+        "comparison_dimensions": dimensions,
+        "recommendation": "平衡方案",
+        "recommendation_reason": "统一投影",
+    }
+    saved = api_client.post(f"/api/projects/{pid}/solutions", json={
+        "comparison": comparison,
+        "action": "save",
+    })
+    assert saved.status_code == 200
+
+    projected = api_client.get(f"/api/projects/{pid}/phase2/workbench")
+    assert projected.status_code == 200
+    solutions = projected.json()["solutions"]
+    assert solutions["count"] == 3
+    assert solutions["comparison"]["recommendation"] == "平衡方案"
+    assert [item["name"] for item in solutions["comparison"]["solutions"]] == ["保守方案", "平衡方案", "激进方案"]
+
+
 def test_hybrid_workbench_exposes_independent_parallel_tracks(api_client: TestClient):
     pid = api_client.post("/api/projects", json={"name": "并行混合工作流"}).json()["id"]
     confirmed = api_client.post(f"/api/projects/{pid}/workflow-confirm", json={"project_type": "hybrid"})

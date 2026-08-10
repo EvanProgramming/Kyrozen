@@ -352,6 +352,7 @@ def test_phase2_workbench_exposes_complete_solution_comparison(api_client: TestC
     assert projected.status_code == 200
     solutions = projected.json()["solutions"]
     assert solutions["count"] == 3
+    assert solutions["confirmed"] is False
     assert solutions["comparison"]["recommendation"] == "平衡方案"
     assert [item["name"] for item in solutions["comparison"]["solutions"]] == ["保守方案", "平衡方案", "激进方案"]
 
@@ -390,6 +391,7 @@ def test_hybrid_tracks_persist_independent_progress_and_require_deliverables(api
         },
     })
     assert solution.status_code == 200
+    assert api_client.get(f"/api/projects/{pid}/phase2/workbench").json()["solutions"]["confirmed"] is True
 
     activated = api_client.post(f"/api/projects/{pid}/phase2/tracks/software/advance", json={})
     assert activated.status_code == 200, activated.text

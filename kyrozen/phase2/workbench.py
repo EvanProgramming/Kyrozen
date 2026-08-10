@@ -440,6 +440,7 @@ def build_workbench_snapshot(project: Any, project_manager: Any) -> dict[str, An
             "candidates": solution_candidates,
             "count": len(solution_candidates),
             "impacts": solution_impacts,
+            "confirmed": solution_ready,
         },
         "hardware": hardware,
         "parallel_tracks": parallel_tracks,

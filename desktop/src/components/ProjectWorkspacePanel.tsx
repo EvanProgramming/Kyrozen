@@ -250,6 +250,8 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
   const [notice, setNotice] = useState('');
   const [retryAction, setRetryAction] = useState<RetryAction | null>(null);
   const [solutionComparison, setSolutionComparison] = useState<Row | null>(null);
+  const [solutionConfirmed, setSolutionConfirmed] = useState(false);
+  const [solutionBusy, setSolutionBusy] = useState(false);
   const [planningBusy, setPlanningBusy] = useState(false);
   const [decision, setDecision] = useState('');
   const [reason, setReason] = useState('');
@@ -375,6 +377,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
       const workspaceSolutions = workspacePhase2?.solutions as Row | undefined;
       const embeddedComparison = workspaceSolutions?.comparison as Row | undefined;
       const embeddedCandidates = embeddedComparison?.solutions;
+      setSolutionConfirmed(workspaceSolutions?.confirmed === true);
       if (embeddedComparison && Array.isArray(embeddedCandidates) && embeddedCandidates.length === 3) {
         setSolutionComparison(embeddedComparison);
         hasSolutionComparison = true;
@@ -388,14 +391,19 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
           const comparison = solutions.data.comparison as Row;
           const candidateSolutions = comparison.solutions;
           setSolutionComparison(comparison);
+          setSolutionConfirmed(solutions.data.confirmed === true);
           hasSolutionComparison = Array.isArray(candidateSolutions) && candidateSolutions.length === 3;
         } else {
           setSolutionComparison(null);
+          setSolutionConfirmed(false);
         }
       }
       if (!preserveNotice) setNotice('');
     } else {
-      setNotice(result.error || '项目画布加载失败');
+      // A save can succeed before its follow-up workbench refresh times out.
+      // Keep the save result visible in that case; the retry action still
+      // gives the user a safe way to refresh the projection later.
+      if (!preserveNotice) setNotice(result.error || '项目画布加载失败');
       setRetryAction({ label: '刷新项目工作台', run: async () => { await load(false); } });
     }
     setLoading(false);
@@ -435,14 +443,34 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
   };
 
   const saveSolution = async (action: 'select' | 'compose' | 'reject' | 'regenerate' | 'revoke') => {
+    if (solutionBusy) return;
     if (!solutionComparison) {
       setNotice('尚未形成可确认的三方案比较');
       return;
     }
-    const result = await kyzon.saveSolution(projectId, solutionComparison, action, reason.trim() ? [reason.trim()] : []);
-    setNotice(result.success ? (action === 'revoke' || action === 'reject' ? '方案确认已撤销' : action === 'regenerate' ? '方案已重新生成并保存版本链' : '方案已确认，已解除实现阶段门禁') : result.error || '方案保存失败，可重试');
-    if (result.success) { setRetryAction(null); await load(true); }
-    else setRetryAction({ label: '保存方案决策', run: () => saveSolution(action) });
+    setSolutionBusy(true);
+    const successNotice = action === 'revoke' || action === 'reject'
+      ? '方案确认已撤销'
+      : action === 'regenerate'
+        ? '方案已重新生成并保存版本链'
+        : '方案已确认，已解除实现阶段门禁';
+    setNotice(action === 'revoke' || action === 'reject' ? '正在撤销方案确认…' : action === 'regenerate' ? '正在保存重新生成的方案…' : '正在保存方案确认…');
+    try {
+      const result = await kyzon.saveSolution(projectId, solutionComparison, action, reason.trim() ? [reason.trim()] : []);
+      if (result.success) {
+        setSolutionConfirmed(action === 'select' || action === 'compose');
+        setRetryAction(null);
+        await load(true);
+        // load(true) intentionally preserves this result if the optional
+        // refresh is slow or temporarily unavailable.
+        setNotice(successNotice);
+      } else {
+        setNotice(result.error || '方案保存失败，可重试');
+        setRetryAction({ label: '保存方案决策', run: () => saveSolution(action) });
+      }
+    } finally {
+      setSolutionBusy(false);
+    }
   };
 
   const requestSolutionCandidates = async (regenerate = false) => {
@@ -1167,14 +1195,15 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
                   <p className="text-xs text-ink-faint">未确认方案前，软件、硬件和协议实现均不可进入。候选方案必须来自真实研究结果；没有结果时不会生成替代数据。</p>
                   {solutionComparison ? (
                     <>
+                      {solutionConfirmed && <div role="status" className="rounded border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">方案已确认：实现阶段门禁已解除。若要改选，请先撤销当前确认。</div>}
                       <div className="grid gap-2 md:grid-cols-3">
                         {((solutionComparison.solutions as unknown[]) || []).map((candidate, index) => {
                           const item = (candidate || {}) as Row;
                           const name = String(item.name || item.solution || `方案 ${index + 1}`);
-                          return <div key={`${name}-${index}`} className="border border-line rounded p-3 space-y-2"><div className="font-medium text-sm">{name}</div><Value value={item.dimension_scores || item.summary || item.solution} /><button type="button" className="btn-primary text-xs" onClick={() => void saveSolution('select')}>确认此方案</button></div>;
+                          return <div key={`${name}-${index}`} className="border border-line rounded p-3 space-y-2"><div className="font-medium text-sm">{name}</div><Value value={item.dimension_scores || item.summary || item.solution} /><button type="button" className="btn-primary text-xs disabled:cursor-not-allowed disabled:opacity-45" disabled={solutionConfirmed || solutionBusy} onClick={() => void saveSolution('select')}>{solutionBusy ? '正在保存…' : solutionConfirmed ? '已确认此方案' : '确认此方案'}</button></div>;
                         })}
                       </div>
-                      <div className="flex gap-2 flex-wrap"><button type="button" className="btn-secondary text-xs" onClick={() => void saveSolution('compose')}>组合并确认</button><button type="button" className="btn-secondary text-xs" disabled={planningBusy} onClick={() => void requestSolutionCandidates(true)}>{planningBusy ? '正在重新生成…' : '重新生成方案'}</button><button type="button" className="btn-secondary text-xs" onClick={() => void saveSolution('revoke')}>撤销当前确认</button><button type="button" className="btn-secondary text-xs" onClick={() => void saveSolution('reject')}>拒绝当前方案</button></div>
+                      <div className="flex gap-2 flex-wrap"><button type="button" className="btn-secondary text-xs disabled:cursor-not-allowed disabled:opacity-45" disabled={solutionConfirmed || solutionBusy} onClick={() => void saveSolution('compose')}>组合并确认</button><button type="button" className="btn-secondary text-xs" disabled={planningBusy || solutionBusy} onClick={() => void requestSolutionCandidates(true)}>{planningBusy ? '正在重新生成…' : '重新生成方案'}</button><button type="button" className="btn-secondary text-xs" disabled={solutionBusy || !solutionConfirmed} onClick={() => void saveSolution('revoke')}>撤销当前确认</button><button type="button" className="btn-secondary text-xs" disabled={solutionBusy} onClick={() => void saveSolution('reject')}>拒绝当前方案</button></div>
                     </>
                   ) : (
                     <div className="space-y-3">

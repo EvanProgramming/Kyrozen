@@ -2216,7 +2216,13 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                         "dispatched_to_desktop": True,
                     }
 
-            agent.run_task(task, user_input, confirmed=request.confirmed)
+            # A model call can legitimately outlive the desktop's bounded
+            # request window.  Keep the FastAPI event loop responsive so
+            # health checks, Artifact readback, and retry controls continue to
+            # work while the task finishes in the background thread.  If the
+            # HTTP client disconnects, the thread may still complete and its
+            # persisted result remains the source of truth for refresh/reopen.
+            await asyncio.to_thread(agent.run_task, task, user_input, request.confirmed)
             if task.status == "failed" or (task.status == "completed" and not _assistant_content(task).strip()):
                 task_errors = list(getattr(task, "errors", []) or [])
                 detail = str(task_errors[-1] if task_errors else "模型服务暂时不可用，请稍后重试。")

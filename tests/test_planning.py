@@ -205,6 +205,31 @@ def test_solution_comparison_serialization(solution_comparison_data: dict[str, A
     assert data["solutions"][0]["name"] == "Software Only"
 
 
+def test_phase2_candidate_aliases_are_normalized():
+    comparison = SolutionComparison.from_dict({
+        "candidates": [
+            {
+                "name": name,
+                "description": f"{name} description",
+                "ratings": {dimension: 3 for dimension in (
+                    "time", "cost", "user_value", "technical_risk",
+                    "maintenance_cost", "data_risk", "validation_difficulty",
+                )},
+                "rating_reasons": {"time": "bounded"},
+                "evidence_ids": ["evidence-1"],
+            }
+            for name in ("保守", "平衡", "激进")
+        ],
+        "recommendation": "平衡",
+        "recommendation_summary": "最适合当前验证目标",
+    })
+    assert len(comparison.solutions) == 3
+    assert not comparison.phase2_validation_errors()
+    assert comparison.solutions[1].dimension_scores["validation_difficulty"] == 3
+    assert comparison.solutions[1].rating_reasons["time"] == "bounded"
+    assert comparison.recommendation_reason == "最适合当前验证目标"
+
+
 def test_phase2_solution_api_requires_three_named_candidates(api_client: TestClient):
     project = api_client.post("/api/projects", json={"name": "方案门禁项目"})
     assert project.status_code == 200

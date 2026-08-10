@@ -227,6 +227,7 @@ class Solution:
     risk: str = ""
     scalability: str = ""
     dimension_scores: dict[str, str] = field(default_factory=dict)
+    rating_reasons: dict[str, str] = field(default_factory=dict)
     assumptions: list[str] = field(default_factory=list)
     excluded_content: list[str] = field(default_factory=list)
     failure_conditions: list[str] = field(default_factory=list)
@@ -244,6 +245,7 @@ class Solution:
             "risk": self.risk,
             "scalability": self.scalability,
             "dimension_scores": dict(self.dimension_scores),
+            "rating_reasons": dict(self.rating_reasons),
             "assumptions": list(self.assumptions),
             "excluded_content": list(self.excluded_content),
             "failure_conditions": list(self.failure_conditions),
@@ -252,9 +254,13 @@ class Solution:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Solution":
+        # Models have historically called the Phase 2 fields ``ratings`` and
+        # ``description``. Normalize those aliases at the model boundary so a
+        # valid candidate cannot be silently persisted as an empty solution.
+        dimension_scores = data.get("dimension_scores") or data.get("ratings") or {}
         return cls(
             name=data.get("name", ""),
-            solution=data.get("solution", ""),
+            solution=data.get("solution") or data.get("description", ""),
             advantages=list(data.get("advantages") or []),
             disadvantages=list(data.get("disadvantages") or []),
             cost=data.get("cost", ""),
@@ -262,7 +268,8 @@ class Solution:
             development_time=data.get("development_time", ""),
             risk=data.get("risk", ""),
             scalability=data.get("scalability", ""),
-            dimension_scores=dict(data.get("dimension_scores") or {}),
+            dimension_scores=dict(dimension_scores),
+            rating_reasons=dict(data.get("rating_reasons") or {}),
             assumptions=list(data.get("assumptions") or []),
             excluded_content=list(data.get("excluded_content") or []),
             failure_conditions=list(data.get("failure_conditions") or []),
@@ -322,11 +329,21 @@ class SolutionComparison:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SolutionComparison":
+        # Accept the alternate Phase 2 vocabulary emitted by some providers
+        # (``candidates``/``ratings``) while continuing to serialize the
+        # canonical API shape (``solutions``/``dimension_scores``).
+        raw_solutions = data.get("solutions")
+        if not raw_solutions:
+            raw_solutions = data.get("candidates") or []
         return cls(
-            solutions=[Solution.from_dict(s) for s in data.get("solutions") or []],
+            solutions=[Solution.from_dict(s) for s in raw_solutions if isinstance(s, dict)],
             comparison_dimensions=list(data.get("comparison_dimensions") or COMPARISON_DIMENSIONS),
             recommendation=data.get("recommendation", ""),
-            recommendation_reason=data.get("recommendation_reason", ""),
+            recommendation_reason=(
+                data.get("recommendation_reason")
+                or data.get("recommendation_summary")
+                or data.get("summary", "")
+            ),
             regeneration_count=int(data.get("regeneration_count", 0) or 0),
             regenerated_from_version=data.get("regenerated_from_version"),
         )

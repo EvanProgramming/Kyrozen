@@ -31,6 +31,11 @@ _DESIGN_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PHASE2_SOLUTION_REQUEST_RE = re.compile(
+    r"方案\s*Agent|生成三案|候选方案|保守.*平衡.*激进|Solution\s+Comparison",
+    re.IGNORECASE,
+)
+
 
 class ProductPlanningAgent(BaseAgent):
     """Agent specialized in product planning and solution decision making."""
@@ -45,11 +50,15 @@ class ProductPlanningAgent(BaseAgent):
     def required_actions(self) -> tuple[str, ...]:  # type: ignore[override]
         if getattr(self, "route_mode", "") == "solution_design":
             return ("save_technical_plan",)
-        return ()
+        # Product planning has several conversational entry points. Keep the
+        # save requirement conditional in _action_required, but expose the
+        # action here so the base loop can nudge a prose-only Phase 2 answer
+        # into a real Artifact write.
+        return ("save_solution_comparison",)
 
     def _action_required(self, user_input: str) -> bool:
         if getattr(self, "route_mode", "") != "solution_design":
-            return False
+            return bool(_PHASE2_SOLUTION_REQUEST_RE.search(user_input or ""))
         if not _DESIGN_INTENT_RE.search(user_input or ""):
             return False
         ws = getattr(self.config, "workspace_root", None)
@@ -109,7 +118,9 @@ class ProductPlanningAgent(BaseAgent):
                 "time, cost, user_value, technical_risk, maintenance_cost, data_risk, and "
                 "validation_difficulty. Include evidence_ids from the current Problem Brief in "
                 "each candidate, plus recommendation_reason, assumptions, excluded_content, and "
-                "failure_conditions. If the real evidence or report is insufficient, explain the "
+                "failure_conditions. Use the save tool's canonical keys: solutions (not candidates) "
+                "and dimension_scores (not ratings); the compatibility layer accepts aliases but the "
+                "canonical shape avoids ambiguity. If the real evidence or report is insufficient, explain the "
                 "missing Artifact instead and do not save placeholder candidates.\n"
             )
 

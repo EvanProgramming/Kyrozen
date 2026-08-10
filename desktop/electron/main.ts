@@ -1436,6 +1436,7 @@ async function syncLocalPhase2PlanningInputs(
   const researchSourceUrls: string[] = [];
   const researchRunIds: string[] = [];
   const localEvidenceMap = new Map<string, string>();
+  const localEvidenceRecords: Phase2JsonRecord[] = [];
   const syncWarnings: string[] = [];
 
   const evidenceDir = path.join(root, '.kyrozen', 'evidence');
@@ -1468,6 +1469,7 @@ async function syncLocalPhase2PlanningInputs(
       syncWarnings.push(`忽略缺少 claim 的证据 ${fileName}`);
       continue;
     }
+    localEvidenceRecords.push(parsed);
     const title = `Desktop Imported Evidence ${localId}`;
     const key = `discovery_evidence:${title}`;
     const existing = artifacts.find((artifact) => `${artifact.type}:${artifact.title}` === key);
@@ -1605,6 +1607,7 @@ async function syncLocalPhase2PlanningInputs(
   const problemPath = path.join(root, 'docs', 'PROBLEM.md');
   const marketPath = path.join(root, 'docs', 'MARKET.md');
   const briefPath = path.join(root, '.kyrozen', 'context', 'Problem_Brief.md');
+  const handoffPath = path.join(root, '.kyrozen', 'handoff.json');
   const readOptional = async (filePath: string): Promise<string> => {
     try {
       return await fs.readFile(filePath, 'utf-8');
@@ -1615,12 +1618,185 @@ async function syncLocalPhase2PlanningInputs(
   const problemMarkdown = await readOptional(problemPath);
   const marketMarkdown = await readOptional(marketPath);
   const briefRaw = await readOptional(briefPath);
+  const handoffRaw = await readOptional(handoffPath);
+
+  const extractMarkdownSection = (markdown: string, heading: string): string => {
+    const start = markdown.indexOf(`## ${heading}`);
+    if (start < 0) return '';
+    const bodyStart = start + heading.length + 3;
+    const remaining = markdown.slice(bodyStart);
+    const nextHeading = remaining.search(/\n##\s+/);
+    return remaining.slice(0, nextHeading >= 0 ? nextHeading : remaining.length).trim();
+  };
+
+  const extractMarkdownJson = <T>(section: string): T | null => {
+    const match = section.match(/```json\s*([\s\S]*?)```/i);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[1]) as T;
+    } catch {
+      return null;
+    }
+  };
+
+  const parseLocalMarketReport = (markdown: string): Phase2JsonRecord | null => {
+    if (!markdown.trim()) return null;
+    const problemSummary = extractMarkdownSection(markdown, 'Problem Summary');
+    const marketStatus = extractMarkdownSection(markdown, 'Market Status');
+    const competitors = extractMarkdownJson<unknown[]>(extractMarkdownSection(markdown, 'Competitors'));
+    const openSourceProjects = extractMarkdownJson<unknown[]>(extractMarkdownSection(markdown, 'Open Source Projects'));
+    const userFeedback = extractMarkdownJson<unknown[]>(extractMarkdownSection(markdown, 'User Feedback'));
+    const alternativeSolutions = extractMarkdownJson<unknown[]>(extractMarkdownSection(markdown, 'Alternative Solutions'));
+    const technologyRoutes = extractMarkdownJson<unknown[]>(extractMarkdownSection(markdown, 'Technology Routes'));
+    const marketGap = extractMarkdownJson<Phase2JsonRecord>(extractMarkdownSection(markdown, 'Market Gap'));
+    const risks = extractMarkdownJson<unknown[]>(extractMarkdownSection(markdown, 'Risks'));
+    const sources = extractMarkdownJson<unknown[]>(extractMarkdownSection(markdown, 'Sources'));
+    const recommendation = extractMarkdownSection(markdown, 'Recommendation').split(/\r?\n/)[0].trim();
+    const allowedRecommendations = new Set([
+      'continue_development', 'narrow_scope', 'change_target_user', 'change_product_form',
+      'use_existing_solution', 'pause', 'abandon',
+    ]);
+    const report: Phase2JsonRecord = {
+      problem_summary: problemSummary,
+      market_status: marketStatus,
+      competitors: Array.isArray(competitors) ? competitors : [],
+      open_source_projects: Array.isArray(openSourceProjects) ? openSourceProjects : [],
+      user_feedback: Array.isArray(userFeedback) ? userFeedback : [],
+      alternative_solutions: Array.isArray(alternativeSolutions) ? alternativeSolutions : [],
+      technology_routes: Array.isArray(technologyRoutes) ? technologyRoutes : [],
+      market_gap: isPhase2JsonRecord(marketGap) ? marketGap : {},
+      risks: Array.isArray(risks) ? risks : [],
+      recommendation: allowedRecommendations.has(recommendation) ? recommendation : 'pause',
+      sources: Array.isArray(sources) ? sources : [],
+    };
+    const competitorCount = Array.isArray(report.competitors) ? report.competitors.length : 0;
+    const sourceCount = Array.isArray(report.sources) ? report.sources.length : 0;
+    const hasRealReportContent = Boolean(
+      problemSummary || marketStatus || competitorCount || sourceCount,
+    );
+    return hasRealReportContent ? report : null;
+  };
+
+  // MARKET.md is a durable local report generated from the real provider runs.
+  // Import its structured sections once so the server-side planner can use the
+  // same Artifact chain as the desktop workbench. A parse failure is visible as
+  // a warning; it never becomes a fabricated report.
+  const marketReportTitleKey = 'market_research_report:Market Research Report';
+  if (marketMarkdown.trim() && !artifacts.some((artifact) => `${artifact.type}:${artifact.title}` === marketReportTitleKey)) {
+    const localReport = parseLocalMarketReport(marketMarkdown);
+    if (!localReport) {
+      syncWarnings.push('本地 docs/MARKET.md 无法解析为结构化研究报告，未创建替代结果');
+    } else {
+      try {
+        const created = await apiPost(`/api/projects/${projectId}/artifacts`, {
+          type: 'market_research_report',
+          title: 'Market Research Report',
+          content: JSON.stringify(localReport, null, 2),
+          change_reason: 'Sync local Phase 2 market research report before solution planning',
+        }, true);
+        const artifactId = String(created?.id || '');
+        if (!artifactId) throw new Error('服务端未返回 Market Research Report Artifact ID');
+        artifacts.push({
+          id: artifactId,
+          type: 'market_research_report',
+          title: 'Market Research Report',
+          version: Number(created.version || 1),
+          updated_at: String(created.updated_at || new Date().toISOString()),
+        });
+        knownTitles.add(marketReportTitleKey);
+      } catch (err: any) {
+        throw new Error(`本地市场研究报告同步失败：${err?.message || String(err)}`);
+      }
+    }
+  }
+
+  // A confirmed discovery handoff is more authoritative than the old local
+  // Problem_Brief.md snapshot. Version the brief only when the confirmed goal
+  // or its mapped evidence changed, avoiding a new Artifact on every retry.
+  let confirmedGoal = '';
+  try {
+    const handoff = JSON.parse(handoffRaw) as Phase2JsonRecord;
+    const goals = Array.isArray(handoff.confirmed_goals) ? handoff.confirmed_goals : [];
+    const latestGoal = goals.slice().reverse().find((goal) => isPhase2JsonRecord(goal) && String(goal.content || '').trim());
+    confirmedGoal = latestGoal && isPhase2JsonRecord(latestGoal) ? String(latestGoal.content || '').trim() : '';
+  } catch {
+    // Older projects do not have a handoff file; the legacy brief import below
+    // remains available for compatibility.
+  }
 
   // Make the server-side planning context aware of the real local brief when
   // it has not been persisted there yet. Existing server content is preserved;
   // the prompt still carries the local brief and mapped evidence IDs below.
   const briefTitleKey = 'problem_brief:Problem Brief';
-  if (briefRaw.trim() && !artifacts.some((artifact) => `${artifact.type}:${artifact.title}` === briefTitleKey)) {
+  const latestBriefSummary = artifacts
+    .filter((artifact) => `${artifact.type}:${artifact.title}` === briefTitleKey)
+    .sort((left, right) => right.version - left.version)[0];
+  if (confirmedGoal) {
+    const targetAudience = localEvidenceRecords
+      .map((record) => String(record.target_audience || '').trim())
+      .find(Boolean) || '使用当前项目开发流程的目标用户';
+    const isHardwareGoal = /esp32|串口|开发板|固件|硬件|usb-uart/i.test(confirmedGoal);
+    const confirmedBrief: Phase2JsonRecord = {
+      title: 'Phase 2 Confirmed Problem Brief',
+      target_user: targetAudience,
+      scenario: confirmedGoal,
+      surface_problem: `需要验证已确认目标：${confirmedGoal}`,
+      deep_need: '把已确认目标转化为可重复、可观察、可验收的开发闭环。',
+      current_solution: '使用 Kyrozen 的项目工作台、真实研究来源和对应流程进行验证。',
+      current_solution_problem: '方案确认和最终实物证据仍未完成。',
+      frequency: '每次执行该项目验收时',
+      impact: '在进入实现前尽早发现目标、研究或验证链路中的阻塞。',
+      unknown_assumptions: isHardwareGoal ? [{
+        claim: '目标设备的实际编译、上传、串口输出和拔插后重新枚举行为待实物确认',
+        source: 'ai_inference',
+        verified: false,
+      }] : [],
+      opportunity_direction: '当前优先验证项目目标和开发闭环，不据此宣称新的市场机会。',
+      confidence: 'medium',
+      confidence_reason: '目标来自用户确认的项目交接记录，外部市场结论来自已保存研究来源；最终验证仍需完成。',
+      decision: 'continue_research',
+      decision_reason: confirmedGoal,
+      evidence_ids: evidenceIds,
+      counter_evidence_ids: [],
+      unresolved_questions: isHardwareGoal ? ['方案确认后才能进入实物编译、上传和串口验收。'] : [],
+      confirmed_goal: confirmedGoal,
+    };
+    let currentBrief: Phase2JsonRecord | null = null;
+    if (latestBriefSummary) {
+      try {
+        const fullBrief = await apiGet(`/api/projects/${projectId}/artifacts/${latestBriefSummary.id}`) as ArtifactFull;
+        const parsed = JSON.parse(fullBrief.content || '{}');
+        if (isPhase2JsonRecord(parsed)) currentBrief = parsed;
+      } catch (err: any) {
+        syncWarnings.push(`读取现有 Problem Brief 失败：${err?.message || String(err)}`);
+      }
+    }
+    const currentEvidenceIds = Array.isArray(currentBrief?.evidence_ids)
+      ? currentBrief.evidence_ids.map(String)
+      : [];
+    const sameEvidence = currentEvidenceIds.sort().join(',') === [...evidenceIds].sort().join(',');
+    if (currentBrief?.confirmed_goal !== confirmedGoal || !sameEvidence) {
+      try {
+        const created = await apiPost(`/api/projects/${projectId}/artifacts`, {
+          type: 'problem_brief',
+          title: 'Problem Brief',
+          content: JSON.stringify(confirmedBrief, null, 2),
+          change_reason: 'Sync confirmed Phase 2 handoff before solution planning',
+        }, true);
+        const artifactId = String(created?.id || '');
+        if (!artifactId) throw new Error('服务端未返回 Problem Brief Artifact ID');
+        artifacts.push({
+          id: artifactId,
+          type: 'problem_brief',
+          title: 'Problem Brief',
+          version: Number(created.version || 1),
+          updated_at: String(created.updated_at || new Date().toISOString()),
+        });
+      } catch (err: any) {
+        throw new Error(`已确认 Problem Brief 同步失败：${err?.message || String(err)}`);
+      }
+    }
+  } else if (briefRaw.trim() && !latestBriefSummary) {
     try {
       const parsedBrief = JSON.parse(briefRaw) as unknown;
       if (isPhase2JsonRecord(parsedBrief)) {

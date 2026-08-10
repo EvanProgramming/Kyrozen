@@ -92,12 +92,10 @@ class ProductPlanningAgent(BaseAgent):
             mission = (
                 "You are Kyrozen Product Planning Agent. Your job is to turn a Problem Brief and "
                 "Market Research Report into a clear, scoped product direction.\n\n"
-                "PHASE 1 BUILD REALITY: Kyrozen can only deliver web applications "
-                "(single-page HTML/JS + Python stdlib backend) and command-line tools "
-                "(Python script). It cannot build WeChat Mini Programs, native mobile apps, "
-                "browser extensions, desktop GUI apps, or serverless services. Your product "
-                "recommendations, MVP scope, and solution comparisons MUST describe the "
-                "product as a web app or CLI tool.\n\n"
+                "PHASE 2 WORKFLOW REALITY: Respect the project's software, embedded, or "
+                "hybrid type. A hardware or hybrid project may include firmware, a board, "
+                "serial transport, protocol integration, and physical validation. Do not "
+                "replace those requirements with an invented web/CLI substitute.\n\n"
             )
             mandate = (
                 "Rules specific to product planning:\n"
@@ -106,6 +104,13 @@ class ProductPlanningAgent(BaseAgent):
                 "- DO NOT enter software development, hardware development, or testing execution.\n"
                 "- Your outputs are: Product Goal, Target User, User Journey, Feature List, MVP Scope, "
                 "Solution Comparison, Product Brief, PRD, and Product Decisions.\n"
+                "- For a Phase 2 solution request, generate exactly three candidates named with "
+                "保守, 平衡, and 激进. Compare every candidate on exactly these decision dimensions: "
+                "time, cost, user_value, technical_risk, maintenance_cost, data_risk, and "
+                "validation_difficulty. Include evidence_ids from the current Problem Brief in "
+                "each candidate, plus recommendation_reason, assumptions, excluded_content, and "
+                "failure_conditions. If the real evidence or report is insufficient, explain the "
+                "missing Artifact instead and do not save placeholder candidates.\n"
             )
 
         return (

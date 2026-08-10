@@ -14,6 +14,8 @@
 
 | 时间 | 步骤 | 观察 | 严重度 | 处理/结果 |
 |---|---|---|---|---|
+| 2026-08-10 | 运行后端 focused pytest | 当前系统 Python 导入 `kyrozen.api.server` 失败：`ModuleNotFoundError: No module named 'supabase'` | P1 | 已记录；这是测试环境依赖缺失，不能视为业务通过，后续用项目虚拟环境或补齐依赖重试 |
+| 2026-08-10 | 首次运行 `npm run build:renderer` | TypeScript 报告解析字段为 `unknown`，且 `load()` 返回 `Promise<boolean>` 与重试回调要求的 `Promise<void>` 不兼容 | P1 | 已记录；正在补充类型收窄并分离内部刷新返回值与 UI 重试回调 |
 | 2026-08-03 | DMG 安装后首次点击“使用 GitHub 登录” | 应用显示“登录已过期，请重新登录”，未出现 GitHub 授权页面 | P1 | 已记录；继续一次可恢复性检查，暂未判定通过 |
 | 2026-08-03 | 第二次点击“使用 GitHub 登录” | 按钮变为“正在跳转 GitHub...”并保持禁用，仍未打开授权页面 | P1 | 已记录；准备通过关闭并重新启动应用检查恢复 |
 | 2026-08-03 | 关闭并重新启动 DMG 安装的应用 | Computer Use 返回 `timeoutReached`，未能把该次重启判定为成功 | P1 | 已记录；重新读取应用状态 |
@@ -433,3 +435,11 @@
 | 2026-08-10 | 本轮 Finder 启动安装版时 Mac 自动解锁失败 | 在 Finder 前往 `/Applications/Kyrozen.app` 后继续读取界面时，Computer Use 返回 `The Mac is locked and automatic unlock could not unlock it`；未改变项目、文件或设备状态。 | BLOCKED | 用户手动解锁 Mac 后再继续安装版启动和普通用户验收 |
 | 2026-08-10 | 继续验收时 Mac 仍处于锁屏 | 新一轮 Computer Use `list_apps` 首次调用仍返回 `The Mac is locked and automatic unlock could not unlock it`；未操作应用、项目或 ESP32。 | BLOCKED | 用户手动解锁 Mac 后再继续安装版登录与验收 |
 | 2026-08-10 | 第三次继续验收仍无法读取应用 | 再次调用 Computer Use `list_apps` 仍返回 `The Mac is locked and automatic unlock could not unlock it`；连续三轮均无法进入安装版，未绕过锁屏或操作 ESP32。 | BLOCKED | 必须由用户手动解锁 Mac，之后才能恢复 DMG 安装版登录与验收 |
+| 2026-08-10 | 解锁后 Computer Use 会话未初始化 | 用户确认已解锁后，首次调用 `sky.list_apps` 返回 `sky is not defined`；未操作应用、项目或 ESP32。 | RETRY | 重新初始化 Computer Use 的 `@oai/sky` 会话，再读取应用状态 |
+| 2026-08-10 | 安装版 GitHub 登录回调未完成 | 重新启动 `/Applications/Kyrozen.app` 后点击“使用 GitHub 登录”，Dia 未出现 GitHub 授权页，Kyrozen 4 秒后显示“登录已过期，请重新登录。”且按钮仍为“正在跳转 GitHub...”禁用状态；未输入任何凭据，未修改项目或 ESP32。 | RETRY | 记录安装版登录失败，检查默认浏览器导航/回调状态后从登录页重新发起授权 |
+| 2026-08-10 | Dia OAuth 标签 AX 点击不支持 | 通过 Dia 最新可访问性树发现后台标签 `Kyrozen 登录` 后，点击该标签索引返回 `Accessibility error: AXError.actionUnsupported`；未输入凭据或提交授权。 | RETRY | 改用 Dia 截图坐标点击同一可见标签，再继续普通用户授权 |
+| 2026-08-10 | GitHub OAuth 深链处理时授权码已过期 | 通过 Dia 截图点击“打开 Kyrozen”后，安装版收到 `kyrozen://auth/login`，但日志记录 `GitHub login code exchange failed: {"detail":"Invalid or expired desktop OAuth code"}`；未建立登录会话，未输入新凭据。 | RETRY | 重新从 Kyrozen 登录页发起新授权，及时在 Dia 的新 `Kyzoren 登录` 标签中确认打开 Kyrozen |
+| 2026-08-10 | 登录后项目卡片首次点击未打开项目 | GitHub 登录已由日志确认成功；点击安装版项目卡片“ESP32 串口探针验收”并按 `Return` 后仍停留在“我的项目”，未进入项目工作台或修改数据。 | RETRY | 重新读取安装版状态，改用项目卡片的可见子元素/坐标点击并核对工作台 |
+| 2026-08-10 | 决策中心旧索引失效 | 在项目工作台已显示七个中心后，按此前读取的决策中心索引点击返回 `Computer Use server error -10005: The element ID is no longer valid`；未切换中心或写入方案。 | RETRY | 重新读取当前安装版可访问性树，使用最新决策中心索引 |
+| 2026-08-10 | 方案请求期间云端配额与项目状态读取失败 | 方案 Agent 请求仍在进行时，安装版日志出现 `Failed to fetch quota: 请求失败（/api/desktop/quota）：fetch failed`、随后 `/api/desktop/quota` 超时，以及 `/api/projects/proj_b9e7dd3f/state` 超时；同一请求已成功记录本地 Phase 2 输入 `evidence=2, runs=6, sources=36`，未把中间状态当作方案成功。 | RETRY | 保持当前方案任务运行，重新读取界面和服务状态，等待明确终态 |
+| 2026-08-10 | 方案 Agent 完成提示与三案持久化状态不一致 | 安装版显示“方案 Agent 已完成，请检查三案及其证据引用”，但决策中心仍显示“尚无方案比较”，没有任何候选方案或受影响任务；未确认方案、未进入硬件流程。 | RETRY | 使用项目画布“刷新”重新读取服务端方案状态；若仍为空，从失败入口重试并保留真实阻塞信息 |

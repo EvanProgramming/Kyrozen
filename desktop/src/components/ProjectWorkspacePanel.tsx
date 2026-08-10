@@ -361,24 +361,33 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     ? improvementSuggestions
     : improvementArtifactSection || improvementLearningState;
 
-  const load = useCallback(async (preserveNotice = false) => {
+  const load = useCallback(async (preserveNotice = false): Promise<boolean> => {
     setLoading(true);
     setLoadingSlow(false);
     const slowTimer = window.setTimeout(() => setLoadingSlow(true), 8000);
     const result = await kyzon.getProjectWorkspace(projectId);
     window.clearTimeout(slowTimer);
+    let hasSolutionComparison = false;
     if (result.success && result.data) {
       setData(result.data as WorkspaceData);
       setProjectType((result.data as WorkspaceData).project?.project_type as typeof projectType || 'software');
       const solutions = await kyzon.getSolutions(projectId);
-      if (solutions.success && solutions.data?.comparison) setSolutionComparison(solutions.data.comparison as Row);
+      if (solutions.success && solutions.data?.comparison) {
+        const comparison = solutions.data.comparison as Row;
+        const candidateSolutions = comparison.solutions;
+        setSolutionComparison(comparison);
+        hasSolutionComparison = Array.isArray(candidateSolutions) && candidateSolutions.length === 3;
+      } else {
+        setSolutionComparison(null);
+      }
       if (!preserveNotice) setNotice('');
     } else {
       setNotice(result.error || '项目画布加载失败');
-      setRetryAction({ label: '刷新项目工作台', run: () => load(false) });
+      setRetryAction({ label: '刷新项目工作台', run: async () => { await load(false); } });
     }
     setLoading(false);
     setLoadingSlow(false);
+    return hasSolutionComparison;
   }, [kyzon, projectId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -436,14 +445,22 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
       setRetryAction({ label: regenerate ? '重新请求方案 Agent' : '请求方案 Agent', run: () => requestSolutionCandidates(regenerate) });
     } else {
       setRetryAction(null);
-      setNotice(result.content ? '方案 Agent 已完成，请检查三案及其证据引用' : '方案 Agent 已开始处理，完成后会自动刷新决策中心');
+      setNotice(result.content ? '方案 Agent 已返回，正在验证三案是否已保存…' : '方案 Agent 已开始处理，完成后会自动刷新决策中心');
       // A dispatched planning task is asynchronous. Do not immediately start
       // another full workbench read while the Agent is rebuilding its scoped
       // context and writing the solution Artifact; the chat completion handler
       // below will refresh the workbench after the Agent replies. This also
       // avoids turning a transient decisions read failure into a false
       // planning failure immediately after a successful dispatch.
-      if (result.content) await load(true);
+      if (result.content) {
+        const hasComparison = await load(true);
+        setNotice(hasComparison
+          ? '方案 Agent 已完成，三案及其证据引用已保存'
+          : '方案 Agent 已返回，但没有保存三案；请检查阻塞原因后重试');
+        if (!hasComparison) {
+          setRetryAction({ label: regenerate ? '重新请求方案 Agent' : '请求方案 Agent', run: () => requestSolutionCandidates(regenerate) });
+        }
+      }
     }
     setPlanningBusy(false);
   };

@@ -2145,6 +2145,16 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
                 context = builder.build_learning_context(project)
             else:
                 context = builder.build(project)
+            if chat_mode == "planning" and _SOLUTION_REQUEST_RE.search(request.message or ""):
+                context += (
+                    "\n[Phase 2 Solution Request]\n"
+                    "这是决策中心发起的方案请求，不是普通产品规划闲聊。请优先完成并保存一个"
+                    "恰好包含保守、平衡、激进三个候选的 Solution Comparison；每个候选必须有"
+                    "time、cost、user_value、technical_risk、maintenance_cost、data_risk、"
+                    "validation_difficulty 七项评分，且引用当前 Problem Brief 中真实存在的 evidence_ids。"
+                    "只有在真实证据和市场研究 Artifact 足够时才调用 save_solution_comparison；资料不足"
+                    "时明确返回缺少的 Artifact/字段，不要生成占位方案，也不要把普通文字回复称为已保存。\n"
+                )
             user_input = f"{context}\n{request.message}"
             # Ensure the agent uses the project's memory for this task
             if chat_mode == "learning":

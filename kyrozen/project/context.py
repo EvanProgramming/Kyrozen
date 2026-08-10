@@ -111,6 +111,8 @@ class ProjectContextBuilder:
         if project.description:
             lines.append(f"Initial Idea: {project.description}")
         lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(f"Project Type: {project.project_type}")
+        lines.append(f"Workflow Version: {project.workflow_version}")
         lines.append(
             "Your role: Help the user understand the real problem. "
             "Do not design products, recommend technology, or do market research.\n"
@@ -291,17 +293,18 @@ class ProjectContextBuilder:
         if project.description:
             lines.append(f"Initial Idea: {project.description}")
         lines.append(f"Current Stage: {project.current_stage}")
+        lines.append(f"Project Type: {project.project_type}")
+        lines.append(f"Workflow Version: {project.workflow_version}")
         lines.append(
             "Your role: Define what product to build, for whom, and why. "
             "Do not design technical architecture, choose technology, or write code.\n"
         )
         lines.append(
-            "BUILD CAPABILITY (Phase 1): Kyrozen can only deliver web applications "
-            "(single-page HTML/JS served by a Python stdlib backend) and command-line "
-            "tools (Python script). It cannot build WeChat Mini Programs, mobile apps, "
-            "browser extensions, desktop apps with GUI frameworks, hardware prototypes, "
-            "or serverless/cloud-deployed services. Your product recommendation MUST "
-            "be expressed as a web app or CLI tool.\n"
+            "PHASE 2 DECISION GATE: The project workflow is type-aware. Use the project's "
+            "software, embedded, or hybrid type and its real evidence, research report, "
+            "and confirmed Problem Brief. Do not downgrade an embedded or hybrid project "
+            "to a web/CLI-only recommendation. The output of this stage is a decision "
+            "record, not implementation.\n"
         )
 
         # Load Problem Brief

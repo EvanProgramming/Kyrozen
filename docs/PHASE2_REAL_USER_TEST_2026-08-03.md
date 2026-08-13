@@ -600,3 +600,4 @@
 | 2026-08-13 | 安装版清理片段首次菜单栏匹配错误 | 退出唯一安装版时，脚本用错误的 `menu bar` 文本模式寻找 Kyrozen 菜单项，返回 `Cannot read properties of undefined (reading 'match')`；未执行退出或其他 UI 操作。 | RETRY | 重新读取当前菜单栏元素并执行退出，再核对进程和挂载卷 |
 | 2026-08-13 | 本次安装回归清理完成 | 通过 Kyrozen 菜单退出唯一 `/Applications/Kyrozen.app` 实例，`list_apps` 确认 `isRunning=false`；卸载唯一测试卷 `/Volumes/Kyrozen Phase2 latest`，未删除其他应用或用户项目。 | PASS | 提交源码与测试报告；ESP32 物理门禁仍待用户连接设备 |
 | 2026-08-13 | 方案候选已读回但用户确认尚未完成 | 安装版项目画布真实显示保守、平衡、激进三个候选及七维比较；“确认采用平衡方案”“改用保守方案”“改用激进方案”三个选择当前均为未选，未替用户选择。 | BLOCKED_BY_USER_CONFIRMATION | 用户在项目画布中选择实际方案并确认后，才能继续进入硬件验收 |
+| 2026-08-13 | 新 ESP32 串口出现但本地芯片探针未安装 | 只读发现新增 `/dev/cu.usbserial-10`，Arduino CLI 仍未识别板卡；尝试调用本地 `esptool` 读取芯片型号时返回 `.venv/bin/python: No module named esptool`，未写入或上传设备。 | BLOCKED_BY_TOOLCHAIN | 继续使用仓库已有硬件桥接/串口探针路径；未知板卡型号确认前不选择 N16R8 固件或执行上传 |

@@ -629,6 +629,16 @@ class PostgresDatabase:
         ) or []
         return [self._row_to_artifact(row) for row in rows]
 
+    def list_artifact_summaries(self, project_id: str, limit: int = 5) -> list[Artifact]:
+        safe_limit = max(0, int(limit))
+        rows = self._execute(
+            "SELECT id, project_id, type, title, version, change_reason, created_at, updated_at "
+            "FROM artifacts WHERE project_id = %s ORDER BY updated_at DESC LIMIT %s",
+            (project_id, safe_limit),
+            fetch="all",
+        ) or []
+        return [self._row_to_artifact(row) for row in rows]
+
     def _row_to_artifact(self, row: dict[str, Any]) -> Artifact:
         return Artifact.from_dict({
             "id": row["id"],

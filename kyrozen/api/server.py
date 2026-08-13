@@ -2458,7 +2458,7 @@ def create_app(config: KyrozenConfig | None = None, model: ModelInterface | None
         data = project.to_dict()
         data["recent_tasks"] = [t.to_dict() for t in pm.list_tasks(project_id)[:5]]
         data["recent_decisions"] = [d.to_dict() for d in pm.list_decisions(project_id)[:5]]
-        data["recent_artifacts"] = [a.to_dict() for a in pm.list_artifacts(project_id)[:5]]
+        data["recent_artifacts"] = [a.to_dict() for a in pm.list_artifact_summaries(project_id, limit=5)]
         return data
 
     @app.put("/api/projects/{project_id}")

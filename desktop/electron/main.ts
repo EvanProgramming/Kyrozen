@@ -1105,6 +1105,14 @@ async function reconnectWithFreshWebSocketToken(): Promise<boolean> {
 }
 
 const API_REQUEST_TIMEOUT_MS = 15000;
+// Optional workbench sections must never hold the core project/artifact view
+// hostage.  A slow testing or improvement repository is recoverable from its
+// own tab, while the project home and decision gate remain usable.
+const OPTIONAL_WORKSPACE_TIMEOUT_MS = 4000;
+// Local hydration is a background convenience, not part of opening a project.
+// Stop after a short bounded window so a long historical Artifact chain cannot
+// leave the chat activity saying that the workspace is still being prepared.
+const ARTIFACT_SYNC_TOTAL_TIMEOUT_MS = 10000;
 // A project-scoped chat request may read a versioned Artifact chain and run a
 // real model call before returning.  Keep ordinary metadata requests at 15s,
 // but give the supported /api/chat compatibility path a bounded window so a
@@ -1127,17 +1135,18 @@ async function fetchWithTimeout(url: string, init: RequestInit, endpoint: string
   }
 }
 
-async function apiGet(endpoint: string, auth = true) {
+async function apiGet(endpoint: string, auth = true, timeoutMs = API_REQUEST_TIMEOUT_MS) {
   const headers: Record<string, string> = {};
   if (auth && accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  let response = await fetchWithTimeout(`${serverUrl}${endpoint}`, { headers }, endpoint);
+  let response = await fetchWithTimeout(`${serverUrl}${endpoint}`, { headers }, endpoint, timeoutMs);
   if (auth && (response.status === 401 || response.status === 403) && await refreshAccessToken()) {
     response = await fetchWithTimeout(
       `${serverUrl}${endpoint}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
       endpoint,
+      timeoutMs,
     );
   }
   if (!response.ok) {
@@ -1310,7 +1319,11 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
   if (!root || !accessToken) return;
 
   try {
-    const artifacts: ArtifactSummary[] = await apiGet(`/api/projects/${projectId}/artifacts`);
+    const artifacts: ArtifactSummary[] = await apiGet(
+      `/api/projects/${projectId}/artifacts`,
+      true,
+      OPTIONAL_WORKSPACE_TIMEOUT_MS,
+    );
     const contextDir = path.join(root, '.kyrozen', 'context');
     await fs.mkdir(contextDir, { recursive: true });
 
@@ -1331,7 +1344,14 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
 
     let useCloudForConflicts = true;
     if (conflicts.length > 0 && mainWindow) {
-      const detail = conflicts.map((c) => `• ${c.title}`).join('\n');
+      // Keep the native dialog actionable for large projects. Rendering every
+      // conflicting title can push its buttons below the visible window, so
+      // show a bounded preview and retain the full list in the local log.
+      const preview = conflicts.slice(0, 12).map((c) => `• ${c.title}`);
+      if (conflicts.length > preview.length) {
+        preview.push(`• 其余 ${conflicts.length - preview.length} 个冲突已记录，可在同步日志中查看`);
+      }
+      const detail = preview.join('\n');
       const result = await dialog.showMessageBox(mainWindow, {
         type: 'warning',
         buttons: ['使用云端版本', '保留本地版本'],
@@ -1345,14 +1365,38 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
     }
 
     const manifest: Array<Record<string, unknown>> = [];
+    const syncDeadline = Date.now() + ARTIFACT_SYNC_TOTAL_TIMEOUT_MS;
+    let failedArtifacts = 0;
     for (const summary of artifacts) {
-      const full: ArtifactFull = await apiGet(`/api/projects/${projectId}/artifacts/${summary.id}`);
-      const safeTitle = String(full.title || full.type).replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]/g, '_');
-      const fileName = `${safeTitle}.md`;
-      const filePath = path.join(contextDir, fileName);
-      const isConflict = conflicts.some((c) => c.title === full.title);
-      if (isConflict && !useCloudForConflicts) {
-        // Keep local version; still update manifest metadata from cloud.
+      if (Date.now() >= syncDeadline) {
+        failedArtifacts += artifacts.length - manifest.length - failedArtifacts;
+        logWarn(`Artifact hydration stopped after ${ARTIFACT_SYNC_TOTAL_TIMEOUT_MS}ms`);
+        break;
+      }
+      try {
+        const full: ArtifactFull = await apiGet(
+          `/api/projects/${projectId}/artifacts/${summary.id}`,
+          true,
+          OPTIONAL_WORKSPACE_TIMEOUT_MS,
+        );
+        const safeTitle = String(full.title || full.type).replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]/g, '_');
+        const fileName = `${safeTitle}.md`;
+        const filePath = path.join(contextDir, fileName);
+        const isConflict = conflicts.some((c) => c.title === full.title);
+        if (isConflict && !useCloudForConflicts) {
+          // Keep local version; still update manifest metadata from cloud.
+          manifest.push({
+            id: full.id,
+            type: full.type,
+            title: full.title,
+            version: full.version,
+            local_path: filePath,
+            updated_at: full.updated_at,
+            conflict: 'kept_local',
+          });
+          continue;
+        }
+        await fs.writeFile(filePath, full.content || '', 'utf-8');
         manifest.push({
           id: full.id,
           type: full.type,
@@ -1360,32 +1404,25 @@ async function syncProjectArtifacts(projectId: string): Promise<void> {
           version: full.version,
           local_path: filePath,
           updated_at: full.updated_at,
-          conflict: 'kept_local',
         });
-        continue;
+      } catch (error: any) {
+        failedArtifacts += 1;
+        logWarn(`Artifact hydration skipped: ${summary.id}: ${error?.message || String(error)}`);
       }
-      await fs.writeFile(filePath, full.content || '', 'utf-8');
-      manifest.push({
-        id: full.id,
-        type: full.type,
-        title: full.title,
-        version: full.version,
-        local_path: filePath,
-        updated_at: full.updated_at,
-      });
     }
 
     await fs.writeFile(path.join(contextDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
-    sendTaskActivity({ description: `已同步 ${artifacts.length} 个项目资料`, status: 'completed' });
+    const description = failedArtifacts > 0
+      ? `已同步 ${manifest.length}/${artifacts.length} 个项目资料；${failedArtifacts} 个历史资料暂不可用，可稍后重试`
+      : `已同步 ${artifacts.length} 个项目资料`;
+    sendTaskActivity({ description, status: 'completed' });
   } catch (err: any) {
     const message = err.message || String(err);
     logWarn(`Artifact sync failed: ${message}`);
-    // Project selection marks the renderer busy before this sync starts. If
-    // an individual artifact fetch fails, publish a terminal state so the
-    // composer is usable again. A later successful sync supersedes this
-    // message; the renderer should not treat historical activity as a current
-    // workspace-load failure.
-    sendTaskActivity({ description: `项目资料同步失败：${message}`, status: 'failed' });
+    // Project selection must remain usable when the summary endpoint itself
+    // fails. The renderer can retry from the workbench without turning this
+    // background refresh into a false current-task failure.
+    sendTaskActivity({ description: `项目资料暂时未能同步，可稍后重试：${message}`, status: 'completed' });
   }
 }
 
@@ -2088,7 +2125,6 @@ ipcMain.handle('kyrozen:set-current-project', async (_event, projectId: string) 
   const root = await getWorkspaceRoot(projectId);
   if (root) {
     await ensureWorkspaceStructure(root);
-    sendTaskActivity({ description: '正在准备项目工作区' });
     // Opening a project must not wait for the complete historical Artifact
     // chain. Large projects can contain hundreds of versioned records and a
     // single slow read used to leave ordinary users on "正在准备项目工作区"
@@ -2525,6 +2561,46 @@ async function loadLocalProjectSummary(projectId: string): Promise<Record<string
     try { return JSON.parse(await fs.readFile(path.join(root, relative), 'utf-8')); }
     catch { return null; }
   };
+  const readContextJson = (name: string) => readJson(path.join('.kyrozen', 'context', name));
+  const hardwareContext = {
+    architecture: await readContextJson('Hardware_Architecture.md'),
+    bom: await readContextJson('Bill_of_Materials.md'),
+    wiring: await readContextJson('Wiring_Design.md'),
+    firmware: await readContextJson('Firmware_Project.md'),
+    assembly_steps: (await Promise.all([
+      'Maker_Step__ESP32_N16R8.md',
+      'Maker_Step__ESP32_N16R8_与_USB_数据线.md',
+      'Maker_Step__ESP32_开发板与_USB_数据线.md',
+      'Desktop_Maker_Step.md',
+    ].map((name) => readContextJson(name)))).filter(Boolean),
+    debug_records: (await Promise.all([
+      'Hardware_Run__list_ports.md',
+      'Hardware_Run__prepare_serial_probe.md',
+      'Hardware_Run__compile.md',
+      'Hardware_Run__upload.md',
+      'Hardware_Run__monitor.md',
+      'Hardware_Run__protocol_exchange.md',
+      'Protocol_Scenario_Run.md',
+    ].map((name) => readContextJson(name)))).filter(Boolean),
+    source: '本地项目工作区（服务器快照暂不可用时的持久化回退）',
+  };
+  const testingContext = {
+    test_cases: (await Promise.all([
+      'Test_Case__TC-DESKTOP-01.md',
+      'Test_Case__TC-E2E-ESP32-01.md',
+    ].map((name) => readContextJson(name)))).filter(Boolean),
+    test_results: (await Promise.all([
+      'Desktop_Workbench_Test_Result.md',
+    ].map((name) => readContextJson(name)))).filter(Boolean),
+    defects: (await Promise.all([
+      'Desktop_Workbench_Defect.md',
+    ].map((name) => readContextJson(name)))).filter(Boolean),
+    regressions: (await Promise.all([
+      'Regression__DEF-DESKTOP-1785749564645.md',
+      'Regression__DEF-DESKTOP-1785814022928.md',
+    ].map((name) => readContextJson(name)))).filter(Boolean),
+    source: '本地项目工作区（服务器测试投影暂不可用时的持久化回退）',
+  };
   const files = await listWorkspaceFiles(projectId).catch(() => []);
   return {
     workspace_root: root,
@@ -2533,61 +2609,84 @@ async function loadLocalProjectSummary(projectId: string): Promise<Record<string
     software: await readJson('.kyrozen/software_feature.json'),
     stagegate: await readJson('.kyrozen/stagegate.json'),
     hardware_runs: await readJson('.kyrozen/hardware_runs.json'),
+    hardware: hardwareContext,
+    testing: testingContext,
   };
 }
 
 async function loadProjectWorkspace(projectId: string): Promise<Record<string, unknown>> {
   const optionalGet = async (endpoint: string): Promise<unknown> => {
     try {
-      return await apiGet(endpoint);
+      return await apiGet(endpoint, true, OPTIONAL_WORKSPACE_TIMEOUT_MS);
     } catch (error: any) {
       logWarn(`Optional workspace data unavailable: ${endpoint}: ${error?.message || String(error)}`);
       return null;
     }
   };
-  const entries = await Promise.all(
+  // Start optional and core reads together.  Previously the optional Promise
+  // settled first, so one slow repository delayed every core project request.
+  const optionalSectionsPromise = Promise.all(
     Object.entries(PROJECT_WORKSPACE_SECTIONS).map(async ([key, endpoint]) => [
       key,
       await optionalGet(`/api/projects/${projectId}/${endpoint}/state`),
     ]),
   );
-  const sections = Object.fromEntries(entries) as Record<string, Record<string, unknown>>;
-  const [learningRecords, failureKnowledge, successKnowledge] = await Promise.all([
+  const optionalLearningPromise = Promise.all([
     optionalGet(`/api/projects/${projectId}/learning/records`),
     optionalGet(`/api/projects/${projectId}/learning/failures`),
     optionalGet(`/api/projects/${projectId}/learning/successes`),
   ]);
+  const corePromise = Promise.all([
+    apiGet(`/api/projects/${projectId}`),
+    // Project state is a derived convenience endpoint. A slow artifact-backed
+    // state calculation must not reject the whole project canvas; the
+    // renderer can still use the persisted project fields below.
+    optionalGet(`/api/projects/${projectId}/state`),
+    optionalGet(`/api/projects/${projectId}/decisions`),
+    optionalGet(`/api/projects/${projectId}/tasks`),
+    optionalGet(`/api/projects/${projectId}/phase2/workbench`),
+  ]);
+  const [[project, state, decisions, tasks, phase2], entries, [learningRecords, failureKnowledge, successKnowledge]] = await Promise.all([
+    corePromise,
+    optionalSectionsPromise,
+    optionalLearningPromise,
+  ]);
+  const sections = Object.fromEntries(entries) as Record<string, Record<string, unknown>>;
   sections.learning = {
     ...(sections.learning || {}),
     learning_records: learningRecords,
     failure_knowledge: failureKnowledge,
     success_knowledge: successKnowledge,
   };
-  const [project, state, decisions, artifactSummaries, tasks, phase2] = await Promise.all([
-    apiGet(`/api/projects/${projectId}`),
-    apiGet(`/api/projects/${projectId}/state`),
-    apiGet(`/api/projects/${projectId}/decisions`),
-    apiGet(`/api/projects/${projectId}/artifacts`),
-    apiGet(`/api/projects/${projectId}/tasks`),
-    optionalGet(`/api/projects/${projectId}/phase2/workbench`),
-  ]);
   const phase2Artifacts = phase2 && typeof phase2 === 'object' && Array.isArray((phase2 as Record<string, unknown>).artifacts)
     ? (phase2 as Record<string, unknown>).artifacts as unknown[]
     : [];
-  const artifacts = phase2Artifacts.length
-    ? phase2Artifacts
-    : await Promise.all(
-        (artifactSummaries as Array<Record<string, unknown>>).map((artifact) =>
-          optionalGet(`/api/projects/${projectId}/artifacts/${String(artifact.id)}`),
-        ),
-      );
+  // The phase2 projection is the authoritative workbench payload. Never fan
+  // out into one request per historical artifact when that projection is
+  // unavailable: large version chains can overwhelm the API and leave a
+  // normal user staring at the loading state. The next explicit refresh can
+  // retry the project-scoped snapshot.
+  const artifacts = phase2Artifacts.length ? phase2Artifacts : [];
+  const projectRecord = project as Record<string, unknown>;
+  const stateRecord = state && typeof state === 'object' ? state as Record<string, unknown> : {};
+  const resolvedState = Object.keys(stateRecord).length > 0
+    ? stateRecord
+    : {
+        project_id: projectRecord.id || projectId,
+        project_type: projectRecord.project_type || 'software',
+        workflow_version: projectRecord.workflow_version || 'v2',
+        stage: projectRecord.current_stage || 'problem_discovery',
+        progress: projectRecord.progress || 0,
+        blocked_reason: projectRecord.blocked_reason || null,
+        next_action: projectRecord.next_steps || null,
+      };
   const local = await loadLocalProjectSummary(projectId);
   // A background artifact hydration failure can remain visible in the chat
   // activity while the project workbench itself has since loaded successfully.
   // Mark a successful refresh explicitly so ordinary users do not mistake a
   // historical retry message for the current workspace state.
   sendTaskActivity({ description: '项目工作台已刷新，数据已读取', status: 'completed' });
-  return { project, state, decisions, artifacts, tasks, sections, phase2, local };
+  return { project, state: resolvedState, decisions: decisions || [], artifacts, tasks: tasks || [], sections, phase2, local };
 }
 
 ipcMain.handle('kyrozen:get-project-workspace', async (_event, projectId: string) => {

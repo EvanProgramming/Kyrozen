@@ -345,6 +345,25 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
   const hardwareRunList = Array.isArray(data?.local?.hardware_runs)
     ? data!.local!.hardware_runs as Row[]
     : [];
+  const serverHardware = data?.phase2?.hardware;
+  const sectionHardware = data?.sections?.hardware;
+  const localHardware = data?.local?.hardware;
+  const hardwareSnapshot = !empty(serverHardware)
+    ? serverHardware
+    : !empty(sectionHardware)
+      ? sectionHardware
+      : localHardware;
+  const serverTesting = data?.phase2?.testing;
+  const sectionTesting = data?.sections?.testing;
+  const localTesting = data?.local?.testing;
+  const testingSnapshot = !empty(serverTesting)
+    ? serverTesting
+    : !empty(sectionTesting)
+      ? sectionTesting
+      : localTesting;
+  const serverDefects = data?.phase2?.defects;
+  const localDefects = (localTesting as Row | undefined)?.defects;
+  const defectsSnapshot = !empty(serverDefects) ? serverDefects : localDefects;
   const successfulHardwareRuns = hardwareRunList.filter((run) => run.status === 'PASSED' && run.success === true);
   const successfulPortDiscoveries = successfulHardwareRuns.filter((run) => run.action === 'list_ports' && run.board_detected === true);
   const physicalAcceptanceMissing = [
@@ -1032,7 +1051,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
         </div>
       </header>
       {retryAction && <div role="alert" className="flex items-center justify-between gap-3 px-5 py-2 text-xs bg-warning-soft text-warning border-b border-warning/30"><span>上次操作失败：{retryAction.label}</span><button type="button" className="btn-secondary text-xs" onClick={() => { const action = retryAction; setRetryAction(null); void action.run(); }}>重试：{retryAction.label}</button></div>}
-      <div role="tablist" aria-label="项目工作中心" className="flex border-b border-line bg-paper-sink overflow-x-auto px-3">
+      <div role="tablist" aria-label="项目工作中心" className="flex flex-wrap border-b border-line bg-paper-sink px-3">
         {TABS.map(([key, label], index) => (
           <button
             key={key}
@@ -1227,7 +1246,7 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
             )}
             {tab === 'procurement' && (
               <>
-                <Section title="当前硬件资料" value={data.phase2?.hardware || data.sections?.hardware} />
+                <Section title="当前硬件资料" description={hardwareSnapshot === localHardware ? '来源：本地项目工作区；服务器工作台快照暂不可用，资料仍可刷新恢复。' : undefined} value={hardwareSnapshot} />
                 <div className="panel p-4 space-y-3">
                   <h3 className="font-display text-xl">ESP32 硬件闭环</h3>
                   <p className="text-xs text-ink-faint">先只读发现设备，再由用户确认板卡、供电、LED/串口目标。没有设备时会明确显示 BLOCKED。</p>
@@ -1247,14 +1266,14 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
             )}
             {tab === 'maker' && (
               <>
-                <Section title="Maker 装配记录" value={(data.phase2?.hardware as Row)?.assembly_steps || (data.sections?.hardware as Row)?.assembly_steps} />
+                <Section title="Maker 装配记录" value={(hardwareSnapshot as Row | undefined)?.assembly_steps} />
                 <div className="panel p-4 space-y-3"><h3 className="font-display text-xl">确认装配步骤</h3><textarea className="input" value={maker} onChange={(event) => setMaker(event.target.value)} placeholder="元件、动作、预期结果、安全提示、照片说明和完成确认" rows={3} /><button type="button" className="btn-primary text-sm" disabled={!maker.trim()} onClick={() => void saveArtifact('hardware_maker_step', 'Desktop Maker Step', maker)}>保存装配确认</button></div>
                 <div className="panel p-4 space-y-3"><h3 className="font-display text-xl">结构化 Maker 步骤</h3><input className="input" value={makerComponent} onChange={(event) => setMakerComponent(event.target.value)} placeholder="涉及元件" aria-label="涉及元件" /><input className="input" value={makerAction} onChange={(event) => setMakerAction(event.target.value)} placeholder="装配动作" aria-label="装配动作" /><input className="input" value={makerExpected} onChange={(event) => setMakerExpected(event.target.value)} placeholder="预期结果" aria-label="预期结果" /><input className="input" value={makerSafety} onChange={(event) => setMakerSafety(event.target.value)} placeholder="安全提示" aria-label="安全提示" /><input className="input" value={makerPhoto} onChange={(event) => setMakerPhoto(event.target.value)} placeholder="照片路径或说明（可选）" aria-label="照片说明" /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={makerConfirmed} onChange={(event) => setMakerConfirmed(event.target.checked)} />我已完成并确认此步骤</label><button type="button" className="btn-primary text-sm" disabled={!makerComponent.trim() || !makerAction.trim()} onClick={() => void saveMakerStep()}>保存结构化步骤</button></div>
               </>
             )}
             {tab === 'testing' && (
               <>
-                <Section title="测试与缺陷" value={{ testing: data.phase2?.testing || data.sections?.testing, defects: data.phase2?.defects }} />
+                <Section title="测试与缺陷" description={testingSnapshot === localTesting ? '来源：本地项目工作区；服务器测试投影暂不可用，失败、缺陷和回归记录仍可读取。' : undefined} value={{ testing: testingSnapshot, defects: defectsSnapshot }} />
                 <div className="panel p-4 space-y-3"><h3 className="font-display text-xl">需求追踪测试用例</h3><p className="text-xs text-ink-faint">每个用例保存需求引用、前置步骤、预期结果和状态；刷新后继续显示在测试矩阵中。</p><div className="grid gap-2 sm:grid-cols-2"><input className="input" value={testCaseId} onChange={(event) => setTestCaseId(event.target.value)} placeholder="用例编号" aria-label="用例编号" /><input className="input" value={testCaseName} onChange={(event) => setTestCaseName(event.target.value)} placeholder="用例名称" aria-label="用例名称" /><input className="input sm:col-span-2" value={testCaseRequirement} onChange={(event) => setTestCaseRequirement(event.target.value)} placeholder="关联需求或 PRD 编号" aria-label="关联需求" /></div><textarea className="input" value={testCaseSteps} onChange={(event) => setTestCaseSteps(event.target.value)} placeholder="执行步骤（每行一步）" rows={2} aria-label="测试步骤" /><textarea className="input" value={testCaseExpected} onChange={(event) => setTestCaseExpected(event.target.value)} placeholder="预期结果" rows={2} aria-label="预期结果" /><button type="button" className="btn-primary text-sm" disabled={!testCaseName.trim() || !testCaseExpected.trim()} onClick={() => void saveTestCase()}>保存测试用例</button></div>
                 <div className="panel p-4 space-y-3"><h3 className="font-display text-xl">记录测试结果</h3><div className="grid gap-2 sm:grid-cols-2"><select className="input" value={testResultStatus} onChange={(event) => setTestResultStatus(event.target.value)} aria-label="测试结果状态"><option value="passed">通过</option><option value="failed">失败</option><option value="error">错误</option><option value="skipped">跳过</option></select><input className="input" value={testDefectOwner} onChange={(event) => setTestDefectOwner(event.target.value)} placeholder="缺陷负责人（失败时）" aria-label="缺陷负责人" /></div><textarea className="input" value={testResult} onChange={(event) => setTestResult(event.target.value)} placeholder="实际结果；失败/错误会自动建立缺陷记录" rows={3} /><textarea className="input" value={testEvidence} onChange={(event) => setTestEvidence(event.target.value)} placeholder="测试证据（截图、日志或 Artifact ID，每行一项）" rows={2} aria-label="测试证据" /><button type="button" className="btn-primary text-sm" disabled={!testResult.trim()} onClick={() => void saveTest()}>保存测试结果</button></div>
                 <div className="panel p-4 space-y-3"><h3 className="font-display text-xl">缺陷回归</h3><textarea className="input" value={regressionNotes} onChange={(event) => setRegressionNotes(event.target.value)} placeholder="修复说明和原用例实际结果" rows={2} /><button type="button" className="btn-secondary text-sm" onClick={() => void saveRegression()}>保存原用例回归通过</button></div>

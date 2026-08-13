@@ -317,6 +317,23 @@ class SupabaseDatabase:
         rows = getattr(response, "data", [])
         return [self._row_to_artifact(row) for row in rows]
 
+    def list_artifact_summaries(self, project_id: str, limit: int = 5) -> list[Artifact]:
+        try:
+            response = (
+                self.client.table("artifacts")
+                .select("id,project_id,type,title,version,change_reason,created_at,updated_at")
+                .eq("project_id", project_id)
+                .order("updated_at", desc=True)
+                .limit(max(0, int(limit)))
+                .execute()
+            )
+        except Exception as exc:
+            if self._is_missing_table_error(exc):
+                raise
+            return []
+        rows = getattr(response, "data", [])
+        return [self._row_to_artifact(row) for row in rows]
+
     def _row_to_artifact(self, row: dict[str, Any]) -> Artifact:
         return Artifact.from_dict({
             "id": row["id"],

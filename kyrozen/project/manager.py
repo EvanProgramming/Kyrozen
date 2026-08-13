@@ -139,6 +139,13 @@ class ProjectManager:
     def list_artifacts(self, project_id: str) -> list[Artifact]:
         return self.db.list_artifacts(project_id)
 
+    def list_artifact_summaries(self, project_id: str, limit: int = 5) -> list[Artifact]:
+        """Return recent artifact metadata without loading historical bodies."""
+        method = getattr(self.db, "list_artifact_summaries", None)
+        if method is not None:
+            return method(project_id, limit=limit)
+        return self.db.list_artifacts(project_id)[:limit]
+
     def get_artifact(self, project_id: str, artifact_id: str) -> Artifact | None:
         artifact = self.db.get_artifact(artifact_id)
         if artifact and artifact.project_id == project_id:

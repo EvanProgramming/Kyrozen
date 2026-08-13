@@ -1109,6 +1109,10 @@ const API_REQUEST_TIMEOUT_MS = 15000;
 // hostage.  A slow testing or improvement repository is recoverable from its
 // own tab, while the project home and decision gate remain usable.
 const OPTIONAL_WORKSPACE_TIMEOUT_MS = 4000;
+// A local hardware action must return its evidence even when the cloud API is
+// unavailable.  Keep Artifact mirroring best-effort and bounded so a failed
+// network request cannot make the hardware workbench appear stuck.
+const HARDWARE_ARTIFACT_PERSIST_TIMEOUT_MS = 4000;
 // Local hydration is a background convenience, not part of opening a project.
 // Stop after a short bounded window so a long historical Artifact chain cannot
 // leave the chat activity saying that the workspace is still being prepared.
@@ -2830,7 +2834,7 @@ ipcMain.handle('kyrozen:run-local-hardware', async (_event, projectId: string, w
           title: `Hardware Run: ${action}`,
           content: JSON.stringify(result),
           change_reason: 'Desktop hardware workbench operation',
-        }, true);
+        }, true, HARDWARE_ARTIFACT_PERSIST_TIMEOUT_MS);
         result.persisted = true;
       } catch (persistError: any) {
         result.persisted = false;

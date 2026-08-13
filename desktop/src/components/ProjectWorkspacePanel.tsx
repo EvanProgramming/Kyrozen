@@ -386,48 +386,56 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
     setLoading(true);
     setLoadingSlow(false);
     const slowTimer = window.setTimeout(() => setLoadingSlow(true), 8000);
-    const result = await kyzon.getProjectWorkspace(projectId);
-    window.clearTimeout(slowTimer);
-    let hasSolutionComparison = false;
-    if (result.success && result.data) {
-      setData(result.data as WorkspaceData);
-      setProjectType((result.data as WorkspaceData).project?.project_type as typeof projectType || 'software');
-      const workspacePhase2 = (result.data as WorkspaceData).phase2 as Row | undefined;
-      const workspaceSolutions = workspacePhase2?.solutions as Row | undefined;
-      const embeddedComparison = workspaceSolutions?.comparison as Row | undefined;
-      const embeddedCandidates = embeddedComparison?.solutions;
-      setSolutionConfirmed(workspaceSolutions?.confirmed === true);
-      if (embeddedComparison && Array.isArray(embeddedCandidates) && embeddedCandidates.length === 3) {
-        setSolutionComparison(embeddedComparison);
-        hasSolutionComparison = true;
-      } else {
-        // Compatibility fallback for a server that predates the complete
-        // workbench projection.  This request is no longer the primary source
-        // of truth, so a transient timeout cannot erase a comparison already
-        // read from the project-scoped snapshot.
-        const solutions = await kyzon.getSolutions(projectId);
-        if (solutions.success && solutions.data?.comparison) {
-          const comparison = solutions.data.comparison as Row;
-          const candidateSolutions = comparison.solutions;
-          setSolutionComparison(comparison);
-          setSolutionConfirmed(solutions.data.confirmed === true);
-          hasSolutionComparison = Array.isArray(candidateSolutions) && candidateSolutions.length === 3;
+    try {
+      const result = await kyzon.getProjectWorkspace(projectId);
+      let hasSolutionComparison = false;
+      if (result.success && result.data) {
+        setData(result.data as WorkspaceData);
+        setProjectType((result.data as WorkspaceData).project?.project_type as typeof projectType || 'software');
+        const workspacePhase2 = (result.data as WorkspaceData).phase2 as Row | undefined;
+        const workspaceSolutions = workspacePhase2?.solutions as Row | undefined;
+        const embeddedComparison = workspaceSolutions?.comparison as Row | undefined;
+        const embeddedCandidates = embeddedComparison?.solutions;
+        setSolutionConfirmed(workspaceSolutions?.confirmed === true);
+        if (embeddedComparison && Array.isArray(embeddedCandidates) && embeddedCandidates.length === 3) {
+          setSolutionComparison(embeddedComparison);
+          hasSolutionComparison = true;
         } else {
-          setSolutionComparison(null);
-          setSolutionConfirmed(false);
+          // Compatibility fallback for a server that predates the complete
+          // workbench projection.  This request is no longer the primary source
+          // of truth, so a transient timeout cannot erase a comparison already
+          // read from the project-scoped snapshot.
+          const solutions = await kyzon.getSolutions(projectId);
+          if (solutions.success && solutions.data?.comparison) {
+            const comparison = solutions.data.comparison as Row;
+            const candidateSolutions = comparison.solutions;
+            setSolutionComparison(comparison);
+            setSolutionConfirmed(solutions.data.confirmed === true);
+            hasSolutionComparison = Array.isArray(candidateSolutions) && candidateSolutions.length === 3;
+          } else {
+            setSolutionComparison(null);
+            setSolutionConfirmed(false);
+          }
         }
+        if (!preserveNotice) setNotice('');
+      } else {
+        // A save can succeed before its follow-up workbench refresh times out.
+        // Keep the save result visible in that case; the retry action still
+        // gives the user a safe way to refresh the projection later.
+        if (!preserveNotice) setNotice(result.error || '项目画布加载失败');
+        setRetryAction({ label: '刷新项目工作台', run: async () => { await load(false); } });
       }
-      if (!preserveNotice) setNotice('');
-    } else {
-      // A save can succeed before its follow-up workbench refresh times out.
-      // Keep the save result visible in that case; the retry action still
-      // gives the user a safe way to refresh the projection later.
-      if (!preserveNotice) setNotice(result.error || '项目画布加载失败');
+      return hasSolutionComparison;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!preserveNotice) setNotice(`项目画布刷新失败：${message}`);
       setRetryAction({ label: '刷新项目工作台', run: async () => { await load(false); } });
+      return false;
+    } finally {
+      window.clearTimeout(slowTimer);
+      setLoading(false);
+      setLoadingSlow(false);
     }
-    setLoading(false);
-    setLoadingSlow(false);
-    return hasSolutionComparison;
   }, [kyzon, projectId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -552,7 +560,10 @@ export function ProjectWorkspacePanel({ projectId, onClose }: Props) {
       }
       setFeedback(''); setFeedbackParticipantId(''); setFeedbackUserType(''); setFeedbackTask(''); setFeedbackCompleted('unknown');
       setFeedbackDuration(''); setFeedbackBlockers(''); setFeedbackQuote(''); setFeedbackSatisfaction('');
-      await load(true);
+      // Hardware actions already return their local evidence.  A cloud
+      // projection refresh may be unavailable or slow; it must not keep the
+      // hardware controls disabled after the action has completed.
+      void load(true);
     } else setRetryAction({ label: '保存用户反馈', run: saveFeedback });
   };
 
